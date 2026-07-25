@@ -32,8 +32,15 @@ Consequences and the mitigations in place:
 | Fresh install, first launch | App registers `HKCU\Software\Classes\boss` (`WindowsProtocolHandler.registerProtocol`) |
 | Moved/reinstalled to a new path | Startup re-registers when the stored command points at a missing exe (self-heal) |
 | Another BOSS install still present and valid | Left alone — the app never steals a working registration |
-| Command present but unparseable (e.g. an unquoted, installer-authored command) | Left alone — never deleted just because this code cannot read it |
+| Command present but unreadable here (`REG_EXPAND_SZ`, unquoted, or the registry read failed) | Never *deleted* just because this code cannot read it — but see the caveat below |
+| Root key present with no `shell\open\command` value (`reg query` reports it absent) | A partial registration this app produced, and removed |
 | **Uninstalled** | The key survives and points at a deleted exe unless cleaned up (below) |
+
+> The "left alone" guarantee is **delete-only**. `registerProtocol` still overwrites a
+> command it cannot parse (its validity check fails closed and is evaluated before the
+> "different valid install" check), so an installer-authored registration survives
+> cleanup but not a re-registration. Worth resolving if/when the installer takes
+> ownership of these keys.
 
 ### Cleaning up the registration
 

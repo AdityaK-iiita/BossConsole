@@ -69,12 +69,6 @@ on:
 
 env:
   GRADLE_OPTS: '-Dorg.gradle.daemon=false -Dorg.gradle.parallel=true -Dorg.gradle.caching=true'
-  # macOS CFBundleVersion (the *build* identifier, not the marketing version).
-  # run_number only ever increases for this workflow, so a rebuild/re-notarization of
-  # the same app version is still distinguishable, and every platform job of one
-  # release run shares the same build id. See composeApp/build.gradle.kts
-  # (macBundleBuildVersion) for the fallbacks used outside this workflow.
-  BOSS_BUILD_ID: ${{ github.run_number }}
   # Production credentials for release builds
   JXBROWSER_LICENSE_KEY: ${{ secrets.JXBROWSER_LICENSE_KEY }}
   SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -97,7 +91,35 @@ jobs:
       should-build: ${{ steps.check-changes.outputs.should-build }}
       updated-sha: ${{ steps.commit-version.outputs.updated-sha }}
       should-create-tag: ${{ steps.commit-version.outputs.should-create-tag }}
+      build-id: ${{ steps.build-id.outputs.build-id }}
     steps:
+      - name: 🔢 Compute macOS Build Identifier
+        id: build-id
+        # CFBundleVersion is macOS's *build* identifier (see macBundleBuildVersion in
+        # composeApp/build.gradle.kts). It has to differ for every shipped build of a
+        # version, so a re-notarized rebuild is distinguishable — issue #38.
+        #
+        # Computed here, once per run, and consumed by the macOS job. Deliberately a
+        # seconds-since-epoch stamp rather than github.run_number:
+        #   * run_number is per-workflow. This workflow is also called by
+        #     promote-release.yml, and a called workflow's jobs belong to the CALLER's run,
+        #     so run_number would be promote-release's independent counter there — able to
+        #     collide with, and permanently sort below/above, direct release builds.
+        #   * a clock is monotonic across every trigger and every caller, so ids from all
+        #     paths form one increasing sequence. Launch Services does consult
+        #     CFBundleVersion when disambiguating two copies of the same bundle id, so
+        #     ordering is worth having, not just uniqueness.
+        # Single non-negative integer, so Compose's CFBundleVersion validation accepts it;
+        # fits a signed 32-bit int until 2038. CI only — local builds use app.build.number,
+        # which is stable so packaging tasks stay up-to-date between runs.
+        #
+        # Granularity caveats, neither of which can collide with a *shipped* build: two runs
+        # starting in the same second would share an id — including one release.yml run and
+        # one release-lite.yml run, since Lite ships the same bundle id and now draws from
+        # this same clock (no concurrency group spans them) — and "Re-run failed jobs" reuses
+        # this job's cached output, so a re-run macOS job stamps the original attempt's id,
+        # which is what you want since it is the same release.
+        run: echo "build-id=$(date +%s)" >> "$GITHUB_OUTPUT"
       - name: 📥 Checkout Repository
         uses: actions/checkout@v7
         with:
@@ -323,6 +345,13 @@ jobs:
     needs: prepare-version
     if: needs.prepare-version.outputs.should-build == 'true'
     runs-on: macos-14  # Apple Silicon runner
+    env:
+      # CFBundleVersion build identifier, computed once in prepare-version (see the comment
+      # there). This is the only job that produces a macOS bundle, so it is the only place
+      # the value matters. Reading it from `needs` keeps every trigger — workflow_dispatch,
+      # workflow_call and the `push: tags` production path — on the same expression, with no
+      # `inputs` reference to resolve.
+      BOSS_BUILD_ID: ${{ needs.prepare-version.outputs.build-id }}
     # macOS minutes bill at 10×, and notarization can legitimately sit waiting
     # on Apple, so cap the job well below GitHub's 6h default: build (~20m) plus
     # the notarization budget in scripts/lib/notarize-dmg.sh (1h) fits inside
@@ -330,6 +359,20 @@ jobs:
     timeout-minutes: 120
 
     steps:
+      - name: 🔢 Validate Build Identifier
+        # composeApp/build.gradle.kts silently falls back to app.build.number (i.e. "1")
+        # for a non-numeric BOSS_BUILD_ID, so an unresolved or malformed value would ship a
+        # wrong CFBundleVersion with a green build. Fail loudly instead — this also catches
+        # the prepare-version output failing to thread through.
+        run: |
+          case "$BOSS_BUILD_ID" in
+            '' | *[!0-9]*)
+              echo "::error::BOSS_BUILD_ID must be a non-empty run of digits, got '$BOSS_BUILD_ID'"
+              exit 1
+              ;;
+          esac
+          echo "✅ CFBundleVersion build id: $BOSS_BUILD_ID"
+
       - name: 📥 Checkout Repository
         uses: actions/checkout@v7
         with:

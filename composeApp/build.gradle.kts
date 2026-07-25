@@ -87,20 +87,31 @@ val baseVersion = appVersion.substringBefore("-")
 // from the first 9.2.60 and anything keyed on it cannot tell the two apart.
 // Compose validates it as at most three non-negative integers, so "9.2.60.<n>" is
 // not expressible; we use Apple's usual convention of a plain monotonic counter:
-//   * CI release builds — BOSS_BUILD_ID, which release.yml sets to github.run_number
-//     (monotonic per workflow, and shared by every platform job of one release run).
+//   * CI release builds — BOSS_BUILD_ID. release.yml's prepare-version job computes it
+//     once per run as a seconds-since-epoch stamp and the macOS job reads it from
+//     `needs`, so every trigger (workflow_dispatch, workflow_call from
+//     promote-release.yml, and the `push: tags` production path) resolves the same
+//     expression. A clock rather than github.run_number, because run numbers are
+//     per-workflow: a called workflow's jobs belong to the CALLER's run, so promotion
+//     rebuilds would draw from promote-release's independent counter and could collide
+//     with — or sort below — a direct release. One clock means ids from every path form
+//     a single increasing sequence, which matters because Launch Services consults
+//     CFBundleVersion when disambiguating two copies of the same bundle id.
 //   * any other CI build — GITHUB_RUN_NUMBER, so at least it is not a constant.
 //   * local builds — app.build.number from version.properties. Deliberately a
 //     *stable* value so packaging tasks stay up-to-date between local runs; a
 //     timestamp here would re-sign the whole app image on every build.
 // The value is intentionally NOT derived from app.version: it is a build counter, and
-// Finder shows it as "Version 9.2.60 (641)". `app.bundle.version` used to feed
+// Finder shows it as "Version 9.2.60 (1785000000)". `app.bundle.version` used to feed
 // CFBundleVersion while always equalling app.version, so it has been deleted outright
 // along with its writers (version tasks, release/release-lite/promote-release).
+// Note the tiers are walked, not `?:`-chained: an Actions expression that resolves to
+// nothing sets the variable to "" rather than leaving it unset, so a chain would stop at the
+// empty BOSS_BUILD_ID and skip GITHUB_RUN_NUMBER entirely.
 val macBundleBuildVersion: String =
-    (System.getenv("BOSS_BUILD_ID") ?: System.getenv("GITHUB_RUN_NUMBER"))
-        ?.trim()
-        ?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
+    sequenceOf("BOSS_BUILD_ID", "GITHUB_RUN_NUMBER")
+        .mapNotNull { System.getenv(it)?.trim() }
+        .firstOrNull { it.isNotEmpty() && it.all(Char::isDigit) }
         ?: versionPropsProvider.map { it.getProperty("app.build.number", "1") }.get()
 
 // jpackage (and therefore Compose) derives CFBundleShortVersionString from
@@ -1022,9 +1033,11 @@ compose.desktop {
                 // LC_BUILD_VERSION minos 12.0. On 10.15/11 the app installed and
                 // launched fine and then died in dyld the first time an engine
                 // loaded — a broken browser tab instead of "unsupported OS".
-                // Declaring 12.0 here makes the installer refuse the install
-                // instead. Keep in lockstep with chromium-branding / the engine
-                // bundle's own LSMinimumSystemVersion.
+                // Declaring 12.0 makes Launch Services refuse to *launch* on an older
+                // OS with a clear message ("requires macOS 12.0 or later"); a DMG has
+                // no installer, so nothing gates dragging it to /Applications. The
+                // failure moves to first launch instead of into dyld. Keep in lockstep
+                // with chromium-branding / the engine bundle's LSMinimumSystemVersion.
                 minimumSystemVersion = "12.0"
 
                 // Was jpackage's placeholder "Unknown" (Compose's default when this

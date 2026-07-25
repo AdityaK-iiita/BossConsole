@@ -145,6 +145,43 @@ class DebControlTest {
         )
     }
 
+    /** Boundary: `Depends` is the last field, so `Recommends` is appended at the end. */
+    @Test
+    fun `appends Recommends when Depends is the final field`() {
+        assertEquals(
+            "Package: boss\nDescription: BOSS\nDepends: libc6\nRecommends: xdg-utils\n",
+            soften("Package: boss\nDescription: BOSS\nDepends: xdg-utils, libc6\n"),
+        )
+    }
+
+    /** Same boundary with the field dropped entirely rather than rewritten. */
+    @Test
+    fun `appends Recommends when a dropped Depends was the final field`() {
+        assertEquals(
+            "Package: boss\nDescription: BOSS\nRecommends: xdg-utils\n",
+            soften("Package: boss\nDescription: BOSS\nDepends: xdg-utils\n"),
+        )
+    }
+
+    /**
+     * The realistic jpackage shape: a folded `Description` is the final field. The appended
+     * `Recommends` lands immediately after `Depends` — i.e. *before* the whole folded
+     * field — because a column-0 line terminates the fold, so the continuation lines stay
+     * attached to `Description`. This is the case that would break if field grouping ever
+     * mis-attributed continuation lines.
+     */
+    @Test
+    fun `appends Recommends after a folded final Description`() {
+        assertEquals(
+            "Package: boss\nDepends: libc6\nRecommends: xdg-utils\nDescription: BOSS\n" +
+                " Business Operating System Service\n .\n Second paragraph\n",
+            soften(
+                "Package: boss\nDepends: xdg-utils, libc6\nDescription: BOSS\n" +
+                    " Business Operating System Service\n .\n Second paragraph\n",
+            ),
+        )
+    }
+
     @Test
     fun `leaves every other field byte-for-byte alone`() {
         val rewritten =

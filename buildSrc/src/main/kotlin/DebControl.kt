@@ -43,6 +43,9 @@ object DebControl {
      *    unfolded; every other field is copied through verbatim.
      *  * Text before the first field (comments/blank lines — not produced by jpackage)
      *    is dropped, which is why callers should only feed it generated control files.
+     *  * Line endings are normalized to `\n`: CRLF input would be rewritten wholesale,
+     *    so "other fields are byte-for-byte" holds for LF input only. Unreachable via
+     *    `dpkg-deb -R`, which writes LF.
      *
      * @return the rewritten control text, or null when there is nothing to change
      *   (which makes the caller idempotent across repacks).
