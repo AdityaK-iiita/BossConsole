@@ -8,9 +8,19 @@ import kotlin.test.assertEquals
  * command and "open terminal here" flow is built from.
  *
  * CI runs this suite on Linux, macOS AND Windows, and [ShellUtils.isWindows] is
- * fixed at class-load from the real OS, so each expectation is written per
- * platform: the POSIX branch is verified on Unix runners and the PowerShell
- * branch on Windows runners.
+ * fixed at class-load from the real OS, so the single-argument expectations are
+ * written per platform: the POSIX branch is verified on Unix runners and the
+ * PowerShell branch on Windows runners.
+ *
+ * Because that leaves each branch covered by only one CI leg, the second half of
+ * this suite drives the platform explicitly through the `forWindows` overloads, so
+ * both branches of [ShellUtils.escapeForDoubleQuotes], [ShellUtils.separatorFor]
+ * and [ShellUtils.buildCommandWithWorkingDirectory] also run on every host. The
+ * host-resolved expectations above stay: they are the only check that
+ * [ShellUtils.isWindows] wires this OS to the right branch in the first place.
+ *
+ * [ShellUtils.chainCommands] has no platform-explicit overload — its only
+ * platform-dependent input is the separator, covered on both branches here.
  */
 class ShellUtilsTest {
     private val win = ShellUtils.isWindows
@@ -115,6 +125,115 @@ class ShellUtilsTest {
             expect(unix = "\\\\\\\"", windows = "\\`\""),
             ShellUtils.escapeForDoubleQuotes("\\\""),
         )
+    }
+
+    // ============ platform-explicit overloads: both branches on any host ============
+    //
+    // The tests above can only ever reach the host's own branch. These pass the platform
+    // in, so the POSIX *and* the PowerShell branch are covered on every runner — dropping
+    // the Windows CI leg cannot silently untest a branch.
+
+    private fun unix(str: String): String = ShellUtils.escapeForDoubleQuotes(str, forWindows = false)
+
+    private fun powershell(str: String): String = ShellUtils.escapeForDoubleQuotes(str, forWindows = true)
+
+    @Test
+    fun `single-argument overload delegates to the host branch`() {
+        val nasty = "a\"b\\c\$d`e!f"
+        assertEquals(
+            ShellUtils.escapeForDoubleQuotes(nasty, forWindows = win),
+            ShellUtils.escapeForDoubleQuotes(nasty),
+        )
+    }
+
+    @Test
+    fun `separatorFor covers both branches and backs the host property`() {
+        assertEquals(" && ", ShellUtils.separatorFor(forWindows = false))
+        assertEquals("; ", ShellUtils.separatorFor(forWindows = true))
+        // commandSeparator is just this function applied to the host platform.
+        assertEquals(ShellUtils.separatorFor(forWindows = win), sep)
+    }
+
+    @Test
+    fun `buildCommandWithWorkingDirectory composes escaping and separator on both branches`() {
+        assertEquals(
+            "cd \"/data/\\\$USER files\" && ls",
+            ShellUtils.buildCommandWithWorkingDirectory("ls", "/data/\$USER files", forWindows = false),
+        )
+        assertEquals(
+            "cd \"C:\\Users\\dev\\My `\$Project\"; ls",
+            ShellUtils.buildCommandWithWorkingDirectory("ls", "C:\\Users\\dev\\My \$Project", forWindows = true),
+        )
+    }
+
+    @Test
+    fun `buildCommandWithWorkingDirectory skips the cd on both branches when there is no directory`() {
+        for (forWindows in listOf(false, true)) {
+            assertEquals("ls", ShellUtils.buildCommandWithWorkingDirectory("ls", null, forWindows))
+            assertEquals("ls", ShellUtils.buildCommandWithWorkingDirectory("ls", "  ", forWindows))
+        }
+    }
+
+    @Test
+    fun `two-argument buildCommandWithWorkingDirectory delegates to the host branch`() {
+        val dir = "/data/\$USER files"
+        assertEquals(
+            ShellUtils.buildCommandWithWorkingDirectory("ls", dir, forWindows = win),
+            ShellUtils.buildCommandWithWorkingDirectory("ls", dir),
+        )
+    }
+
+    @Test
+    fun `posix branch escapes quote, backslash, dollar, backtick and bang`() {
+        assertEquals("\\\"", unix("\""))
+        assertEquals("C:\\\\Temp", unix("C:\\Temp"))
+        assertEquals("\\\$HOME", unix("\$HOME"))
+        assertEquals("a\\`whoami\\`b", unix("a`whoami`b"))
+        assertEquals("deploy\\!", unix("deploy!"))
+    }
+
+    @Test
+    fun `powershell branch escapes quote, dollar and backtick, leaving backslash and bang literal`() {
+        assertEquals("`\"", powershell("\""))
+        assertEquals("C:\\Temp", powershell("C:\\Temp"))
+        assertEquals("`\$HOME", powershell("\$HOME"))
+        assertEquals("a``whoami``b", powershell("a`whoami`b"))
+        assertEquals("deploy!", powershell("deploy!"))
+    }
+
+    @Test
+    fun `both branches pass through text with nothing to escape`() {
+        for (input in listOf("", "hello-world_123", "My Project Dir", "docs/日本語 déjà ✨", "a; b | c")) {
+            assertEquals(input, unix(input))
+            assertEquals(input, powershell(input))
+        }
+    }
+
+    @Test
+    fun `posix ordering - escape characters inserted later are not re-escaped`() {
+        // Backslash is doubled first, so the backslashes added for " and $ stay single.
+        assertEquals("\\\\\\\"", unix("\\\""))
+        assertEquals("\\\\\\\$", unix("\\\$"))
+    }
+
+    @Test
+    fun `powershell ordering - the backtick added for a quote is not doubled`() {
+        // Backtick is doubled first; the backtick that escapes the quote comes after.
+        assertEquals("```\"", powershell("`\""))
+        assertEquals("\\`\"", powershell("\\\""))
+    }
+
+    @Test
+    fun `command substitution is neutralized on both branches`() {
+        assertEquals("\\\$(rm -rf ~)", unix("\$(rm -rf ~)"))
+        assertEquals("`\$(rm -rf ~)", powershell("\$(rm -rf ~)"))
+    }
+
+    @Test
+    fun `a string mixing every metacharacter escapes correctly on both branches`() {
+        val nasty = "a\"b\\c\$d`e!f"
+        assertEquals("a\\\"b\\\\c\\\$d\\`e\\!f", unix(nasty))
+        assertEquals("a`\"b\\c`\$d``e!f", powershell(nasty))
     }
 
     // ==================== buildCommandWithWorkingDirectory ====================

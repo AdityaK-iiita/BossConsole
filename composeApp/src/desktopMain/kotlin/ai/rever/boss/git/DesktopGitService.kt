@@ -359,11 +359,7 @@ actual object GitService {
                     return@withContext emptyList()
                 }
 
-                val statuses =
-                    result.output
-                        .lines()
-                        .filter { it.isNotBlank() }
-                        .mapNotNull { parseStatusLine(it) }
+                val statuses = parseStatusOutput(result.output)
 
                 _fileStatus.value = statuses
                 statuses
@@ -372,6 +368,37 @@ actual object GitService {
                 emptyList()
             }
         }
+
+    /**
+     * Index-column porcelain codes that never describe staged content: `?` (untracked)
+     * and `!` (ignored). Every other modelled code can be staged — including `U`
+     * (unmerged), whose path really does hold conflict stages 1/2/3 in the index.
+     * One place to revisit when a new [GitFileStatusType] is modelled.
+     */
+    private val NEVER_STAGED =
+        setOf(GitFileStatusType.UNTRACKED, GitFileStatusType.IGNORED)
+
+    /**
+     * Parse the whole output of `git status --porcelain=v1` into file statuses.
+     *
+     * The single choke point for both status call sites, and the one place that decides
+     * which porcelain entries are *changes* at all. Ignored entries (`!! path`, emitted
+     * only when `--ignored` is passed) are dropped: an ignored path is neither staged
+     * nor an unstaged change, so it belongs in neither list the commit dialog renders
+     * (it filters on `isStaged` / `isUnstaged`) nor in the status stream the plugin IPC
+     * bridge forwards. Fixing only one of the two booleans would just move such an entry
+     * from the staged list to the unstaged one.
+     *
+     * [parseStatusLine] itself stays faithful to porcelain and still reports IGNORED, so
+     * a future caller that deliberately passes `--ignored` can parse those lines — it
+     * just has to opt in here rather than inherit them silently.
+     */
+    internal fun parseStatusOutput(output: String): List<GitFileStatus> =
+        output
+            .lines()
+            .filter { it.isNotBlank() }
+            .mapNotNull { parseStatusLine(it) }
+            .filterNot { it.indexStatus == GitFileStatusType.IGNORED }
 
     /**
      * Parse a single line from `git status --porcelain=v1`.
@@ -397,9 +424,15 @@ actual object GitService {
         val indexStatus = parseStatusChar(indexChar)
         val workTreeStatus = parseStatusChar(workTreeChar)
 
-        // A file is staged if it has an index status (not space or ?)
-        val isStaged = indexStatus != null && indexStatus != GitFileStatusType.UNTRACKED
-        // A file is unstaged if it has a worktree status (not space)
+        // A file is staged if it has an index status, minus the codes that fill the index
+        // column without describing staged content (see [NEVER_STAGED]).
+        val isStaged = indexStatus != null && indexStatus !in NEVER_STAGED
+
+        // A file is unstaged if it has a worktree status (not space). Note this is a
+        // faithful reading of the worktree column, not a judgement about the entry: for
+        // "??" and "!!" it is true because both columns carry the code. Untracked is a
+        // real (unstaged) change so that is correct; ignored is not a change at all, and
+        // is excluded from the status list by [parseStatusOutput] rather than here.
         val isUnstaged = workTreeStatus != null
 
         return GitFileStatus(
@@ -1166,11 +1199,7 @@ actual object GitService {
                     return@withContext emptyList()
                 }
 
-                val statuses =
-                    result.output
-                        .lines()
-                        .filter { it.isNotBlank() }
-                        .mapNotNull { parseStatusLine(it) }
+                val statuses = parseStatusOutput(result.output)
 
                 windowGitState.updateFileStatus(statuses)
                 statuses

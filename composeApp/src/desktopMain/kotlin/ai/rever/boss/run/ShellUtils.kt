@@ -34,14 +34,38 @@ object ShellUtils {
      * For critical operations requiring error propagation, use separate commands
      * with explicit error handling rather than chaining.
      */
-    val commandSeparator: String = if (isWindows) "; " else " && "
+    val commandSeparator: String = separatorFor(isWindows)
+
+    /**
+     * Platform-explicit form of [commandSeparator], for the same reason as the
+     * [escapeForDoubleQuotes] overload below: [isWindows] is fixed at class-load, so
+     * tests can only reach the host's own separator through the property.
+     */
+    internal fun separatorFor(forWindows: Boolean): String = if (forWindows) "; " else " && "
 
     /**
      * Escape a string for safe use inside double quotes in shell.
      * Platform-aware escaping for Unix shells vs Windows PowerShell.
      */
-    fun escapeForDoubleQuotes(str: String): String =
-        if (isWindows) {
+    fun escapeForDoubleQuotes(str: String): String = escapeForDoubleQuotes(str, isWindows)
+
+    /**
+     * Platform-explicit form of [escapeForDoubleQuotes].
+     *
+     * [isWindows] is fixed at class-load from the real OS, so the single-argument
+     * overload can only ever reach one branch on a given host. This overload takes
+     * the platform as a parameter so both the PowerShell and the POSIX branch are
+     * exercised by tests on every host, instead of relying on the CI matrix
+     * happening to include a Windows runner.
+     *
+     * @param str The string to escape
+     * @param forWindows Escape for Windows PowerShell when true, POSIX shells otherwise
+     */
+    internal fun escapeForDoubleQuotes(
+        str: String,
+        forWindows: Boolean,
+    ): String =
+        if (forWindows) {
             // PowerShell escaping: backtick is the escape character
             str
                 .replace("`", "``") // Backtick must be escaped first
@@ -54,7 +78,12 @@ object ShellUtils {
                 .replace("\"", "\\\"") // Double quotes
                 .replace("\$", "\\\$") // Dollar sign (prevents variable expansion)
                 .replace("`", "\\`") // Backticks (prevents command substitution)
-                .replace("!", "\\!") // Exclamation (history expansion in interactive shells)
+                // Exclamation: history expansion, which only happens in an INTERACTIVE
+                // shell. Inside double quotes a backslash is literal before anything but
+                // $ ` " \ and newline, so a non-interactive shell (`sh -c`) keeps the
+                // backslash and a path containing "!" breaks. Today's callers all feed an
+                // interactive terminal; check that before reusing this for `sh -c`.
+                .replace("!", "\\!")
         }
 
     /**
@@ -69,16 +98,32 @@ object ShellUtils {
     fun buildCommandWithWorkingDirectory(
         command: String,
         workingDirectory: String?,
+    ): String = buildCommandWithWorkingDirectory(command, workingDirectory, isWindows)
+
+    /**
+     * Platform-explicit form of [buildCommandWithWorkingDirectory]: it composes both
+     * platform-dependent pieces (escaping and separator), so it needs the same seam to
+     * be testable on either branch from any host.
+     *
+     * @param forWindows Build for Windows PowerShell when true, POSIX shells otherwise
+     */
+    internal fun buildCommandWithWorkingDirectory(
+        command: String,
+        workingDirectory: String?,
+        forWindows: Boolean,
     ): String =
         if (!workingDirectory.isNullOrBlank()) {
-            val escapedDir = escapeForDoubleQuotes(workingDirectory)
-            "cd \"$escapedDir\"$commandSeparator$command"
+            val escapedDir = escapeForDoubleQuotes(workingDirectory, forWindows)
+            "cd \"$escapedDir\"${separatorFor(forWindows)}$command"
         } else {
             command
         }
 
     /**
      * Chain multiple commands together using platform-appropriate separator.
+     *
+     * Its only platform dependence is [separatorFor], which is covered on both branches
+     * by tests, so this needs no platform-explicit overload of its own.
      *
      * @param commands The commands to chain
      * @return The chained command string
