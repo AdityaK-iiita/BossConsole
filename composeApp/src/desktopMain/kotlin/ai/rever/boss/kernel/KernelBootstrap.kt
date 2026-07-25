@@ -454,8 +454,14 @@ class KernelBootstrap(
      * Register the 15 kernel-side gRPC services that expose in-process providers
      * to out-of-process plugin child processes.
      *
-     * Called from DefaultPlugin after all providers are initialized, since the
-     * service bridges wrap the same provider instances used by in-process plugins.
+     * Called from DefaultPlugin (reflectively — DefaultPlugin is commonMain) after all
+     * providers are initialized, since the service bridges wrap the same provider
+     * instances used by in-process plugins. **Changing this signature means updating
+     * the reflective lookup in `DefaultPlugin.registerKernelPluginServices`.**
+     *
+     * 14 of the 15 services are provider-backed and are skipped when their provider is
+     * absent. [ContextMenuServiceBridge] takes no provider — it is a passive stub, see
+     * its KDoc — so it is registered unconditionally.
      */
     fun registerPluginServices(
         performanceDataProvider: PerformanceDataProvider? = null,
@@ -466,7 +472,6 @@ class KernelBootstrap(
         secretDataProvider: SecretDataProvider? = null,
         supabaseDataProvider: SupabaseDataProvider? = null,
         splitViewOperations: SplitViewOperations? = null,
-        contextMenuProvider: ContextMenuProvider? = null,
         runConfigurationDataProvider: RunConfigurationDataProvider? = null,
         panelEventProvider: PanelEventProvider? = null,
         roleManagementProvider: RoleManagementProvider? = null,
@@ -486,7 +491,10 @@ class KernelBootstrap(
         secretDataProvider?.let { services += SecretServiceBridge(it) }
         supabaseDataProvider?.let { services += SupabaseServiceBridge(it) }
         splitViewOperations?.let { services += SplitViewServiceBridge(it) }
-        contextMenuProvider?.let { services += ContextMenuServiceBridge() }
+        // Provider-less by design: the bridge acknowledges and drops plugin
+        // registrations, so gating it on the host ContextMenuProvider would only
+        // suggest a delegation that cannot exist (issue #30).
+        services += ContextMenuServiceBridge()
         runConfigurationDataProvider?.let { services += RunConfigServiceBridge(it) }
         panelEventProvider?.let { services += PanelEventServiceBridge(it) }
         roleManagementProvider?.let { services += RoleManagementServiceBridge(it) }

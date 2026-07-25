@@ -756,6 +756,11 @@ kotlin {
         if (findProject(":plugin-platform:plugin-api-ipc") == null) {
             desktopTest.kotlin.exclude("**/SkipListDriftTest.kt")
         }
+        // Mirror of the desktopMain exclusion above: **/kernel/** isn't compiled on
+        // Windows ARM64 (no boss-ipc), so tests naming kernel types can't be either.
+        if (isWindowsArm64Build) {
+            desktopTest.kotlin.exclude("**/kernel/**")
+        }
     }
 }
 

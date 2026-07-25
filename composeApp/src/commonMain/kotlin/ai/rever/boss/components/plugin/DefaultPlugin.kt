@@ -1127,7 +1127,6 @@ class DefaultPlugin(
                     ai.rever.boss.plugin.api.SecretDataProvider::class.java,
                     ai.rever.boss.plugin.api.SupabaseDataProvider::class.java,
                     ai.rever.boss.plugin.api.SplitViewOperations::class.java,
-                    ai.rever.boss.plugin.api.ContextMenuProvider::class.java,
                     ai.rever.boss.plugin.api.RunConfigurationDataProvider::class.java,
                     ai.rever.boss.plugin.api.PanelEventProvider::class.java,
                     ai.rever.boss.plugin.api.RoleManagementProvider::class.java,
@@ -1146,7 +1145,6 @@ class DefaultPlugin(
                 secretDataProvider,
                 supabaseDataProvider,
                 splitViewOperations,
-                contextMenuProvider,
                 runConfigurationDataProvider,
                 panelEventProvider,
                 roleManagementProvider,
@@ -1160,6 +1158,16 @@ class DefaultPlugin(
             // Not in KERNEL mode or boss-process-manager not on classpath
         } catch (_: NoClassDefFoundError) {
             // Missing dependency
+        } catch (e: NoSuchMethodException) {
+            // The reflective signature above drifted from KernelBootstrap.registerPluginServices.
+            // Consequence is total, not partial: NO out-of-process plugin service gets
+            // registered, so every OOP plugin loses its providers. Loud on purpose.
+            logger.error(
+                LogCategory.SYSTEM,
+                "KernelBootstrap.registerPluginServices signature drifted — no out-of-process " +
+                    "plugin gRPC services were registered; fix the reflective lookup in DefaultPlugin",
+                error = e,
+            )
         } catch (e: Exception) {
             logger.warn(LogCategory.SYSTEM, "Failed to register kernel plugin services", error = e)
         }
