@@ -300,10 +300,17 @@ class CLICommandHandler private constructor() {
             return
         }
 
-        // Get focused window ID for multi-window support
-        val focusedWindowId = WindowFocusManager.focusedWindowFlow.value
+        // Resolve the target window. Uses the registration/focus-gain-backed
+        // lookup, not focusedWindowFlow alone — an MCP-driven or CLI caller
+        // holds OS focus itself, so the flow can be null while a usable window
+        // is plainly registered (same reason as the boss:// deep-link handlers).
+        val focusedWindowId = WindowFocusManager.resolveActionableWindowId()
         if (focusedWindowId == null) {
-            logger.warn(LogCategory.SYSTEM, "No window focused, cannot load workspace", mapOf("path" to file.absolutePath))
+            logger.warn(
+                LogCategory.SYSTEM,
+                "No usable window registered, cannot load workspace",
+                mapOf("path" to file.absolutePath),
+            )
             return
         }
 
@@ -351,10 +358,15 @@ class CLICommandHandler private constructor() {
             return
         }
 
-        // Get focused window ID for multi-window support
-        val focusedWindowId = WindowFocusManager.focusedWindowFlow.value
+        // Resolve the target window (see handleLoadWorkspace for why this is
+        // not focusedWindowFlow).
+        val focusedWindowId = WindowFocusManager.resolveActionableWindowId()
         if (focusedWindowId == null) {
-            logger.warn(LogCategory.SYSTEM, "No window focused, cannot open file", mapOf("path" to file.absolutePath))
+            logger.warn(
+                LogCategory.SYSTEM,
+                "No usable window registered, cannot open file",
+                mapOf("path" to file.absolutePath),
+            )
             return
         }
 
@@ -416,8 +428,9 @@ class CLICommandHandler private constructor() {
         }
 
         withContext(Dispatchers.Main) {
-            // Get focused window for multi-window support
-            val focusedWindowId = WindowFocusManager.focusedWindowFlow.value
+            // Resolve the target window (see handleLoadWorkspace for why this is
+            // not focusedWindowFlow).
+            val focusedWindowId = WindowFocusManager.resolveActionableWindowId()
             val windowProjectState =
                 focusedWindowId?.let {
                     ai.rever.boss.window.WindowProjectStateRegistry
@@ -455,10 +468,11 @@ class CLICommandHandler private constructor() {
             return
         }
 
-        // Get focused window ID for multi-window support
-        val focusedWindowId = WindowFocusManager.focusedWindowFlow.value
+        // Resolve the target window (see handleLoadWorkspace for why this is
+        // not focusedWindowFlow).
+        val focusedWindowId = WindowFocusManager.resolveActionableWindowId()
         if (focusedWindowId == null) {
-            logger.warn(LogCategory.SYSTEM, "No window focused, cannot open terminal")
+            logger.warn(LogCategory.SYSTEM, "No usable window registered, cannot open terminal")
             return
         }
 

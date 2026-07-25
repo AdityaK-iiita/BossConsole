@@ -31,6 +31,22 @@ internal fun nativeMacOSFullscreenStateForEvent(methodName: String): Boolean? =
 
 internal fun isNativeMacOSFullscreenExitStarting(methodName: String): Boolean = methodName == "windowExitingFullScreen"
 
+/**
+ * Resolution policy behind [WindowFocusManager.resolveActionableWindowId], kept
+ * pure so the ordering can be asserted without live AWT windows.
+ *
+ * [lastFocusedWindowId] is set at registration and on every focus gain;
+ * [focusFlowWindowId] is only ever set inside the focus-gained listener, so it
+ * can lag or stay null when the caller (an MCP client or the CLI) holds OS focus
+ * itself. A registered window is still a usable target in that case, which is
+ * why [registeredWindowIds] is the last resort rather than "no window".
+ */
+internal fun resolveActionableWindowIdFrom(
+    lastFocusedWindowId: String?,
+    focusFlowWindowId: String?,
+    registeredWindowIds: Collection<String>,
+): String? = lastFocusedWindowId ?: focusFlowWindowId ?: registeredWindowIds.firstOrNull()
+
 internal fun hasFullscreenSignal(
     nativeStateAvailable: Boolean,
     nativeFullscreen: Boolean,
@@ -321,7 +337,14 @@ actual object WindowFocusManager {
     // EDT-confined; registerWindow/unregisterWindow enforce this before mutation.
     private val windowListeners = mutableMapOf<String, WindowAdapter>()
     private val awtFocusTracker = AwtWindowFocusTracker()
+
+    // Mutated only on the EDT (registerWindow, the focus-gained listener,
+    // unregisterWindow) but read from CLI, socket, JxBrowser and coroutine
+    // threads via resolveActionableWindowId, so the snapshot must be volatile
+    // for the same reason AwtWindowFocusTracker's is.
+    @Volatile
     private var focusedWindowId: String? = null
+
     private var mainWindow: Window? = null // Kept for backward compatibility
 
     // StateFlow to observe focus changes (for elegant focus restoration)
@@ -486,8 +509,21 @@ actual object WindowFocusManager {
      * listener, so it can lag or stay null even once a window is plainly
      * available), falling back to any registered window. Returns null only if no
      * window is registered at all.
+     *
+     * **Threading**: safe to call from any thread. Every source it reads is
+     * either volatile ([focusedWindowId]), a [StateFlow] ([focusedWindowFlow])
+     * or a [ConcurrentHashMap] ([windows]), so callers on CLI, socket, JxBrowser
+     * callback and coroutine threads do not need to hop to the EDT first. The
+     * result is a snapshot: the window may be unregistered a moment later, so
+     * consumers must tolerate a stale id (every current consumer emits an event
+     * keyed by it, which is dropped if no such window listens).
      */
-    fun resolveActionableWindowId(): String? = focusedWindowId ?: focusedWindowFlow.value ?: windows.keys.firstOrNull()
+    fun resolveActionableWindowId(): String? =
+        resolveActionableWindowIdFrom(
+            lastFocusedWindowId = focusedWindowId,
+            focusFlowWindowId = focusedWindowFlow.value,
+            registeredWindowIds = windows.keys,
+        )
 
     /**
      * Bring a specific window to front by its ID

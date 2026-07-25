@@ -132,10 +132,14 @@ actual object URLHandlerService {
             WindowFocusManager.bringToFront()
             logger.debug(LogCategory.BROWSER, "Brought window to front")
 
-            // Get focused window ID for multi-window support
-            val focusedWindowId = WindowFocusManager.focusedWindowFlow.value
+            // Resolve the target window. Uses the registration/focus-gain-backed
+            // lookup, not focusedWindowFlow alone: bringToFront() above is async
+            // (SwingUtilities.invokeLater), so on a cold start or an MCP/CLI
+            // caller that holds OS focus the flow can still be null while a
+            // usable window is plainly registered.
+            val focusedWindowId = WindowFocusManager.resolveActionableWindowId()
             if (focusedWindowId == null) {
-                logger.warn(LogCategory.BROWSER, "No window focused, cannot open URL", mapOf("url" to url))
+                logger.warn(LogCategory.BROWSER, "No usable window registered, cannot open URL", mapOf("url" to url))
                 return
             }
 

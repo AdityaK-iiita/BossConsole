@@ -164,6 +164,52 @@ class WindowFocusManagerTest {
     }
 
     @Test
+    fun `actionable window resolution prefers the last focused window`() {
+        assertEquals(
+            "window-a",
+            resolveActionableWindowIdFrom(
+                lastFocusedWindowId = "window-a",
+                focusFlowWindowId = "window-b",
+                registeredWindowIds = listOf("window-c"),
+            ),
+        )
+        assertEquals(
+            "window-b",
+            resolveActionableWindowIdFrom(
+                lastFocusedWindowId = null,
+                focusFlowWindowId = "window-b",
+                registeredWindowIds = listOf("window-c"),
+            ),
+        )
+    }
+
+    @Test
+    fun `a registered window stays actionable when the caller holds OS focus`() {
+        // An MCP-driven or CLI deep link runs while the caller's own window has
+        // OS focus, so no focus-gained event has fired for BOSS and the focus
+        // flow is null. A registered window is still a usable target.
+        assertEquals(
+            "window-c",
+            resolveActionableWindowIdFrom(
+                lastFocusedWindowId = null,
+                focusFlowWindowId = null,
+                registeredWindowIds = listOf("window-c", "window-d"),
+            ),
+        )
+    }
+
+    @Test
+    fun `no registered window resolves to null`() {
+        assertNull(
+            resolveActionableWindowIdFrom(
+                lastFocusedWindowId = null,
+                focusFlowWindowId = null,
+                registeredWindowIds = emptyList(),
+            ),
+        )
+    }
+
+    @Test
     fun `unregister clears only the matching focused window`() {
         val tracker = AwtWindowFocusTracker()
         val listener = tracker.createListener("window-b")

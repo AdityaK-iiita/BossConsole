@@ -791,57 +791,57 @@ object FluckEngine {
     /**
      * Pause an active download.
      * @param downloadId The unique ID of the download to pause
+     * @return true when the engine accepted the command; false when the engine
+     *   no longer owns the download, so callers must not report success for a
+     *   pause Chromium never performed.
      */
-    fun pauseDownload(downloadId: String) {
-        activeDownloads[downloadId]?.let { download ->
-            try {
-                download.pause()
-            } catch (e: Exception) {
-                // Download may already be finished or cancelled
-                logger.debug(
-                    LogCategory.BROWSER,
-                    "Failed to pause download",
-                    mapOf("downloadId" to downloadId, "error" to e.toString()),
-                )
-            }
-        }
-    }
+    fun pauseDownload(downloadId: String): Boolean = commandDownload(downloadId, "pause") { it.pause() }
 
     /**
      * Resume a paused download.
      * @param downloadId The unique ID of the download to resume
+     * @return true when the engine accepted the command, false otherwise.
      */
-    fun resumeDownload(downloadId: String) {
-        activeDownloads[downloadId]?.let { download ->
-            try {
-                download.resume()
-            } catch (e: Exception) {
-                // Download may already be finished or cancelled
-                logger.debug(
-                    LogCategory.BROWSER,
-                    "Failed to resume download",
-                    mapOf("downloadId" to downloadId, "error" to e.toString()),
-                )
-            }
-        }
-    }
+    fun resumeDownload(downloadId: String): Boolean = commandDownload(downloadId, "resume") { it.resume() }
 
     /**
      * Cancel an active or paused download.
      * @param downloadId The unique ID of the download to cancel
+     * @return true when the engine accepted the command, false otherwise.
      */
-    fun cancelDownload(downloadId: String) {
-        activeDownloads[downloadId]?.let { download ->
-            try {
-                download.cancel()
-            } catch (e: Exception) {
-                // Download may already be finished or cancelled
-                logger.debug(
-                    LogCategory.BROWSER,
-                    "Failed to cancel download",
-                    mapOf("downloadId" to downloadId, "error" to e.toString()),
-                )
-            }
+    fun cancelDownload(downloadId: String): Boolean = commandDownload(downloadId, "cancel") { it.cancel() }
+
+    /**
+     * Applies [command] to the live engine download registered under
+     * [downloadId]. Returns false when the engine has already released the
+     * download (finished, failed or cancelled) or the command threw, so a
+     * caller can surface a failure instead of a status the engine is not in.
+     */
+    private fun commandDownload(
+        downloadId: String,
+        commandName: String,
+        command: (Download) -> Unit,
+    ): Boolean {
+        val download = activeDownloads[downloadId]
+        if (download == null) {
+            logger.debug(
+                LogCategory.BROWSER,
+                "No active engine download for command",
+                mapOf("downloadId" to downloadId, "command" to commandName),
+            )
+            return false
+        }
+        return try {
+            command(download)
+            true
+        } catch (e: Exception) {
+            // Download may already be finished or cancelled
+            logger.debug(
+                LogCategory.BROWSER,
+                "Failed to $commandName download",
+                mapOf("downloadId" to downloadId, "error" to e.toString()),
+            )
+            false
         }
     }
 
@@ -2157,14 +2157,18 @@ object FluckEngine {
                             ),
                         )
 
-                        // Open the Downloads sidebar panel
-                        val focusedWindowId = WindowFocusManager.focusedWindowFlow.value
-                        if (focusedWindowId != null) {
+                        // Open the Downloads sidebar panel. Same reasoning as the
+                        // deep-link handlers: a download can start while BOSS does
+                        // not hold OS focus, so focusedWindowFlow alone would drop
+                        // the panel open even though a usable window is registered.
+                        val targetWindowId = WindowFocusManager.resolveActionableWindowId()
+                        if (targetWindowId != null) {
                             ai.rever.boss.components.events.PanelEventBus.openPanel(
                                 ai.rever.boss.components.plugin.PanelIds.DOWNLOADS,
-                                sourceWindowId = focusedWindowId,
+                                sourceWindowId = targetWindowId,
                             )
                         } else {
+                            logger.warn(LogCategory.UI, "No usable window registered, cannot open Downloads panel")
                         }
                     }
 

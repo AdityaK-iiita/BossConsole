@@ -600,7 +600,6 @@
     <ID>MaxLineLength:DeepLinkHandler.kt$DeepLinkHandler$logger.info(LogCategory.SYSTEM, "Received deep link (macOS)", mapOf("uri" to LogSanitizer.maskUriParams(uri)))</ID>
     <ID>MaxLineLength:DeepLinkHandler.kt$DeepLinkHandler$logger.info(LogCategory.SYSTEM, "Received deep link from command line", mapOf("uri" to LogSanitizer.maskUriParams(url)))</ID>
     <ID>MaxLineLength:DeepLinkHandler.kt$DeepLinkHandler$logger.info(LogCategory.SYSTEM, "Received deep link", mapOf("uri" to LogSanitizer.maskUriParams(uri)))</ID>
-    <ID>MaxLineLength:DeepLinkHandler.kt$DeepLinkHandler$logger.info(LogCategory.UI, "Emitted panel open event", mapOf("panelId" to panelIdStr, "windowId" to focusedWindowId))</ID>
     <ID>MaxLineLength:DefaultPlugin.kt$ApiActiveTabsProviderAdapter$.</ID>
     <ID>MaxLineLength:DefaultPlugin.kt$ApiActiveTabsProviderAdapter$override</ID>
     <ID>MaxLineLength:DefaultPlugin.kt$DefaultKeyboardShortcutProvider$override fun getShortcutsByCategory(category: String): List&lt;KeyboardShortcutInfo&gt;</ID>
@@ -998,6 +997,7 @@
     <ID>PackageNaming:DesktopLLMSettingsManager.kt$package ai.rever.boss.components.plugin.panels.right_top</ID>
     <ID>PackageNaming:DownloadDataProviderFactory.kt$package ai.rever.boss.components.plugin.panels.left_top</ID>
     <ID>PackageNaming:DownloadDataProviderImpl.kt$package ai.rever.boss.components.plugin.panels.left_top</ID>
+    <ID>PackageNaming:DownloadDataProviderImplTest.kt$package ai.rever.boss.components.plugin.panels.left_top</ID>
     <ID>PackageNaming:DownloadManager.kt$package ai.rever.boss.components.plugin.tab_types.fluck</ID>
     <ID>PackageNaming:DownloadSettings.kt$package ai.rever.boss.components.plugin.tab_types.fluck</ID>
     <ID>PackageNaming:DownloadState.kt$package ai.rever.boss.components.plugin.tab_types.fluck</ID>
@@ -1051,7 +1051,7 @@
     <ID>ReturnCount:CrossDeviceAuthService.kt$CrossDeviceAuthService$suspend fun pollForAuthenticationCompletion( challenge: String, sessionId: String? = null, ): Result&lt;PasskeyAuthenticationResult&gt;</ID>
     <ID>ReturnCount:DeepLinkHandler.kt$DeepLinkHandler$actual fun extractVerificationToken(uri: String): String?</ID>
     <ID>ReturnCount:DeepLinkHandler.kt$DeepLinkHandler$actual fun extractVerificationType(uri: String): String?</ID>
-    <ID>ReturnCount:DeepLinkHandler.kt$DeepLinkHandler$private fun handleFolderLink(uri: String)</ID>
+    <ID>ReturnCount:DeepLinkHandler.kt$DeepLinkHandler$private fun handlePluginLink( uri: String, targetWindowId: String?, )</ID>
     <ID>ReturnCount:DefaultPlugin.kt$ApiActiveTabsProviderAdapter$override fun getFaviconCacheKey(tabId: String): String?</ID>
     <ID>ReturnCount:DefaultPlugin.kt$ApiActiveTabsProviderAdapter$override fun getTabUrl(tabId: String): String?</ID>
     <ID>ReturnCount:DesktopBrowserAccessor.kt$BrowserAccessor$actual fun getActiveBrowserIntegration(): BrowserIntegration?</ID>
