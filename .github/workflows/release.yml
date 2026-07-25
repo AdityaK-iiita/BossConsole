@@ -318,6 +318,11 @@ jobs:
     needs: prepare-version
     if: needs.prepare-version.outputs.should-build == 'true'
     runs-on: macos-14  # Apple Silicon runner
+    # macOS minutes bill at 10×, and notarization can legitimately sit waiting
+    # on Apple, so cap the job well below GitHub's 6h default: build (~20m) plus
+    # the notarization budget in scripts/lib/notarize-dmg.sh (1h) fits inside
+    # this with room to spare.
+    timeout-minutes: 120
 
     steps:
       - name: 📥 Checkout Repository
@@ -551,65 +556,25 @@ jobs:
           fi
 
       # macOS notarization (only for signed DMGs)
+      #
+      # Submit → wait → staple lives in scripts/lib/notarize-dmg.sh so the
+      # retry behaviour is unit-tested (scripts/test/test-notarize-dmg.sh, run
+      # by build.yml) instead of being untestable inline YAML. It resumes a
+      # dropped status poll rather than re-submitting — see that file's header
+      # for why run 30067806575 lost release 9.2.59 without it.
       - name: 🍎 Notarize macOS DMG
         if: env.DISABLE_MACOS_SIGNING != 'true'
         run: |
           echo "🍎 Starting macOS notarization process..."
+
+          source scripts/lib/notarize-dmg.sh
 
           # Find the DMG file
           DMG_PATH=$(find composeApp/build/compose/binaries/main/dmg -name "*.dmg" | head -1)
 
           if [[ -n "$DMG_PATH" && -f "$DMG_PATH" ]]; then
             echo "📦 Found DMG: $DMG_PATH"
-
-            # Submit for notarization and capture the submission ID.
-            # `|| true` is required because the surrounding shell runs
-            # under `bash -e`: without it, a non-zero exit from
-            # `notarytool submit` (e.g. auth failure, network error,
-            # rejected submission) propagates immediately at the
-            # command-substitution assignment, killing the step BEFORE
-            # we can echo NOTARIZATION_OUTPUT or fetch the detailed
-            # notarytool log. The exit-code is preserved separately so
-            # later checks can still distinguish success from failure.
-            echo "🔐 Submitting DMG for notarization..."
-            set +e
-            NOTARIZATION_OUTPUT=$(xcrun notarytool submit "$DMG_PATH" \
-              --apple-id "$APPLE_ID" \
-              --password "$APP_PASSWORD" \
-              --team-id "${{ secrets.MACOS_TEAM_ID }}" \
-              --wait 2>&1)
-            NOTARIZATION_EXIT_CODE=$?
-            set -e
-            echo "$NOTARIZATION_OUTPUT"
-            echo "📋 notarytool exit code: $NOTARIZATION_EXIT_CODE"
-
-            # Extract submission ID from output
-            SUBMISSION_ID=$(echo "$NOTARIZATION_OUTPUT" | grep "id:" | head -1 | awk '{print $2}')
-            echo "📋 Submission ID: $SUBMISSION_ID"
-
-            # Check if notarization succeeded
-            if echo "$NOTARIZATION_OUTPUT" | grep -q "status: Accepted"; then
-              echo "✅ Notarization accepted"
-
-              # Staple the notarization
-              echo "📎 Stapling notarization to DMG..."
-              xcrun stapler staple "$DMG_PATH"
-
-              echo "✅ macOS notarization completed successfully"
-            else
-              echo "❌ Notarization failed or returned non-Accepted status"
-
-              # Fetch detailed log if we have a submission ID
-              if [[ -n "$SUBMISSION_ID" ]]; then
-                echo "📜 Fetching detailed notarization log..."
-                xcrun notarytool log "$SUBMISSION_ID" \
-                  --apple-id "$APPLE_ID" \
-                  --password "$APP_PASSWORD" \
-                  --team-id "${{ secrets.MACOS_TEAM_ID }}"
-              fi
-
-              exit 1
-            fi
+            notarize_dmg "$DMG_PATH"
           else
             echo "❌ DMG file not found for notarization"
             exit 1

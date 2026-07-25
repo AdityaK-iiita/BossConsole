@@ -30,6 +30,13 @@ jobs:
         # (regressed twice: #877 misaligned resume, and the SIGPIPE status bug).
         run: bash scripts/test/test-tus-slice.sh
 
+      - name: 🧪 Release notarization — retry/resume tests
+        # Guards the macOS notarization retry path: a dropped status poll must
+        # resume the existing submission, never re-upload, and an actual Apple
+        # rejection must still fail fast (run 30067806575 lost 9.2.59 to this).
+        # Apple is stubbed, so this runs on ubuntu with no credentials.
+        run: bash scripts/test/test-notarize-dmg.sh
+
   version-check:
     runs-on: ubuntu-latest
     outputs:

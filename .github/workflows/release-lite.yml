@@ -170,6 +170,11 @@ jobs:
   build-macos:
     needs: prepare-version
     runs-on: macos-14
+    # macOS minutes bill at 10×, and notarization can legitimately sit waiting
+    # on Apple, so cap the job well below GitHub's 6h default: build (~20m) plus
+    # the notarization budget in scripts/lib/notarize-dmg.sh (1h) fits inside
+    # this with room to spare.
+    timeout-minutes: 120
 
     steps:
       - name: 📥 Checkout BossConsoleLite
@@ -277,29 +282,33 @@ jobs:
           DISABLE_MACOS_SIGNING: ${{ env.DISABLE_MACOS_SIGNING }}
         run: ./gradlew packageDmg
 
+      # The workspace here is BossConsoleLite (checked out above), NOT this
+      # repo, so the shared notarization helper has to be fetched explicitly —
+      # sourcing a bare `scripts/lib/…` path would die with No such file or
+      # directory *after* the DMG is built and signed, i.e. the exact
+      # late-stage release loss the helper exists to prevent. Sparse and
+      # path-scoped so it can't disturb the Lite workspace, and pinned to this
+      # workflow's own commit (checkout's default ref) so the helper and the
+      # step that calls it always match.
+      - name: 📥 Fetch shared notarization helper
+        if: env.DISABLE_MACOS_SIGNING != 'true'
+        uses: actions/checkout@v7
+        with:
+          path: .boss-ci
+          sparse-checkout: scripts/lib
+          sparse-checkout-cone-mode: false
+
+      # Shared with release.yml; see scripts/lib/notarize-dmg.sh. This call
+      # site was even more exposed than release.yml's — with no `set +e` fence,
+      # a non-zero notarytool exit killed the step at the assignment, before
+      # the output or the log could be printed.
       - name: 🍎 Notarize macOS DMG
         if: env.DISABLE_MACOS_SIGNING != 'true'
         run: |
+          source .boss-ci/scripts/lib/notarize-dmg.sh
           DMG_PATH=$(find composeApp/build/compose/binaries/main/dmg -name "*.dmg" | head -1)
           echo "📦 Notarizing: $DMG_PATH"
-          NOTARIZATION_OUTPUT=$(xcrun notarytool submit "$DMG_PATH" \
-            --apple-id "$APPLE_ID" \
-            --password "$APP_PASSWORD" \
-            --team-id "${{ secrets.MACOS_TEAM_ID }}" \
-            --wait 2>&1)
-          echo "$NOTARIZATION_OUTPUT"
-          SUBMISSION_ID=$(echo "$NOTARIZATION_OUTPUT" | grep "id:" | head -1 | awk '{print $2}')
-          if echo "$NOTARIZATION_OUTPUT" | grep -q "status: Accepted"; then
-            xcrun stapler staple "$DMG_PATH"
-            echo "✅ Notarization complete"
-          else
-            if [[ -n "$SUBMISSION_ID" ]]; then
-              xcrun notarytool log "$SUBMISSION_ID" \
-                --apple-id "$APPLE_ID" --password "$APP_PASSWORD" \
-                --team-id "${{ secrets.MACOS_TEAM_ID }}"
-            fi
-            exit 1
-          fi
+          notarize_dmg "$DMG_PATH"
 
       - name: 📋 Rename DMG to Lite convention
         env:
