@@ -149,7 +149,6 @@ abstract class ShowVersionTask : VersionPropertyReadTask() {
         val prerelease = props["app.prerelease.suffix"]?.toString()?.takeIf { it.isNotBlank() }
         val baseVersion = "$major.$minor.$patch"
         val av = if (prerelease != null) "$baseVersion-$prerelease" else baseVersion
-        val bv = props["app.bundle.version"]
         val bn = props["app.build.number"]
         val channel = props["app.release.channel"] ?: "stable"
         val jn = "BOSS-$av-all.jar"
@@ -172,7 +171,6 @@ abstract class ShowVersionTask : VersionPropertyReadTask() {
 ║           BOSS Version Info            ║
 ╠════════════════════════════════════════╣
 ║ Application Version: $av
-║ Bundle Version:      $bv
 ║ Build Number:        $bn             $prereleaseInfo
 ║ JAR Name:            $jn
 ║ DMG Name:            $dn
@@ -209,7 +207,6 @@ abstract class IncrementVersionTask : VersionPropertyWriteTask() {
         // Update patch version and reset build number
         props["app.version.patch"] = newPatch.toString()
         props["app.version"] = "${props["app.version.major"]}.${props["app.version.minor"]}.$newPatch"
-        props["app.bundle.version"] = props["app.version"]
         props["app.build.date"] = SimpleDateFormat("yyyy-MM-dd").format(Date())
         props["app.build.number"] = "1"
 
@@ -236,7 +233,6 @@ abstract class IncrementMinorTask : VersionPropertyWriteTask() {
         props["app.version.minor"] = newMinor.toString()
         props["app.version.patch"] = "0"
         props["app.version"] = "${props["app.version.major"]}.$newMinor.0"
-        props["app.bundle.version"] = props["app.version"]
         props["app.build.date"] = SimpleDateFormat("yyyy-MM-dd").format(Date())
         props["app.build.number"] = "1"
 
@@ -264,7 +260,6 @@ abstract class IncrementMajorTask : VersionPropertyWriteTask() {
         props["app.version.minor"] = "0"
         props["app.version.patch"] = "0"
         props["app.version"] = "$newMajor.0.0"
-        props["app.bundle.version"] = props["app.version"]
         props["app.build.date"] = SimpleDateFormat("yyyy-MM-dd").format(Date())
         props["app.build.number"] = "1"
 
@@ -321,7 +316,7 @@ abstract class AutoIncrementBuildNumberTask : VersionPropertyWriteTask() {
 
 /**
  * Set prerelease suffix (e.g., alpha.1, beta.2, rc.1)
- * Updates app.version, app.bundle.version, and app.release.channel accordingly
+ * Updates app.version and app.release.channel accordingly
  */
 abstract class SetPrereleaseSuffixTask : VersionPropertyWriteTask() {
     @get:Input
@@ -359,7 +354,6 @@ abstract class SetPrereleaseSuffixTask : VersionPropertyWriteTask() {
         // Update properties
         props["app.prerelease.suffix"] = suffixValue
         props["app.version"] = fullVersion
-        props["app.bundle.version"] = fullVersion
         props["app.release.channel"] = channel
         props["app.build.date"] = SimpleDateFormat("yyyy-MM-dd").format(Date())
 
@@ -373,7 +367,7 @@ abstract class SetPrereleaseSuffixTask : VersionPropertyWriteTask() {
 
 /**
  * Clear prerelease suffix (promotes to stable release)
- * Resets app.version, app.bundle.version, and app.release.channel to stable
+ * Resets app.version and app.release.channel to stable
  */
 abstract class ClearPrereleaseSuffixTask : VersionPropertyWriteTask() {
     @TaskAction
@@ -395,7 +389,6 @@ abstract class ClearPrereleaseSuffixTask : VersionPropertyWriteTask() {
         // Update properties
         props["app.prerelease.suffix"] = ""
         props["app.version"] = stableVersion
-        props["app.bundle.version"] = stableVersion
         props["app.release.channel"] = "stable"
         props["app.build.date"] = SimpleDateFormat("yyyy-MM-dd").format(Date())
 
@@ -442,7 +435,6 @@ abstract class IncrementPrereleaseTask : VersionPropertyWriteTask() {
         // Update properties
         props["app.prerelease.suffix"] = newSuffix
         props["app.version"] = fullVersion
-        props["app.bundle.version"] = fullVersion
         props["app.build.date"] = SimpleDateFormat("yyyy-MM-dd").format(Date())
 
         saveProperties(props, "Incremented prerelease number")

@@ -247,7 +247,6 @@ jobs:
           sed -i "s/^app.version.minor=.*/app.version.minor=$MINOR/" version.properties
           sed -i "s/^app.version.patch=.*/app.version.patch=$PATCH/" version.properties
           sed -i "s/^app.version=.*/app.version=$TARGET_VERSION/" version.properties
-          sed -i "s/^app.bundle.version=.*/app.bundle.version=$TARGET_VERSION/" version.properties
           sed -i "s/^app.prerelease.suffix=.*/app.prerelease.suffix=$TARGET_SUFFIX/" version.properties
           sed -i "s/^app.release.channel=.*/app.release.channel=$TARGET_CHANNEL/" version.properties
           echo "✅ Updated version.properties"

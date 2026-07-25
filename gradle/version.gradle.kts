@@ -31,7 +31,6 @@ val appVersion = if (prereleaseSuffix != null) {
 } else {
     "$versionMajor.$versionMinor.$versionPatch"
 }
-val bundleVersion = versionProps["app.bundle.version"].toString()
 val buildNumber = versionProps["app.build.number"].toString()
 
 // Build artifact names
@@ -48,7 +47,6 @@ project.extra.apply {
     set("versionPatch", versionPatch)
     set("prereleaseSuffix", prereleaseSuffix)
     set("appVersion", appVersion)
-    set("bundleVersion", bundleVersion)
     set("buildNumber", buildNumber)
     set("jarName", jarName)
     set("dmgName", dmgName)

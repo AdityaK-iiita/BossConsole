@@ -3,13 +3,49 @@ package ai.rever.boss.utils
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import java.io.File
+import java.io.IOException
+
+private val logger = BossLogger.forComponent("WindowsProtocolHandler")
+private val isWindows = System.getProperty("os.name").lowercase().contains("windows")
+
+/** Root of the per-user protocol registration this file owns. */
+private const val PROTOCOL_KEY = """HKEY_CURRENT_USER\Software\Classes\boss"""
 
 /**
- * Windows-specific protocol handler for registering URL schemes
+ * Windows-specific protocol handler for registering URL schemes.
+ *
+ * Registration happens at runtime rather than in the MSI (see
+ * [docs/WINDOWS_DEEP_LINK_SETUP.md]), which means an uninstall leaves the `boss:`
+ * handler in the registry pointing at a deleted executable. [unregisterProtocol] is the
+ * cleanup hook for that — reachable as `BOSS.exe --unregister-protocol` (see
+ * [unregisterProtocolExitCode]) so an uninstall action, or support instructions, can
+ * call it.
  */
 object WindowsProtocolHandler {
-    private val logger = BossLogger.forComponent("WindowsProtocolHandler")
-    private val isWindows = System.getProperty("os.name").lowercase().contains("windows")
+    /**
+     * Outcome of [unregisterProtocol]. Distinguishes "there is nothing left to clean"
+     * from "I deliberately did not touch it" — deleting a registration we merely could
+     * not parse would break a working install.
+     */
+    enum class UnregisterOutcome {
+        /** The registration was ours (or pointed at a deleted exe) and was removed. */
+        REMOVED,
+
+        /** Nothing was registered. */
+        ABSENT,
+
+        /** Not a Windows host — there is no registry registration to remove. */
+        NOT_APPLICABLE,
+
+        /** Registered to a different, still present BOSS installation. Left alone. */
+        OTHER_INSTALL,
+
+        /** Registered to a command this code cannot parse (e.g. installer-authored, unquoted). Left alone. */
+        UNREADABLE,
+
+        /** `reg delete` itself failed. */
+        FAILED,
+    }
 
     /**
      * Register the boss:// protocol in Windows Registry
@@ -93,12 +129,12 @@ object WindowsProtocolHandler {
         val commands =
             listOf(
                 // Create protocol key
-                """reg add "HKEY_CURRENT_USER\Software\Classes\boss" /ve /d "URL:BOSS Protocol" /f""",
-                """reg add "HKEY_CURRENT_USER\Software\Classes\boss" /v "URL Protocol" /d "" /f""",
+                """reg add "$PROTOCOL_KEY" /ve /d "URL:BOSS Protocol" /f""",
+                """reg add "$PROTOCOL_KEY" /v "URL Protocol" /d "" /f""",
                 // Set icon
-                """reg add "HKEY_CURRENT_USER\Software\Classes\boss\DefaultIcon" /ve /d "$appPath,0" /f""",
+                """reg add "$PROTOCOL_KEY\DefaultIcon" /ve /d "$appPath,0" /f""",
                 // Set command to open the app with URL
-                """reg add "HKEY_CURRENT_USER\Software\Classes\boss\shell\open\command" /ve /d "\"$appPath\" \"%1\"" /f""",
+                """reg add "$PROTOCOL_KEY\shell\open\command" /ve /d "\"$appPath\" \"%1\"" /f""",
             )
 
         var successCount = 0
@@ -131,13 +167,81 @@ object WindowsProtocolHandler {
     }
 
     /**
+     * Remove the `boss:` protocol registration.
+     *
+     * Because registration happens at runtime, an uninstall would otherwise leave a
+     * handler pointing at a deleted `BOSS.exe`, and later `boss://` links fail with
+     * Windows' generic "no app associated" error. Invoke via
+     * `BOSS.exe --unregister-protocol` from an uninstall action or by hand.
+     *
+     * Safety: the key is only deleted when it points at *this* installation or at an
+     * executable that no longer exists. A registration owned by a different, still
+     * present install is left alone — and so is one whose command this code cannot
+     * parse. "Unparseable" is deliberately NOT folded into "stale": an unquoted
+     * `shell\open\command` is what a WiX/MSI-authored registration typically looks
+     * like, so deleting it would break a working install.
+     */
+    fun unregisterProtocol(): UnregisterOutcome {
+        if (!isWindows) return UnregisterOutcome.NOT_APPLICABLE
+
+        val currentCommand = getCurrentRegistryCommand()
+        val registeredExe = currentCommand?.let { extractExecutablePath(it) }
+        val appPath = getApplicationPath()
+
+        return when {
+            !isProtocolRegistered() -> {
+                logger.debug(LogCategory.SYSTEM, "boss:// protocol is not registered - nothing to clean up")
+                UnregisterOutcome.ABSENT
+            }
+
+            registeredExe == null -> {
+                logger.info(
+                    LogCategory.SYSTEM,
+                    "boss:// protocol command could not be parsed - leaving it registered",
+                    mapOf("command" to currentCommand.orEmpty()),
+                )
+                UnregisterOutcome.UNREADABLE
+            }
+
+            // Ours, or pointing at an executable that is gone: safe to remove.
+            registeredExe.equals(appPath, ignoreCase = true) || !File(registeredExe).exists() -> {
+                deleteProtocolKey()
+            }
+
+            else -> {
+                logger.info(
+                    LogCategory.SYSTEM,
+                    "boss:// protocol points at another live BOSS installation - leaving it registered",
+                    mapOf("path" to registeredExe),
+                )
+                UnregisterOutcome.OTHER_INSTALL
+            }
+        }
+    }
+
+    /**
+     * CLI mapping for `--unregister-protocol`: 0 when nothing is left to clean up
+     * (removed / nothing registered / not a Windows host), 1 when the registration was
+     * deliberately left in place, 2 when the delete itself failed.
+     */
+    fun unregisterProtocolExitCode(): Int {
+        val outcome = unregisterProtocol()
+        logger.info(LogCategory.SYSTEM, "boss:// protocol cleanup finished", mapOf("outcome" to outcome.name))
+        return when (outcome) {
+            UnregisterOutcome.REMOVED, UnregisterOutcome.ABSENT, UnregisterOutcome.NOT_APPLICABLE -> 0
+            UnregisterOutcome.OTHER_INSTALL, UnregisterOutcome.UNREADABLE -> 1
+            UnregisterOutcome.FAILED -> 2
+        }
+    }
+
+    /**
      * Check if the protocol is already registered
      */
     fun isProtocolRegistered(): Boolean {
         if (!isWindows) return false
 
         return try {
-            val process = Runtime.getRuntime().exec("""reg query "HKEY_CURRENT_USER\Software\Classes\boss" """)
+            val process = Runtime.getRuntime().exec("""reg query "$PROTOCOL_KEY" """)
             process.waitFor()
             process.exitValue() == 0
         } catch (e: Exception) {
@@ -223,7 +327,7 @@ object WindowsProtocolHandler {
                 ProcessBuilder(
                     "reg",
                     "query",
-                    "HKEY_CURRENT_USER\\Software\\Classes\\boss\\shell\\open\\command",
+                    """$PROTOCOL_KEY\shell\open\command""",
                     "/ve",
                 ).redirectErrorStream(true).start()
 
@@ -259,3 +363,38 @@ object WindowsProtocolHandler {
         return File(exePath).exists()
     }
 }
+
+/**
+ * `reg delete` the whole `boss` key tree. File-private rather than an object member so
+ * [WindowsProtocolHandler] stays within its function budget; it is only ever reached
+ * from [WindowsProtocolHandler.unregisterProtocol], which decides whether deleting is
+ * safe.
+ */
+private fun deleteProtocolKey(): WindowsProtocolHandler.UnregisterOutcome =
+    try {
+        val process =
+            ProcessBuilder("reg", "delete", PROTOCOL_KEY, "/f")
+                .redirectErrorStream(true)
+                .start()
+        val output = process.inputStream.bufferedReader().readText()
+        if (process.waitFor() == 0) {
+            logger.info(LogCategory.SYSTEM, "Removed boss:// protocol registration", mapOf("key" to PROTOCOL_KEY))
+            WindowsProtocolHandler.UnregisterOutcome.REMOVED
+        } else {
+            logger.warn(
+                LogCategory.SYSTEM,
+                "Failed to remove boss:// protocol registration",
+                mapOf("key" to PROTOCOL_KEY, "output" to output.trim()),
+            )
+            WindowsProtocolHandler.UnregisterOutcome.FAILED
+        }
+    } catch (e: IOException) {
+        logger.error(LogCategory.SYSTEM, "Failed to remove boss:// protocol registration", error = e)
+        WindowsProtocolHandler.UnregisterOutcome.FAILED
+    } catch (e: InterruptedException) {
+        // Restore the flag rather than swallowing the interrupt: this can run from the
+        // `--unregister-protocol` path, where the JVM is about to exit anyway.
+        Thread.currentThread().interrupt()
+        logger.error(LogCategory.SYSTEM, "Interrupted while removing boss:// protocol registration", error = e)
+        WindowsProtocolHandler.UnregisterOutcome.FAILED
+    }

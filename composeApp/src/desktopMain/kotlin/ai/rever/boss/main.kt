@@ -13,6 +13,7 @@ import ai.rever.boss.plugin.ui.BossThemeController
 import ai.rever.boss.services.passkey.PasskeyPlatformInit
 import ai.rever.boss.utils.DeepLinkHandler
 import ai.rever.boss.utils.SingleInstanceManager
+import ai.rever.boss.utils.WindowsProtocolHandler
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import ai.rever.boss.window.AWTKeyboardInterceptor
@@ -73,6 +74,15 @@ fun main(args: Array<String>) {
     // Initialize logging framework early
     BossLogger.configureFromEnvironment()
     BossLogger.initialize() // Register shutdown hook for log flushing
+
+    // Uninstall hook (Windows): `BOSS.exe --unregister-protocol` removes the boss://
+    // handler that WindowsProtocolHandler registers at runtime, so uninstalling does not
+    // leave a registry handler pointing at a deleted executable. Handled before any
+    // app/single-instance initialization so it stays callable from an installer action.
+    // Exit codes are documented on unregisterProtocolExitCode().
+    if (args.contains("--unregister-protocol")) {
+        exitProcess(WindowsProtocolHandler.unregisterProtocolExitCode())
+    }
 
     // Install crash handler after logger is ready
     ai.rever.boss.crash.CrashHandler

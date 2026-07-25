@@ -78,11 +78,45 @@ val versionPropsProvider =
         parameters.propertiesFile.set(versionPropsFile)
     }
 val appVersion = versionPropsProvider.map { it.getProperty("app.version", "8.8.0") }.get()
-val bundleVersion = versionPropsProvider.map { it.getProperty("app.bundle.version", "8.8.0") }.get()
 // Base version (without prerelease suffix) for native package formats that don't support semver prereleases
 val baseVersion = appVersion.substringBefore("-")
 
+// CFBundleVersion is macOS's *build* identifier, not the marketing version
+// (CFBundleShortVersionString) — it has to change for every shipped build of a
+// given version, otherwise a re-notarized rebuild of 9.2.60 is indistinguishable
+// from the first 9.2.60 and anything keyed on it cannot tell the two apart.
+// Compose validates it as at most three non-negative integers, so "9.2.60.<n>" is
+// not expressible; we use Apple's usual convention of a plain monotonic counter:
+//   * CI release builds — BOSS_BUILD_ID, which release.yml sets to github.run_number
+//     (monotonic per workflow, and shared by every platform job of one release run).
+//   * any other CI build — GITHUB_RUN_NUMBER, so at least it is not a constant.
+//   * local builds — app.build.number from version.properties. Deliberately a
+//     *stable* value so packaging tasks stay up-to-date between local runs; a
+//     timestamp here would re-sign the whole app image on every build.
+// The value is intentionally NOT derived from app.version: it is a build counter, and
+// Finder shows it as "Version 9.2.60 (641)". `app.bundle.version` used to feed
+// CFBundleVersion while always equalling app.version, so it has been deleted outright
+// along with its writers (version tasks, release/release-lite/promote-release).
+val macBundleBuildVersion: String =
+    (System.getenv("BOSS_BUILD_ID") ?: System.getenv("GITHUB_RUN_NUMBER"))
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
+        ?: versionPropsProvider.map { it.getProperty("app.build.number", "1") }.get()
+
+// jpackage (and therefore Compose) derives CFBundleShortVersionString from
+// packageVersion, which must be a plain MAJOR.MINOR.PATCH — so a prerelease build
+// would show "9.2.60" in Finder instead of "9.2.60-beta.1". Re-declare the key
+// (the last declaration in a plist dict wins) only when a suffix is actually
+// present, so stable builds carry exactly one CFBundleShortVersionString.
+val macPrereleaseShortVersionKey: String =
+    if (appVersion != baseVersion) {
+        "<key>CFBundleShortVersionString</key><string>$appVersion</string>"
+    } else {
+        ""
+    }
+
 println("📦 Building BOSS Version: $appVersion")
+println("🔢 macOS CFBundleVersion (build id): $macBundleBuildVersion")
 
 // Path to libs.versions.toml for reading JxBrowser version (single source of truth)
 val libsVersionsFile = layout.projectDirectory.file("../gradle/libs.versions.toml")
@@ -974,7 +1008,34 @@ compose.desktop {
                 packageName = "BOSS"
                 // Use base version (without prerelease suffix) for DMG - doesn't support semver prereleases
                 dmgPackageVersion = baseVersion
-                dmgPackageBuildVersion = "1"
+                // Same build id as the app bundle. It was hardcoded "1", which is inert
+                // today (packageDmg runs against --app-image, so CFBundleVersion comes
+                // from createDistributable's generic packageBuildVersion) — but that is
+                // exactly the "correct by accident of plugin internals" the rest of this
+                // block removes: if the DMG task ever rewrote the plist, the shipped
+                // CFBundleVersion would silently revert to 1.
+                dmgPackageBuildVersion = macBundleBuildVersion
+
+                // Real platform floor, not the app's own floor: the browser-engine
+                // bundle BOSS downloads (~/.boss/boss-chromium/BOSS.app) declares
+                // LSMinimumSystemVersion 12.0 and its framework is built with
+                // LC_BUILD_VERSION minos 12.0. On 10.15/11 the app installed and
+                // launched fine and then died in dyld the first time an engine
+                // loaded — a broken browser tab instead of "unsupported OS".
+                // Declaring 12.0 here makes the installer refuse the install
+                // instead. Keep in lockstep with chromium-branding / the engine
+                // bundle's own LSMinimumSystemVersion.
+                minimumSystemVersion = "12.0"
+
+                // Was jpackage's placeholder "Unknown" (Compose's default when this
+                // is unset), which leaves Launchpad/Finder categorization empty.
+                // BOSS is a terminal + editor + console for developers.
+                appCategory = "public.app-category.developer-tools"
+
+                // CFBundleVersion — see macBundleBuildVersion above. Set through the
+                // DSL (not infoPlist.extraKeysRawXml) so exactly one CFBundleVersion
+                // key ends up in Info.plist.
+                packageBuildVersion = macBundleBuildVersion
 
                 // Note: bundleJRE is not a valid property in current Compose Desktop
                 // The JVM is automatically bundled when creating native distributions
@@ -998,20 +1059,18 @@ compose.desktop {
                 // Entitlements
                 entitlementsFile.set(project.file("src/desktopMain/resources/BOSS.entitlements"))
 
-                // DMG customization
+                // Extra Info.plist keys.
+                //
+                // Only keys Compose does NOT already emit belong here: LSMinimumSystemVersion,
+                // LSApplicationCategoryType, CFBundleShortVersionString, CFBundleVersion,
+                // NSHighResolutionCapable and NSSupportsAutomaticGraphicsSwitching are all
+                // written by the Compose plugin from the DSL settings above. Declaring them
+                // again produced a plist with duplicate keys that only worked because the
+                // last declaration wins — the single-source DSL settings replace that.
                 infoPlist {
                     extraKeysRawXml =
                         """
-                        <key>LSMinimumSystemVersion</key>
-                        <string>10.15</string>
-                        <key>CFBundleShortVersionString</key>
-                        <string>$appVersion</string>
-                        <key>CFBundleVersion</key>
-                        <string>$bundleVersion</string>
-                        <key>NSHighResolutionCapable</key>
-                        <true/>
-                        <key>NSSupportsAutomaticGraphicsSwitching</key>
-                        <true/>
+                        $macPrereleaseShortVersionKey
                         <key>NSCameraUsageDescription</key>
                         <string>BOSS needs access to your camera for video conferencing and screen sharing.</string>
                         <key>NSMicrophoneUsageDescription</key>
@@ -1530,6 +1589,30 @@ abstract class FixLinuxDesktopFileTask : DefaultTask() {
                             modified = true
                         }
                     }
+                }
+            }
+
+            // Soften the generated dependency on xdg-utils.
+            //
+            // jpackage lists xdg-utils in the .deb's `Depends:` field (its postinst
+            // uses xdg-desktop-menu / xdg-icon-resource), so on a headless image
+            // without that package `dpkg -i` fails during dependency resolution —
+            // before postinst exists to be guarded, which is why the postinst fix
+            // above only closed half of the headless problem. Desktop integration is
+            // best-effort here, so xdg-utils belongs under `Recommends:`: apt still
+            // pulls it in by default on desktop systems, while a headless install no
+            // longer hard-fails. Note `dpkg -i` does NOT honor Recommends, so a
+            // desktop install done that way silently skips menu/icon registration
+            // instead of failing — install with apt to get the recommends.
+            //
+            // The transform itself lives in buildSrc (DebControl) so it can be
+            // unit-tested without a Linux runner; see DebControlTest.
+            val controlFile = File(workDir, "DEBIAN/control")
+            if (controlFile.isFile) {
+                DebControl.softenXdgUtilsDependency(controlFile.readText())?.let { rewritten ->
+                    controlFile.writeText(rewritten)
+                    println("✅ Moved xdg-utils from Depends to Recommends in DEBIAN/control (headless installs)")
+                    modified = true
                 }
             }
 

@@ -42,6 +42,10 @@ env:
   SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_FUNCTION_URL: ${{ secrets.SUPABASE_FUNCTION_URL }}
+  # macOS CFBundleVersion (build identifier). Set here too so lite builds do not fall
+  # back to this workflow's own GITHUB_RUN_NUMBER, which is an independent counter from
+  # release.yml's and could collide with, or sort below, a full-release build.
+  BOSS_BUILD_ID: ${{ github.run_number }}
 
 # Prevent concurrent releases from racing to bump the version in BossConsoleLite
 concurrency:
@@ -111,7 +115,6 @@ jobs:
           sed -i "s/^app.version.minor=.*/app.version.minor=${MINOR}/" version.properties
           sed -i "s/^app.version.patch=.*/app.version.patch=${PATCH}/" version.properties
           sed -i "s/^app.version=.*/app.version=${FULL_VERSION}/" version.properties
-          sed -i "s/^app.bundle.version=.*/app.bundle.version=${FULL_VERSION}/" version.properties
           sed -i "s/^app.prerelease.suffix=.*/app.prerelease.suffix=${PRERELEASE_SUFFIX}/" version.properties
           grep -q "^app.lite.build=" version.properties \
             && sed -i "s/^app.lite.build=.*/app.lite.build=true/" version.properties \

@@ -183,6 +183,16 @@ jobs:
           path: '**/build/reports/detekt/'
           retention-days: 7
 
+      - name: 🧪 buildSrc Tests
+        run: |
+          echo "🧪 Running buildSrc unit tests"
+          # Regular Gradle invocations only *build* buildSrc (its jar), so these tests
+          # never run unless invoked explicitly. They cover the .deb control-file
+          # rewrite (DebControl), whose only other exercise is a Linux release build.
+          ./gradlew -p buildSrc test
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: 🔒 Dependency Check
         run: |
           echo "🔒 Checking dependencies"

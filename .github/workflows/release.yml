@@ -69,6 +69,12 @@ on:
 
 env:
   GRADLE_OPTS: '-Dorg.gradle.daemon=false -Dorg.gradle.parallel=true -Dorg.gradle.caching=true'
+  # macOS CFBundleVersion (the *build* identifier, not the marketing version).
+  # run_number only ever increases for this workflow, so a rebuild/re-notarization of
+  # the same app version is still distinguishable, and every platform job of one
+  # release run shares the same build id. See composeApp/build.gradle.kts
+  # (macBundleBuildVersion) for the fallbacks used outside this workflow.
+  BOSS_BUILD_ID: ${{ github.run_number }}
   # Production credentials for release builds
   JXBROWSER_LICENSE_KEY: ${{ secrets.JXBROWSER_LICENSE_KEY }}
   SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -273,7 +279,6 @@ jobs:
               sed -i "s/^app.version.minor=.*/app.version.minor=$TAG_MINOR/" version.properties
               sed -i "s/^app.version.patch=.*/app.version.patch=$TAG_PATCH/" version.properties
               sed -i "s/^app.version=.*/app.version=$TAG_VERSION/" version.properties
-              sed -i "s/^app.bundle.version=.*/app.bundle.version=$TAG_VERSION/" version.properties
               sed -i "s/^app.prerelease.suffix=.*/app.prerelease.suffix=$PRERELEASE_SUFFIX/" version.properties
 
               echo "✅ Updated version.properties to match tag: $TAG_VERSION"
@@ -1517,7 +1522,8 @@ jobs:
 
           ## 🔧 System Requirements
 
-          - **macOS**: macOS 11.0+ (Big Sur)
+          - **macOS**: macOS 12.0+ (Monterey) — matches the bundle's LSMinimumSystemVersion
+            and the browser engine's own 12.0 floor
           - **Windows**: Windows 10+ (64-bit)
           - **Linux**: Any modern distribution (AMD64 or ARM64)
 
@@ -1545,9 +1551,13 @@ jobs:
           **Ubuntu/Debian:**
           \`\`\`bash
           wget https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/BOSS-${VERSION}-amd64.deb
-          sudo dpkg -i BOSS-${VERSION}-amd64.deb
-          sudo apt-get install -f  # Fix any missing dependencies
+          sudo apt-get install ./BOSS-${VERSION}-amd64.deb  # resolves dependencies + recommends
           \`\`\`
+
+          > \`sudo dpkg -i\` works too and no longer requires \`xdg-utils\` to be present
+          > (headless installs used to fail during dependency resolution). But \`dpkg\`
+          > ignores \`Recommends:\`, so on a desktop without \`xdg-utils\` installed it
+          > skips the menu entry and icon silently — use apt to get them.
 
           **RHEL/Fedora/openSUSE:**
           \`\`\`bash
@@ -1566,9 +1576,13 @@ jobs:
           **Ubuntu/Debian:**
           \`\`\`bash
           wget https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/BOSS-${VERSION}-arm64.deb
-          sudo dpkg -i BOSS-${VERSION}-arm64.deb
-          sudo apt-get install -f  # Fix any missing dependencies
+          sudo apt-get install ./BOSS-${VERSION}-arm64.deb  # resolves dependencies + recommends
           \`\`\`
+
+          > \`sudo dpkg -i\` works too and no longer requires \`xdg-utils\` to be present
+          > (headless installs used to fail during dependency resolution). But \`dpkg\`
+          > ignores \`Recommends:\`, so on a desktop without \`xdg-utils\` installed it
+          > skips the menu entry and icon silently — use apt to get them.
 
           **RHEL/Fedora/openSUSE:**
           \`\`\`bash

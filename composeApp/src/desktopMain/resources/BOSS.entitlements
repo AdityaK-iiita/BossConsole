@@ -23,15 +23,26 @@
     <!-- File access for code editor -->
     <key>com.apple.security.files.user-selected.read-write</key>
     <true/>
-    
-    <!-- Terminal access -->
-    <key>com.apple.security.device.serial</key>
-    <true/>
-    
-    <!-- Allow debugging -->
-    <key>com.apple.security.cs.debugger</key>
-    <true/>
-    
+
+    <!-- Removed July 2026 (issue #38): com.apple.security.cs.debugger and
+         com.apple.security.device.serial were granted with no stated reason.
+         cs.debugger lets every binary signed with this file (the app launcher plus
+         the PTY4J natives that signPty4jBinaries re-signs with it) attach to and
+         read the memory of other signed processes — a large grant for a
+         terminal/editor host. Nothing in the tree uses the JVM attach API,
+         task_for_pid, or a serial device, and the branded Chromium engine bundle
+         (chromium-branding/entitlements/*.entitlements) ships without either key,
+         so JxBrowser does not require them either. Do not add them back without
+         naming the consumer here.
+
+         For the avoidance of doubt about the sandbox argument: the remaining
+         sandbox-scoped keys below (inherit, files.user-selected.read-write,
+         network.*, device.camera, device.audio-input) are likewise inert while
+         app-sandbox is false — camera/mic prompts come from the NS*UsageDescription
+         strings in Info.plist. They are kept in case sandboxing is ever enabled;
+         cs.debugger was removed because, unlike those, it is a hardened-runtime
+         entitlement that is NOT inert. -->
+
     <!-- App Sandbox disabled for full system access -->
     <key>com.apple.security.app-sandbox</key>
     <false/>

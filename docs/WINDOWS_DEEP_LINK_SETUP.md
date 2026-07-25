@@ -16,6 +16,49 @@ This guide explains how the Windows deep link support works for the BOSS desktop
    - If BOSS is not running, Windows launches it with the URL as a command line argument
    - If BOSS is already running, the behavior depends on Windows version (may launch a new instance)
 
+## Registration Lifecycle (and why uninstall needs a hook)
+
+Registration is done by the **running app**, not by the MSI. That is a deliberate
+limitation, not a preference: the Compose Desktop Gradle plugin exposes no WiX
+authoring hook (no `--resource-dir` override, no registry DSL), so the installer
+cannot own the `boss:` keys without hand-maintaining a full jpackage `main.wxs`
+replacement — which is tied to the JDK version that built it and cannot be verified
+outside a Windows + WiX runner.
+
+Consequences and the mitigations in place:
+
+| Situation | Behavior |
+|---|---|
+| Fresh install, first launch | App registers `HKCU\Software\Classes\boss` (`WindowsProtocolHandler.registerProtocol`) |
+| Moved/reinstalled to a new path | Startup re-registers when the stored command points at a missing exe (self-heal) |
+| Another BOSS install still present and valid | Left alone — the app never steals a working registration |
+| Command present but unparseable (e.g. an unquoted, installer-authored command) | Left alone — never deleted just because this code cannot read it |
+| **Uninstalled** | The key survives and points at a deleted exe unless cleaned up (below) |
+
+### Cleaning up the registration
+
+```powershell
+# Preferred: let the app remove its own registration.
+# BOSS.exe is a GUI-subsystem binary (windows { console = false }), so a plain
+# invocation returns immediately and $LASTEXITCODE is NOT the app's exit code —
+# use the waiting form to observe the result:
+(Start-Process -FilePath "$env:LOCALAPPDATA\BOSS\BOSS.exe" `
+    -ArgumentList '--unregister-protocol' -Wait -PassThru).ExitCode
+
+# Manual equivalent
+reg delete "HKEY_CURRENT_USER\Software\Classes\boss" /f
+```
+
+Exit codes: `0` nothing left to clean (removed, or nothing was registered, or not a
+Windows host), `1` the registration was deliberately left in place (another live install,
+or a command that could not be parsed), `2` the `reg delete` itself failed. An MSI custom
+action waits for the process, so the contract is observable where it matters. There is no
+console output — the BossLogger log file is the only human-readable signal.
+
+Run this **before** uninstalling, or wire it as an uninstall action when installer-owned
+registration lands (tracked as follow-up work to issue #38 — the Rust host is expected
+to register the protocol from its installer instead).
+
 ## Email Verification Flow
 
 1. User clicks the verification link in their email
