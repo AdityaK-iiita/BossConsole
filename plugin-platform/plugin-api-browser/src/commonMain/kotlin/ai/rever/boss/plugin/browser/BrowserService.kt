@@ -64,6 +64,10 @@ interface BrowserService {
      * This is equivalent to calling [BrowserHandle.dispose] but allows
      * batch disposal operations.
      *
+     * If the browser owns a fullscreen rendering surface, disposal may wait
+     * briefly for UI-thread detachment. Do not call while holding a lock that
+     * the UI thread may need.
+     *
      * @param handle The browser handle to dispose
      */
     suspend fun disposeBrowser(handle: BrowserHandle)

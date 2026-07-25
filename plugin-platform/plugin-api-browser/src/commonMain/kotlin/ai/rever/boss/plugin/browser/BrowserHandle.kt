@@ -569,6 +569,10 @@ interface BrowserHandle {
      *
      * After calling this, [isValid] will return false and
      * all other methods will be no-ops.
+     *
+     * If this browser owns a fullscreen rendering surface, disposal may wait
+     * briefly for UI-thread detachment. Do not call while holding a lock that
+     * the UI thread may need.
      */
     fun dispose()
 }

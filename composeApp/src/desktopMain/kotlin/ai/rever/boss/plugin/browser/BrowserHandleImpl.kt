@@ -1313,6 +1313,7 @@ internal class BrowserHandleImpl(
         FluckEngine.setupFullscreenHandler(
             browser = browser,
             tabId = tabId,
+            ownerWindowId = ownerWindowId,
             onFullscreenEnter = {
                 logger.info(LogCategory.BROWSER, "Tab entered fullscreen", mapOf("tabId" to tabId, "handleId" to id))
                 onEnterFullscreen()
@@ -1327,7 +1328,7 @@ internal class BrowserHandleImpl(
     }
 
     override fun requestExitFullscreen() {
-        FullscreenBrowserWindow.requestExit()
+        FullscreenBrowserWindow.requestExit(browser)
     }
 
     // ============================================================
@@ -1595,6 +1596,7 @@ internal class BrowserHandleImpl(
 
     override fun dispose() {
         if (!disposed.compareAndSet(false, true)) return
+        FullscreenBrowserWindow.exitFullscreen(browser)
 
         // Stop co-browse capture so a disposed tab can never keep streaming.
         coBrowseCapturing = false

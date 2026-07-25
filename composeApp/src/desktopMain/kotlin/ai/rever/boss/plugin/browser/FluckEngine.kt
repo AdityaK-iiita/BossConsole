@@ -1765,12 +1765,14 @@ object FluckEngine {
      *
      * @param browser The browser instance to configure
      * @param tabId The unique ID of the tab containing this browser
+     * @param ownerWindowId The Boss window that owns the browser tab
      * @param onFullscreenEnter Callback when fullscreen mode is entered
      * @param onFullscreenExit Callback when fullscreen mode is exited
      */
     fun setupFullscreenHandler(
         browser: com.teamdev.jxbrowser.browser.Browser,
         tabId: String,
+        ownerWindowId: String,
         onFullscreenEnter: () -> Unit,
         onFullscreenExit: () -> Unit,
     ) {
@@ -1779,12 +1781,13 @@ object FluckEngine {
             logger.info(LogCategory.BROWSER, "Web content requested fullscreen", mapOf("tabId" to tabId))
 
             // Show fullscreen window
-            ai.rever.boss.tabfullscreen.FullscreenBrowserWindow.showFullscreen(browser, tabId) {
-                // This is called when exiting fullscreen via ESC or clicking placeholder
-                onFullscreenExit()
-            }
-
-            onFullscreenEnter()
+            ai.rever.boss.tabfullscreen.FullscreenBrowserWindow.showFullscreen(
+                browser = browser,
+                tabId = tabId,
+                ownerWindowId = ownerWindowId,
+                onEnter = onFullscreenEnter,
+                onExit = onFullscreenExit,
+            )
         }
 
         // Handle fullscreen exit using event listener
@@ -1793,9 +1796,7 @@ object FluckEngine {
 
             // Close fullscreen window
             ai.rever.boss.tabfullscreen.FullscreenBrowserWindow
-                .exitFullscreen()
-
-            onFullscreenExit()
+                .exitFullscreenAsync(browser, onFullscreenExit)
         }
     }
 

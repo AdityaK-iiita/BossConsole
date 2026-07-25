@@ -4,9 +4,18 @@ import ai.rever.boss.plugin.browser.BrowserConfig
 import ai.rever.boss.plugin.browser.BrowserHandle
 import ai.rever.boss.plugin.browser.BrowserService
 import ai.rever.boss.plugin.browser.BrowserServiceImpl
+import ai.rever.boss.utils.logging.BossLogger
+import ai.rever.boss.utils.logging.LogCategory
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicBoolean
+import javax.swing.SwingUtilities
 
 private val windowBrowserServices = ConcurrentHashMap<String, WindowScopedBrowserService>()
+private const val BROWSER_DISPOSAL_TIMEOUT_MS = 2_000L
 
 /**
  * Desktop implementation of BrowserService provider.
@@ -23,7 +32,9 @@ actual fun getBrowserServiceInstance(windowId: String?): BrowserService? =
 private class WindowScopedBrowserService(
     private val windowId: String,
 ) : BrowserService by BrowserServiceImpl {
+    private val logger = BossLogger.forComponent("WindowScopedBrowserService")
     private val lifecycleLock = Any()
+    private val disposalStarted = AtomicBoolean(false)
     private var closed = false
 
     override suspend fun createBrowser(config: BrowserConfig): BrowserHandle? {
@@ -50,10 +61,77 @@ private class WindowScopedBrowserService(
     override fun getActiveBrowserCount(): Int = BrowserServiceImpl.getActiveBrowserCountForWindow(windowId)
 
     fun close() {
-        synchronized(lifecycleLock) {
-            if (closed) return
-            closed = true
+        val shouldDispose =
+            synchronized(lifecycleLock) {
+                if (closed) {
+                    false
+                } else {
+                    closed = true
+                    true
+                }
+            }
+        if (!shouldDispose) return
+
+        if (SwingUtilities.isEventDispatchThread()) {
+            disposeOwnedBrowsersOnce()
+            return
+        }
+
+        logger.debug(
+            LogCategory.BROWSER,
+            "Browser service close called off-EDT; marshalling before disposal",
+            mapOf("windowId" to windowId),
+        )
+        val task =
+            FutureTask<Unit> {
+                disposeOwnedBrowsersOnce()
+            }
+        SwingUtilities.invokeLater(task)
+        try {
+            task.get(BROWSER_DISPOSAL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            disposeAfterMarshalFailure(
+                message = "Interrupted while waiting for browser service disposal; cleanup remains queued",
+                error = e,
+                retryOnEdt = false,
+            )
+        } catch (e: TimeoutException) {
+            disposeAfterMarshalFailure(
+                message = "Timed out waiting for browser service disposal; cleanup remains queued",
+                error = e,
+                retryOnEdt = false,
+            )
+        } catch (e: ExecutionException) {
+            disposeAfterMarshalFailure(
+                message = "Browser service disposal failed on the EDT; scheduling one retry",
+                error = e.cause ?: e,
+                retryOnEdt = true,
+            )
+        }
+    }
+
+    private fun disposeAfterMarshalFailure(
+        message: String,
+        error: Throwable,
+        retryOnEdt: Boolean,
+    ) {
+        logger.warn(LogCategory.BROWSER, message, mapOf("windowId" to windowId), error)
+        if (retryOnEdt) {
+            SwingUtilities.invokeLater(::disposeOwnedBrowsersOnce)
+        }
+    }
+
+    private fun disposeOwnedBrowsersOnce() {
+        if (!disposalStarted.compareAndSet(false, true)) return
+        var completed = false
+        try {
             BrowserServiceImpl.disposeAllForWindow(windowId)
+            completed = true
+        } finally {
+            if (!completed) {
+                disposalStarted.set(false)
+            }
         }
     }
 }

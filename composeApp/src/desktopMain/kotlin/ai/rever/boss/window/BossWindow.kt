@@ -250,6 +250,13 @@ fun ApplicationScope.BossWindow(
             window.rootPane.putClientProperty("apple.awt.windowTitleVisible", false)
         }
 
+        // Publish Compose's authoritative placement. Native macOS fullscreen does not
+        // reliably report full-display AWT bounds, so browser-video fullscreen uses this
+        // state to decide whether to overlay the existing fullscreen Space.
+        LaunchedEffect(windowState.id, window, isFullScreen) {
+            WindowFocusManager.updateWindowFullscreen(windowState.id, isFullScreen)
+        }
+
         // Register window for focus management (deep links, etc.) and keyboard interception
         DisposableEffect(windowState.id, window) {
             WindowFocusManager.registerWindow(windowState.id, window)
