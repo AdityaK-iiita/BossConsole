@@ -53,9 +53,41 @@ message WidgetTree {
 }
 
 message WidgetNode {
+  // Node identity. Renderers key per-node state (text-field buffers, scroll
+  // offsets) on this, and WidgetDiff operations address nodes by it, so senders
+  // must keep ids STABLE across rebuilds of the same logical widget. Freshly
+  // random ids per build turn every update into remove-all/add-all and discard
+  // whatever the user was typing.
   string id = 1;
+
   WidgetType type = 2;
-  map<string, string> properties = 3;    // Type-specific properties (all as strings)
+
+  // Type-specific properties (all values as strings). Notable keys:
+  //   BUTTON:      "label", "clickEventId" (also accepted: "onClickEvent")
+  //   TEXT:        "value", "fontSize", "style"
+  //   TEXT_FIELD:  "value", "placeholder", "onChangeEvent"
+  //   CHECKBOX /
+  //   TOGGLE:      "checked", "label", "onToggleEvent"
+  //   DROPDOWN:    "selected", "options" (comma-joined), "onSelectEvent"
+  //   LIST:        "items" (comma-joined rows, used when child_ids is empty)
+  //   ICON:        "name", "size"
+  //   PROGRESS:    "value", "indeterminate"
+  //   SPACER:      "height"
+  //
+  // Comma-joined values ("options", "items") split on ',' with NO escaping and
+  // NO trimming: "Buy milk, eggs" is two entries, the second " eggs". Send
+  // values that may contain a comma as child nodes instead. An absent or empty
+  // property means zero entries; "a,,b" is three entries with a blank middle
+  // one. Boolean values follow Kotlin's String.toBoolean: case-insensitive
+  // "true", everything else false.
+  //
+  // A widget's local state (a text field's buffer, a checkbox's flag) is seeded
+  // from these properties and thereafter owned by the user — but a NEW value on
+  // an update replaces it, which is how a plugin clears a field after submit or
+  // pushes back a normalized/rejected value. Re-sending an unchanged value does
+  // not disturb in-flight editing.
+  map<string, string> properties = 3;
+
   repeated string child_ids = 4;         // Ordered child node IDs
   WidgetModifier modifier = 5;           // Layout/style modifiers
 }
@@ -100,8 +132,22 @@ message WidgetModifier {
   int32 padding_top = 4;
   int32 padding_end = 5;
   int32 padding_bottom = 6;
-  string background_color = 7;  // Hex color string (e.g., "#FF0000") or theme token
-  float alpha = 8;              // 0.0-1.0
+
+  // Hex color ("#RRGGBB" / "#AARRGGBB") or a design-system theme token resolved
+  // against the host's ACTIVE theme, so the widget re-skins with the app:
+  // ink, panel, raised, line, lineStrong, textPrimary, textSecondary,
+  // textMuted, signal, signalDim, signalWash, data, ok, warn, alert, onSignal,
+  // onData. Token names are matched case-insensitively, ignoring '_' and '-'.
+  // Empty, or anything that is neither a token nor valid hex: no background.
+  string background_color = 7;
+
+  // Opacity 0.0-1.0. NOTE: 0.0 means "unset", NOT "invisible". proto3 has no
+  // presence for scalars, so a sender that never touches this field sends 0.0;
+  // honouring that literally would make every widget from every such plugin
+  // disappear. Renderers apply the value only when it lies strictly inside
+  // (0.0, 1.0). A widget that should not be visible must not be sent.
+  float alpha = 8;
+
   bool clickable = 9;
   string click_event_id = 10;   // Event ID sent back on click
 }

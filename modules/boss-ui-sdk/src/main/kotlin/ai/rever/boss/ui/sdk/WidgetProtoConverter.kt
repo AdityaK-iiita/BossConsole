@@ -130,7 +130,10 @@ object WidgetProtoConverter {
             paddingEnd = paddingEnd,
             paddingBottom = paddingBottom,
             backgroundColor = backgroundColor,
-            alpha = alpha,
+            // Canonicalized, NOT copied verbatim: proto3's unset 0.0 and the Kotlin default 1f both
+            // mean "opaque", and WidgetDiffEngine compares modifiers structurally. See
+            // normalizeWireAlpha.
+            alpha = normalizeWireAlpha(alpha),
             clickable = clickable,
             clickEventId = clickEventId,
         )

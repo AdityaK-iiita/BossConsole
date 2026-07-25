@@ -1,5 +1,6 @@
 package ai.rever.boss.components.plugin.remote
 
+import ai.rever.boss.plugin.ui.BossColorScheme
 import ai.rever.boss.plugin.ui.BossTheme
 import ai.rever.boss.ui.sdk.*
 import androidx.compose.foundation.background
@@ -12,6 +13,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -22,13 +25,18 @@ import androidx.compose.ui.unit.sp
  * This is the kernel-side renderer for Phase 4/7: plugins in separate JVM processes
  * send declarative widget trees over IPC, which the kernel renders using this component.
  *
+ * How a node's properties and modifier are interpreted lives in `boss-ui-sdk`
+ * ([resolveClickEventId], [resolveListItems], [resolveDropdownOptions], [effectiveAlpha],
+ * [parseBackgroundColor]) so that this renderer and the native `boss-remote-ui` renderer in the Rust
+ * shell agree by construction, and so the rules are testable without a UI toolkit.
+ *
  * @param tree      The widget tree to render
- * @param onEvent   Callback for UI events: (nodeId, eventType, eventData) -> Unit
+ * @param onEvent   Callback for UI events, forwarded to the owning plugin as proto `UIEvent`s
  */
 @Composable
 fun RemoteWidgetRenderer(
     tree: WidgetTree,
-    onEvent: (nodeId: String, eventType: String, eventData: String) -> Unit = { _, _, _ -> },
+    onEvent: (nodeId: String, event: WidgetEvent) -> Unit = { _, _ -> },
 ) {
     val root = tree.nodes[tree.rootId] ?: return
     RenderNode(node = root, tree = tree, onEvent = onEvent)
@@ -38,48 +46,35 @@ fun RemoteWidgetRenderer(
 private fun RenderNode(
     node: WidgetNode,
     tree: WidgetTree,
-    onEvent: (nodeId: String, eventType: String, eventData: String) -> Unit,
+    onEvent: (nodeId: String, event: WidgetEvent) -> Unit,
 ) {
     val modifier = node.modifier.toComposeModifier(node, onEvent)
 
     when (node.type) {
         WidgetType.COLUMN -> {
             Column(modifier = modifier) {
-                node.childIds.forEach { childId ->
-                    tree.nodes[childId]?.let { child ->
-                        RenderNode(node = child, tree = tree, onEvent = onEvent)
-                    }
-                }
+                RenderChildren(node, tree, onEvent)
             }
         }
 
         WidgetType.ROW -> {
             Row(modifier = modifier) {
-                node.childIds.forEach { childId ->
-                    tree.nodes[childId]?.let { child ->
-                        RenderNode(node = child, tree = tree, onEvent = onEvent)
-                    }
-                }
+                RenderChildren(node, tree, onEvent)
             }
         }
 
         WidgetType.BOX -> {
             Box(modifier = modifier) {
-                node.childIds.forEach { childId ->
-                    tree.nodes[childId]?.let { child ->
-                        RenderNode(node = child, tree = tree, onEvent = onEvent)
-                    }
-                }
+                RenderChildren(node, tree, onEvent)
             }
         }
 
         WidgetType.SCROLL -> {
             val scrollState = rememberScrollState()
             Column(modifier = modifier.verticalScroll(scrollState)) {
-                node.childIds.forEach { childId ->
-                    tree.nodes[childId]?.let { child ->
-                        RenderNode(node = child, tree = tree, onEvent = onEvent)
-                    }
+                // Everything below is measured with an unbounded max height — see the LIST branch.
+                CompositionLocalProvider(LocalUnboundedHeight provides true) {
+                    RenderChildren(node, tree, onEvent)
                 }
             }
         }
@@ -95,39 +90,39 @@ private fun RenderNode(
         }
 
         WidgetType.BUTTON -> {
-            val label = node.properties["label"] ?: ""
-            val clickEventId = node.properties["clickEventId"] ?: node.modifier.clickEventId
+            // Accepts both spellings of the event id — see resolveClickEventId.
+            val clickEventId = node.resolveClickEventId()
             Button(
-                onClick = { onEvent(node.id, "click", clickEventId) },
+                onClick = { onEvent(node.id, WidgetEvent.Click(clickEventId)) },
                 modifier = modifier,
             ) {
-                Text(label)
+                Text(node.properties["label"] ?: "")
             }
         }
 
         WidgetType.TEXT_FIELD -> {
-            var value by remember { mutableStateOf(node.properties["value"] ?: "") }
             val placeholder = node.properties["placeholder"] ?: ""
+            var value by rememberPushableState(node.id, node.properties["value"] ?: "")
             OutlinedTextField(
                 value = value,
                 onValueChange = { newValue ->
                     value = newValue
-                    onEvent(node.id, "textChange", newValue)
+                    onEvent(node.id, WidgetEvent.TextChange(newValue))
                 },
                 placeholder = { Text(placeholder) },
-                modifier = modifier,
+                modifier = modifier.notifyFocusChanges(node.id, onEvent),
             )
         }
 
         WidgetType.CHECKBOX -> {
-            var checked by remember { mutableStateOf(node.properties["checked"]?.toBoolean() ?: false) }
+            var checked by rememberPushableState(node.id, node.properties["checked"].toBossBoolean())
             val label = node.properties["label"] ?: ""
             Row(modifier = modifier, verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                 Checkbox(
                     checked = checked,
                     onCheckedChange = { newChecked ->
                         checked = newChecked
-                        onEvent(node.id, "toggle", newChecked.toString())
+                        onEvent(node.id, WidgetEvent.Toggle(newChecked))
                     },
                 )
                 if (label.isNotEmpty()) {
@@ -138,12 +133,12 @@ private fun RenderNode(
         }
 
         WidgetType.TOGGLE -> {
-            var checked by remember { mutableStateOf(node.properties["checked"]?.toBoolean() ?: false) }
+            var checked by rememberPushableState(node.id, node.properties["checked"].toBossBoolean())
             Switch(
                 checked = checked,
                 onCheckedChange = { newChecked ->
                     checked = newChecked
-                    onEvent(node.id, "toggle", newChecked.toString())
+                    onEvent(node.id, WidgetEvent.Toggle(newChecked))
                 },
                 modifier = modifier,
             )
@@ -169,10 +164,29 @@ private fun RenderNode(
         }
 
         WidgetType.LIST -> {
-            val items = node.childIds.mapNotNull { tree.nodes[it] }
-            LazyColumn(modifier = modifier) {
-                items(items) { item ->
-                    RenderNode(node = item, tree = tree, onEvent = onEvent)
+            // A LazyColumn measured with an unbounded max height throws, so a plugin could crash the
+            // host surface purely by nesting LIST inside SCROLL (or inside another LIST). Inside such
+            // a parent, fall back to a plain Column: no virtualization, but the surface survives
+            // whatever tree shape arrives over IPC.
+            // Read the ambient value BEFORE providing our own, or every list looks nested.
+            val unboundedParent = LocalUnboundedHeight.current
+            val children = node.childIds.mapNotNull { tree.nodes[it] }
+            // WidgetTreeBuilder.list() carries rows as an `items` property rather than child nodes;
+            // walking childIds alone drew an empty list.
+            val rows = if (children.isEmpty()) node.resolveListItems() else emptyList()
+            CompositionLocalProvider(LocalUnboundedHeight provides true) {
+                if (unboundedParent) {
+                    Column(modifier = modifier) {
+                        children.forEach { child -> key(child.id) { RenderNode(child, tree, onEvent) } }
+                        rows.forEach { row -> Text(text = row) }
+                    }
+                } else {
+                    LazyColumn(modifier = modifier) {
+                        items(items = children, key = { it.id }) { child ->
+                            RenderNode(child, tree, onEvent)
+                        }
+                        items(rows) { row -> Text(text = row) }
+                    }
                 }
             }
         }
@@ -190,19 +204,19 @@ private fun RenderNode(
         }
 
         WidgetType.DROPDOWN -> {
-            var expanded by remember { mutableStateOf(false) }
+            var expanded by remember(node.id) { mutableStateOf(false) }
             val selected = node.properties["selected"] ?: ""
-            val options = node.properties["options"]?.split(",") ?: emptyList()
+            val options = node.resolveDropdownOptions()
             Box(modifier = modifier) {
                 Text(
                     text = selected,
                     modifier = Modifier.clickable { expanded = true },
                 )
                 DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                    options.forEach { option ->
+                    options.forEachIndexed { index, option ->
                         DropdownMenuItem(onClick = {
                             expanded = false
-                            onEvent(node.id, "selection", option)
+                            onEvent(node.id, WidgetEvent.Selection(option, index))
                         }) {
                             Text(option)
                         }
@@ -238,41 +252,141 @@ private fun RenderNode(
 }
 
 /**
- * Parse a CSS hex color string (#RGB, #RRGGBB, or #AARRGGBB) into a Compose [Color].
+ * Render a container's children, giving each one a Compose identity keyed by its node id.
+ *
+ * Without the [key], Compose identifies children *positionally*, so inserting or reordering a
+ * sibling shifts every `remember`ed state (a text field's buffer, a dropdown's expanded flag) onto
+ * the wrong node.
  */
-private fun parseHexColor(hex: String): Color? =
-    runCatching {
-        val clean = hex.trimStart('#')
-        when (clean.length) {
-            6 -> {
-                Color(
-                    red = clean.substring(0, 2).toInt(16) / 255f,
-                    green = clean.substring(2, 4).toInt(16) / 255f,
-                    blue = clean.substring(4, 6).toInt(16) / 255f,
-                )
-            }
-
-            8 -> {
-                Color(
-                    alpha = clean.substring(0, 2).toInt(16) / 255f,
-                    red = clean.substring(2, 4).toInt(16) / 255f,
-                    green = clean.substring(4, 6).toInt(16) / 255f,
-                    blue = clean.substring(6, 8).toInt(16) / 255f,
-                )
-            }
-
-            else -> {
-                null
+@Composable
+private fun RenderChildren(
+    node: WidgetNode,
+    tree: WidgetTree,
+    onEvent: (nodeId: String, event: WidgetEvent) -> Unit,
+) {
+    node.childIds.forEach { childId ->
+        tree.nodes[childId]?.let { child ->
+            key(child.id) {
+                RenderNode(child, tree, onEvent)
             }
         }
-    }.getOrNull()
+    }
+}
+
+/**
+ * Whether the surrounding layout measures its children with an unbounded max height.
+ *
+ * `LazyColumn` throws when measured that way, so a plugin could crash the host surface purely by
+ * nesting `LIST` inside `SCROLL` (or inside another `LIST`) — tree *shape* arriving over IPC, not a
+ * host bug. Ambient rather than a parameter: it describes the enclosing layout, and threading it
+ * through every branch would put it in `RenderNode`'s signature for one consumer.
+ */
+private val LocalUnboundedHeight = compositionLocalOf { false }
+
+/**
+ * Local widget state that the user edits and the **plugin can still push to**.
+ *
+ * A plain `remember(nodeId) { mutableStateOf(incoming) }` seeds once per node identity and then
+ * ignores the property forever, which means a plugin cannot drive its own widgets: no clearing a
+ * search box after submit, no echoing back a normalized value, no rejecting a toggle. Tracking the
+ * last value seen on the wire separates "the user typed" (leave the buffer alone) from "the plugin
+ * sent something new" (the plugin wins). An unchanged property re-sent on every tree update does
+ * *not* clobber in-flight typing.
+ */
+@Composable
+private fun <T> rememberPushableState(
+    nodeId: String,
+    incoming: T,
+): MutableState<T> {
+    val state = remember(nodeId) { mutableStateOf(incoming) }
+    val lastIncoming = remember(nodeId) { mutableStateOf(incoming) }
+    LaunchedEffect(nodeId, incoming) {
+        if (lastIncoming.value != incoming) {
+            lastIncoming.value = incoming
+            state.value = incoming
+        }
+    }
+    return state
+}
+
+/**
+ * Report focus transitions, and only transitions.
+ *
+ * `onFocusChanged` also fires when a node's focus state is first resolved on attach, so wiring it
+ * straight through made every text field announce focus *loss* the moment it rendered — a plugin
+ * could not tell that from a real blur. Gate on the previous value, seeded to `false` because a
+ * freshly composed (or re-keyed) node genuinely starts unfocused: that attach callback is not a
+ * transition, while an auto-focused field's `true` is one and still reports.
+ */
+@Composable
+private fun Modifier.notifyFocusChanges(
+    nodeId: String,
+    onEvent: (nodeId: String, event: WidgetEvent) -> Unit,
+): Modifier {
+    val lastFocused = remember(nodeId) { mutableStateOf(false) }
+    return onFocusChanged { focusState ->
+        val isFocused = focusState.isFocused
+        if (lastFocused.value != isFocused) {
+            lastFocused.value = isFocused
+            onEvent(nodeId, WidgetEvent.Focus(isFocused))
+        }
+    }
+}
+
+/** `String.toBoolean()` semantics for an absent property, matching the SDK's wire conventions. */
+private fun String?.toBossBoolean(): Boolean = this?.toBoolean() ?: false
+
+/**
+ * Resolve a design-system token to a color from the host's active scheme.
+ *
+ * A table rather than a `when` so [ThemeToken] coverage is asserted by
+ * `RemoteWidgetRendererColorTest` instead of being spread across the renderer.
+ */
+internal val themeTokenColors: Map<ThemeToken, BossColorScheme.() -> Color> =
+    mapOf(
+        ThemeToken.INK to { ink },
+        ThemeToken.PANEL to { panel },
+        ThemeToken.RAISED to { raised },
+        ThemeToken.LINE to { line },
+        ThemeToken.LINE_STRONG to { lineStrong },
+        ThemeToken.TEXT_PRIMARY to { textPrimary },
+        ThemeToken.TEXT_SECONDARY to { textSecondary },
+        ThemeToken.TEXT_MUTED to { textMuted },
+        ThemeToken.SIGNAL to { signal },
+        ThemeToken.SIGNAL_DIM to { signalDim },
+        ThemeToken.SIGNAL_WASH to { signalWash },
+        ThemeToken.DATA to { data },
+        ThemeToken.OK to { ok },
+        ThemeToken.WARN to { warn },
+        ThemeToken.ALERT to { alert },
+        ThemeToken.ON_SIGNAL to { onSignal },
+        ThemeToken.ON_DATA to { onData },
+    )
+
+/**
+ * Resolve a `WidgetModifier.background_color` spec against [scheme].
+ *
+ * `ui_protocol.proto` promises "hex color string … or theme token"; only hex was ever parsed, so
+ * every token value was silently dropped. Tokens resolve through the host's *active* theme, so a
+ * plugin asking for `panel` re-skins with the app.
+ */
+internal fun resolveBackgroundColor(
+    spec: String,
+    scheme: BossColorScheme,
+): Color? =
+    when (val parsed = parseBackgroundColor(spec)) {
+        is BackgroundSpec.Token -> themeTokenColors[parsed.token]?.invoke(scheme)
+        is BackgroundSpec.Hex -> Color(parsed.argb)
+        BackgroundSpec.None -> null
+    }
 
 /**
  * Convert [WidgetModifier] to a Compose [Modifier].
  */
+@Composable
 private fun WidgetModifier.toComposeModifier(
     node: WidgetNode,
-    onEvent: (nodeId: String, eventType: String, eventData: String) -> Unit,
+    onEvent: (nodeId: String, event: WidgetEvent) -> Unit,
 ): Modifier {
     var m: Modifier = Modifier
 
@@ -299,14 +413,22 @@ private fun WidgetModifier.toComposeModifier(
             )
     }
 
-    if (backgroundColor.isNotEmpty()) {
-        parseHexColor(backgroundColor)?.let { color ->
-            m = m.background(color)
-        }
+    // Memoized: this runs for every node on every recomposition, and resolving a spec allocates
+    // (token normalization builds two strings, hex parsing more).
+    val colors = BossTheme.colors
+    val background = remember(backgroundColor, colors) { resolveBackgroundColor(backgroundColor, colors) }
+    if (background != null) {
+        m = m.background(background)
+    }
+
+    // After background, so a translucent widget keeps its own backdrop crisp — matches the native
+    // renderer. `effectiveAlpha()` resolves proto3's "unset is 0.0" trap; see WidgetModifier.alpha.
+    effectiveAlpha()?.let { resolved ->
+        m = m.alpha(resolved)
     }
 
     if (clickable && clickEventId.isNotEmpty()) {
-        m = m.clickable { onEvent(node.id, "click", clickEventId) }
+        m = m.clickable { onEvent(node.id, WidgetEvent.Click(clickEventId)) }
     }
 
     return m

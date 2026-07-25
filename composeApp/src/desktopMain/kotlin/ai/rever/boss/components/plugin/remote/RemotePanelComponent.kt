@@ -1,21 +1,22 @@
 package ai.rever.boss.components.plugin.remote
 
-import ai.rever.boss.ipc.proto.ClickEvent
 import ai.rever.boss.ipc.proto.PluginUIServiceGrpcKt
-import ai.rever.boss.ipc.proto.TextChangeEvent
-import ai.rever.boss.ipc.proto.ToggleEvent
 import ai.rever.boss.ipc.proto.UIEvent
+import ai.rever.boss.ui.sdk.UIEventMapper
+import ai.rever.boss.ui.sdk.WidgetEvent
 import ai.rever.boss.ui.sdk.WidgetTree
+import ai.rever.boss.utils.logging.BossLogger
+import ai.rever.boss.utils.logging.LogCategory
 import androidx.compose.runtime.*
 import io.grpc.ManagedChannel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.consumeAsFlow
 import kotlinx.coroutines.launch
-import org.slf4j.LoggerFactory
 
 /**
  * Host-side panel component that renders a remote plugin's UI.
@@ -32,14 +33,21 @@ class RemotePanelComponent(
     private val processId: String,
     private val uiAddress: String,
 ) {
-    private val logger = LoggerFactory.getLogger(RemotePanelComponent::class.java)
+    private val logger = BossLogger.forComponent("RemotePanelComponent")
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     private val _widgetTree = mutableStateOf<WidgetTree?>(null)
     private val _connected = mutableStateOf(false)
 
-    /** Outgoing UI events from kernel to plugin process. */
-    private val outgoingEvents = MutableSharedFlow<UIEvent>(extraBufferCapacity = 256)
+    /**
+     * Outgoing UI events from kernel to plugin process.
+     *
+     * A queue, not a shared flow: `TextChange` carries the *whole* field value with
+     * last-write-wins semantics, so two fast keystrokes that each got their own coroutine could
+     * race to the stream and land reversed, silently reverting a character. An unlimited channel
+     * written straight from the Compose callback keeps emission order = interaction order.
+     */
+    private val outgoingEvents = Channel<UIEvent>(Channel.UNLIMITED)
 
     /** Whether the component is connected to the plugin process. */
     val connected: State<Boolean> get() = _connected
@@ -53,19 +61,7 @@ class RemotePanelComponent(
         tree?.let { widgetTree ->
             RemoteWidgetRenderer(
                 tree = widgetTree,
-                onEvent = { nodeId, eventType, eventData ->
-                    logger.debug(
-                        "Panel UI event: panel={}, node={}, type={}, data={}",
-                        panelId,
-                        nodeId,
-                        eventType,
-                        eventData,
-                    )
-                    // Forward event to plugin process via gRPC
-                    scope.launch {
-                        sendUIEvent(nodeId, eventType, eventData)
-                    }
-                },
+                onEvent = { nodeId, event -> sendUIEvent(nodeId, event) },
             )
         }
     }
@@ -75,7 +71,11 @@ class RemotePanelComponent(
      * Call this when the panel is first displayed.
      */
     fun connect() {
-        logger.info("Connecting to remote panel: panelId={}, process={}, address={}", panelId, processId, uiAddress)
+        logger.info(
+            LogCategory.UI,
+            "Connecting to remote panel",
+            mapOf("panelId" to panelId, "process" to processId, "address" to uiAddress),
+        )
         scope.launch {
             connectToPluginProcess()
         }
@@ -86,7 +86,11 @@ class RemotePanelComponent(
      * Uses the provided gRPC channel instead of creating one from the address.
      */
     fun connect(channel: ManagedChannel) {
-        logger.info("Connecting to remote panel via channel: panelId={}, process={}", panelId, processId)
+        logger.info(
+            LogCategory.UI,
+            "Connecting to remote panel via channel",
+            mapOf("panelId" to panelId, "process" to processId),
+        )
         scope.launch {
             connectWithChannel(channel)
         }
@@ -101,8 +105,9 @@ class RemotePanelComponent(
 
     fun dispose() {
         scope.cancel()
+        outgoingEvents.close()
         _connected.value = false
-        logger.info("Remote panel disposed: panelId={}", panelId)
+        logger.info(LogCategory.UI, "Remote panel disposed", mapOf("panelId" to panelId))
     }
 
     // ---- Internal ----
@@ -114,7 +119,12 @@ class RemotePanelComponent(
                     .BossIpcClient(uiAddress)
             connectWithChannel(client.channel)
         } catch (e: Exception) {
-            logger.error("Failed to connect to plugin process: panelId={}", panelId, e)
+            logger.error(
+                LogCategory.UI,
+                "Failed to connect to plugin process",
+                mapOf("panelId" to panelId),
+                error = e,
+            )
             _connected.value = false
         }
     }
@@ -131,7 +141,7 @@ class RemotePanelComponent(
             val widgetUpdateStream =
                 channelFlow {
                     // Forward UI events from kernel to plugin process as WidgetUpdate wrappers
-                    outgoingEvents.collect { event ->
+                    outgoingEvents.consumeAsFlow().collect { event ->
                         val update =
                             ai.rever.boss.ipc.proto.WidgetUpdate
                                 .newBuilder()
@@ -142,48 +152,44 @@ class RemotePanelComponent(
                 }
 
             stub.streamUI(widgetUpdateStream).collect { uiEvent ->
-                logger.debug("Received UI event from plugin: surface={}", uiEvent.surfaceId)
+                logger.debug(LogCategory.UI, "Received UI event from plugin", mapOf("surface" to uiEvent.surfaceId))
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
             _connected.value = false
-            logger.warn("Connection to plugin process lost: panelId={}, error={}", panelId, e.message)
+            logger.warn(
+                LogCategory.UI,
+                "Connection to plugin process lost",
+                mapOf("panelId" to panelId, "error" to e.message),
+            )
         }
     }
 
-    private suspend fun sendUIEvent(
+    /**
+     * Queue one interaction for the plugin process.
+     *
+     * Not `suspend`, and deliberately called straight from the Compose callback: the send is a
+     * non-blocking enqueue onto an unlimited channel, so interactions reach the stream in the order
+     * the user made them. Handing each event to its own `scope.launch` let two keystrokes race.
+     *
+     * The `WidgetEvent` → proto `UIEvent` mapping lives in [UIEventMapper] (boss-ui-sdk): it is total
+     * over the sealed event type, so no oneof case can be silently skipped — which is exactly how
+     * dropdown selections used to cross the wire as events with no payload at all.
+     */
+    private fun sendUIEvent(
         nodeId: String,
-        eventType: String,
-        eventData: String,
+        event: WidgetEvent,
     ) {
-        val eventBuilder =
-            UIEvent
-                .newBuilder()
-                .setSurfaceId(panelId)
-                .setTargetNodeId(nodeId)
-                .setTimestamp(System.currentTimeMillis())
-
-        when (eventType) {
-            "click" -> {
-                eventBuilder.setClick(
-                    ClickEvent.newBuilder().setEventId(eventData).build(),
-                )
-            }
-
-            "textChange" -> {
-                eventBuilder.setTextChange(
-                    TextChangeEvent.newBuilder().setNewValue(eventData).build(),
-                )
-            }
-
-            "toggle" -> {
-                eventBuilder.setToggle(
-                    ToggleEvent.newBuilder().setChecked(eventData.toBoolean()).build(),
-                )
-            }
+        // Payloads can contain what the user typed — log the shape, not the content.
+        logger.debug(
+            LogCategory.UI,
+            "Panel UI event",
+            mapOf("panelId" to panelId, "node" to nodeId, "type" to event::class.simpleName),
+        )
+        val queued = outgoingEvents.trySend(UIEventMapper.toProto(panelId, nodeId, event, System.currentTimeMillis()))
+        if (queued.isFailure) {
+            logger.debug(LogCategory.UI, "Dropped UI event: surface is closed", mapOf("panelId" to panelId))
         }
-
-        outgoingEvents.emit(eventBuilder.build())
     }
 }

@@ -90,36 +90,86 @@ object WidgetDiffEngine {
             }
         }
 
+        // Sibling reorders, last: they must apply after the parent-change moves above, because a
+        // NodeMoved re-inserts at an absolute index in the parent's list.
+        ops.addAll(reorderOps(old, new, oldParents, newParents))
+
         return ops
     }
+
+    /**
+     * Emit the moves that fix sibling order *within* a parent.
+     *
+     * `NodeMoved` used to be emitted only when a node changed parent, and common nodes were never
+     * compared on `childIds` — so swapping two siblings produced **no operations at all** and
+     * `apply(old, diff(old, new)) != new`. `apply` has always handled a same-parent move; nothing
+     * generated one. (It was masked while builder ids were positional, since a reorder then looked
+     * like a pile of property changes. Stable ids — now a documented requirement in the proto — are
+     * exactly what makes it reachable.)
+     *
+     * Only children that exist in both trees *and* kept this parent participate: additions,
+     * removals and cross-parent moves are already covered by their own ops, and their positions fall
+     * out of applying those. When the surviving order differs, the whole surviving sequence is
+     * re-emitted in its new order rather than a minimal move set — correct and independent of how a
+     * receiver orders the ops, at the cost of up to `k` ops for a `k`-child reorder. A minimal
+     * (longest-increasing-subsequence) set would be a pure optimization.
+     */
+    private fun reorderOps(
+        old: WidgetTree,
+        new: WidgetTree,
+        oldParents: Map<String, String>,
+        newParents: Map<String, String>,
+    ): List<DiffOperation> =
+        new.nodes.entries.flatMap { (parentId, newParent) ->
+            // Parents absent from the old tree arrive whole; their children need no moves.
+            val keptOldOrder =
+                old.nodes[parentId]?.childIds?.filter { it.keepsParent(parentId, oldParents, newParents) }
+            val keptNewOrder = newParent.childIds.filter { it.keepsParent(parentId, oldParents, newParents) }
+
+            if (keptOldOrder == null || keptOldOrder == keptNewOrder) {
+                emptyList()
+            } else {
+                keptNewOrder.map { childId ->
+                    DiffOperation.NodeMoved(childId, parentId, newParent.childIds.indexOf(childId))
+                }
+            }
+        }
+
+    /** True when this child is linked to [parentId] in both the old and the new tree. */
+    private fun String.keepsParent(
+        parentId: String,
+        oldParents: Map<String, String>,
+        newParents: Map<String, String>,
+    ): Boolean = oldParents[this] == parentId && newParents[this] == parentId
 
     fun apply(
         base: WidgetTree,
         operations: List<DiffOperation>,
     ): WidgetTree {
         val nodes = base.nodes.toMutableMap()
+        // child id → parent id, maintained as ops mutate the links. Unlinking used to scan every node
+        // for whoever listed the child (O(n) per remove/move, O(n²) for a list turnover) on the
+        // per-update path.
+        val parentOf = buildParentMap(base).toMutableMap()
 
         for (op in operations) {
             when (op) {
                 is DiffOperation.NodeAdded -> {
                     nodes[op.node.id] = op.node
+                    // The payload carries the node's own children, so they are linked from here on.
+                    for (childId in op.node.childIds) parentOf[childId] = op.node.id
                     if (op.parentId.isNotEmpty()) {
                         val parent = nodes[op.parentId]
                         if (parent != null) {
-                            val children = parent.childIds.toMutableList()
-                            children.add(op.index.coerceIn(0, children.size), op.node.id)
-                            nodes[op.parentId] = parent.copy(childIds = children)
+                            nodes[op.parentId] = parent.copy(childIds = parent.childIds.withChild(op.node.id, op.index))
+                            parentOf[op.node.id] = op.parentId
                         }
                     }
                 }
 
                 is DiffOperation.NodeRemoved -> {
-                    val parentEntry = nodes.entries.firstOrNull { op.nodeId in it.value.childIds }
                     nodes.remove(op.nodeId)
-                    if (parentEntry != null) {
-                        val (parentId, parentNode) = parentEntry
-                        nodes[parentId] = parentNode.copy(childIds = parentNode.childIds - op.nodeId)
-                    }
+                    nodes.unlink(op.nodeId, parentOf)
                 }
 
                 is DiffOperation.NodeUpdated -> {
@@ -133,21 +183,12 @@ object WidgetDiffEngine {
                 }
 
                 is DiffOperation.NodeMoved -> {
-                    // Remove from old parent
-                    val oldParentEntry = nodes.entries.firstOrNull { op.nodeId in it.value.childIds }
-                    if (oldParentEntry != null) {
-                        val (oldParentId, oldParentNode) = oldParentEntry
-                        nodes[oldParentId] =
-                            oldParentNode.copy(
-                                childIds = oldParentNode.childIds - op.nodeId,
-                            )
-                    }
-                    // Add to new parent
+                    nodes.unlink(op.nodeId, parentOf)
                     val newParent = nodes[op.newParentId]
                     if (newParent != null) {
-                        val children = newParent.childIds.toMutableList()
-                        children.add(op.newIndex.coerceIn(0, children.size), op.nodeId)
-                        nodes[op.newParentId] = newParent.copy(childIds = children)
+                        nodes[op.newParentId] =
+                            newParent.copy(childIds = newParent.childIds.withChild(op.nodeId, op.newIndex))
+                        parentOf[op.nodeId] = op.newParentId
                     }
                 }
             }
@@ -155,6 +196,34 @@ object WidgetDiffEngine {
 
         return base.copy(nodes = nodes, version = base.version + 1)
     }
+
+    /** Drop [nodeId] from whichever parent currently lists it, keeping [parentOf] in step. */
+    private fun MutableMap<String, WidgetNode>.unlink(
+        nodeId: String,
+        parentOf: MutableMap<String, String>,
+    ) {
+        val parentId = parentOf.remove(nodeId) ?: return
+        val parent = this[parentId] ?: return
+        this[parentId] = parent.copy(childIds = parent.childIds - nodeId)
+    }
+
+    /**
+     * Insert [childId] at [index], or leave the list untouched if it already links that child.
+     *
+     * A `NodeAdded` payload carries the added node's own `childIds`, so when a whole subtree is added
+     * the parent arrives already linked to children that then get their own `NodeAdded` ops. Applying
+     * those parent-first (map iteration order decides, so it happens in practice) linked each child
+     * twice, and the renderer drew the subtree twice. Idempotent insertion makes op order irrelevant.
+     */
+    private fun List<String>.withChild(
+        childId: String,
+        index: Int,
+    ): List<String> =
+        if (contains(childId)) {
+            this
+        } else {
+            toMutableList().apply { add(index.coerceIn(0, size), childId) }
+        }
 
     private fun buildParentMap(tree: WidgetTree): Map<String, String> {
         val parentOf = mutableMapOf<String, String>()

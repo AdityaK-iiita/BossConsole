@@ -1,21 +1,22 @@
 package ai.rever.boss.components.plugin.remote
 
-import ai.rever.boss.ipc.proto.ClickEvent
 import ai.rever.boss.ipc.proto.PluginUIServiceGrpcKt
-import ai.rever.boss.ipc.proto.TextChangeEvent
-import ai.rever.boss.ipc.proto.ToggleEvent
 import ai.rever.boss.ipc.proto.UIEvent
+import ai.rever.boss.ui.sdk.UIEventMapper
+import ai.rever.boss.ui.sdk.WidgetEvent
 import ai.rever.boss.ui.sdk.WidgetTree
+import ai.rever.boss.utils.logging.BossLogger
+import ai.rever.boss.utils.logging.LogCategory
 import androidx.compose.runtime.*
 import io.grpc.ManagedChannel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.consumeAsFlow
 import kotlinx.coroutines.launch
-import org.slf4j.LoggerFactory
 
 /**
  * Host-side tab component that renders a remote plugin's tab UI.
@@ -29,7 +30,7 @@ class RemoteTabComponent(
     private val processId: String,
     private val uiAddress: String,
 ) {
-    private val logger = LoggerFactory.getLogger(RemoteTabComponent::class.java)
+    private val logger = BossLogger.forComponent("RemoteTabComponent")
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     private val _widgetTree = mutableStateOf<WidgetTree?>(null)
@@ -37,8 +38,15 @@ class RemoteTabComponent(
     private val _isLoading = mutableStateOf(false)
     private val _connected = mutableStateOf(false)
 
-    /** Outgoing UI events from kernel to plugin process. */
-    private val outgoingEvents = MutableSharedFlow<UIEvent>(extraBufferCapacity = 256)
+    /**
+     * Outgoing UI events from kernel to plugin process.
+     *
+     * A queue, not a shared flow: `TextChange` carries the *whole* field value with
+     * last-write-wins semantics, so two fast keystrokes that each got their own coroutine could
+     * race to the stream and land reversed, silently reverting a character. An unlimited channel
+     * written straight from the Compose callback keeps emission order = interaction order.
+     */
+    private val outgoingEvents = Channel<UIEvent>(Channel.UNLIMITED)
 
     val title: State<String> get() = _title
     val isLoading: State<Boolean> get() = _isLoading
@@ -53,18 +61,7 @@ class RemoteTabComponent(
         tree?.let { widgetTree ->
             RemoteWidgetRenderer(
                 tree = widgetTree,
-                onEvent = { nodeId, eventType, eventData ->
-                    logger.debug(
-                        "Tab UI event: tab={}, node={}, type={}, data={}",
-                        tabId,
-                        nodeId,
-                        eventType,
-                        eventData,
-                    )
-                    scope.launch {
-                        sendUIEvent(nodeId, eventType, eventData)
-                    }
-                },
+                onEvent = { nodeId, event -> sendUIEvent(nodeId, event) },
             )
         }
     }
@@ -73,7 +70,11 @@ class RemoteTabComponent(
      * Connect to the plugin process and start streaming widget updates.
      */
     fun connect() {
-        logger.info("Connecting to remote tab: tabId={}, process={}, address={}", tabId, processId, uiAddress)
+        logger.info(
+            LogCategory.UI,
+            "Connecting to remote tab",
+            mapOf("tabId" to tabId, "process" to processId, "address" to uiAddress),
+        )
         scope.launch {
             connectToPluginProcess()
         }
@@ -83,7 +84,11 @@ class RemoteTabComponent(
      * Connect using a pre-existing gRPC channel.
      */
     fun connect(channel: ManagedChannel) {
-        logger.info("Connecting to remote tab via channel: tabId={}, process={}", tabId, processId)
+        logger.info(
+            LogCategory.UI,
+            "Connecting to remote tab via channel",
+            mapOf("tabId" to tabId, "process" to processId),
+        )
         scope.launch {
             connectWithChannel(channel)
         }
@@ -106,8 +111,9 @@ class RemoteTabComponent(
 
     fun dispose() {
         scope.cancel()
+        outgoingEvents.close()
         _connected.value = false
-        logger.info("Remote tab disposed: tabId={}", tabId)
+        logger.info(LogCategory.UI, "Remote tab disposed", mapOf("tabId" to tabId))
     }
 
     // ---- Internal ----
@@ -119,7 +125,12 @@ class RemoteTabComponent(
                     .BossIpcClient(uiAddress)
             connectWithChannel(client.channel)
         } catch (e: Exception) {
-            logger.error("Failed to connect to plugin process: tabId={}", tabId, e)
+            logger.error(
+                LogCategory.UI,
+                "Failed to connect to plugin process",
+                mapOf("tabId" to tabId),
+                error = e,
+            )
             _connected.value = false
         }
     }
@@ -132,7 +143,7 @@ class RemoteTabComponent(
 
             val widgetUpdateStream =
                 channelFlow {
-                    outgoingEvents.collect { event ->
+                    outgoingEvents.consumeAsFlow().collect { event ->
                         val update =
                             ai.rever.boss.ipc.proto.WidgetUpdate
                                 .newBuilder()
@@ -143,48 +154,38 @@ class RemoteTabComponent(
                 }
 
             stub.streamUI(widgetUpdateStream).collect { uiEvent ->
-                logger.debug("Received UI event from plugin tab: surface={}", uiEvent.surfaceId)
+                logger.debug(LogCategory.UI, "Received UI event from plugin tab", mapOf("surface" to uiEvent.surfaceId))
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
             _connected.value = false
-            logger.warn("Connection to plugin tab lost: tabId={}, error={}", tabId, e.message)
+            logger.warn(
+                LogCategory.UI,
+                "Connection to plugin tab lost",
+                mapOf("tabId" to tabId, "error" to e.message),
+            )
         }
     }
 
-    private suspend fun sendUIEvent(
+    /**
+     * Queue one interaction for the plugin process — see [RemotePanelComponent] for why this is an
+     * ordered channel written from the callback rather than a coroutine per event, and why
+     * [UIEventMapper] owns the proto mapping.
+     */
+    private fun sendUIEvent(
         nodeId: String,
-        eventType: String,
-        eventData: String,
+        event: WidgetEvent,
     ) {
-        val eventBuilder =
-            UIEvent
-                .newBuilder()
-                .setSurfaceId(tabId)
-                .setTargetNodeId(nodeId)
-                .setTimestamp(System.currentTimeMillis())
-
-        when (eventType) {
-            "click" -> {
-                eventBuilder.setClick(
-                    ClickEvent.newBuilder().setEventId(eventData).build(),
-                )
-            }
-
-            "textChange" -> {
-                eventBuilder.setTextChange(
-                    TextChangeEvent.newBuilder().setNewValue(eventData).build(),
-                )
-            }
-
-            "toggle" -> {
-                eventBuilder.setToggle(
-                    ToggleEvent.newBuilder().setChecked(eventData.toBoolean()).build(),
-                )
-            }
+        // Payloads can contain what the user typed — log the shape, not the content.
+        logger.debug(
+            LogCategory.UI,
+            "Tab UI event",
+            mapOf("tabId" to tabId, "node" to nodeId, "type" to event::class.simpleName),
+        )
+        val queued = outgoingEvents.trySend(UIEventMapper.toProto(tabId, nodeId, event, System.currentTimeMillis()))
+        if (queued.isFailure) {
+            logger.debug(LogCategory.UI, "Dropped UI event: surface is closed", mapOf("tabId" to tabId))
         }
-
-        outgoingEvents.emit(eventBuilder.build())
     }
 }
