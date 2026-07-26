@@ -7,6 +7,7 @@ import ai.rever.boss.ipc.services.EventBusServiceImpl
 import ai.rever.boss.ipc.services.KernelServiceImpl
 import ai.rever.boss.ipc.services.StateServiceImpl
 import ai.rever.boss.kernel.services.*
+import ai.rever.boss.kernel.ui.RemoteUiSurfaceRegistry
 import ai.rever.boss.plugin.api.*
 import ai.rever.boss.process.ManagedProcess
 import ai.rever.boss.process.ProcessConfig
@@ -129,12 +130,26 @@ class KernelBootstrap(
         eventBusService = EventBusServiceImpl()
         stateService = StateServiceImpl()
 
-        // Start gRPC server
+        // Start gRPC server.
+        //
+        // PluginUIServiceBridge goes in here rather than in registerPluginServices() below for two
+        // reasons. It has to exist before any plugin connects — processes are spawned immediately after
+        // this, and a plugin whose RegisterUI lands on a server with no PluginUIService gets UNIMPLEMENTED
+        // and no UI at all. And registerPluginServices() exists to gate each bridge on a host provider
+        // being present, which this one has nothing to gate on: its dependency is the surface registry,
+        // which the host owns for its whole lifetime.
+        //
+        // Note it is NOT because late registration is destructive. It used to be — addService() on a
+        // running server rebuilt it, tearing down the socket, which was survivable for unary bridges and
+        // fatal for StreamUI — but BossIpcServer now routes late services through a MutableHandlerRegistry
+        // and never touches the socket. Adding a service to a running server is safe; the ordering above
+        // is about existence, not about protecting streams.
         ipcServer =
             BossIpcServer(kernelAddress!!)
                 .addService(kernelService!!)
                 .addService(eventBusService!!)
                 .addService(stateService!!)
+                .addService(PluginUIServiceBridge(RemoteUiSurfaceRegistry.shared))
                 .start()
 
         // Wire IPC event bridge to forward events cross-process (M8 fix)
@@ -441,6 +456,10 @@ class KernelBootstrap(
 
         // 6. Stop IPC server
         ipcServer?.stop()
+
+        // 6b. Close remote UI surfaces. The registry is process-wide and outlives this bootstrap, so a
+        // restart would otherwise come up still holding claims from processes that are now dead.
+        RemoteUiSurfaceRegistry.shared.clear()
 
         // 7. Cancel scope
         scope.cancel()

@@ -1,0 +1,362 @@
+package ai.rever.boss.kernel.ui
+
+import ai.rever.boss.ipc.proto.UIEvent
+import ai.rever.boss.plugin.logging.BossLogger
+import ai.rever.boss.plugin.logging.LogCategory
+import ai.rever.boss.ui.sdk.WidgetTree
+import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * The host-side renderer of one remote surface, as the transport sees it.
+ *
+ * Implemented by `RemotePanelComponent` / `RemoteTabComponent`. Both callbacks arrive on whichever thread
+ * gRPC delivered the message on, never the UI thread, and both are invoked **while the surface's publish
+ * lock is held** — which is what makes the sequence a host observes monotonic. So an implementation must:
+ *
+ * - touch only thread-safe state (Compose snapshot state is — writing it from any thread is fine);
+ * - not block, and not dispatch and wait; and
+ * - never call back into [RemoteUiSurfaceRegistry] or its surface from inside the callback.
+ *
+ * Anything heavier belongs on the far side of a state write the UI observes.
+ */
+interface RemoteUiSurfaceHost {
+    /** A new widget tree to render. */
+    fun onTreeUpdated(tree: WidgetTree)
+
+    /** Whether a plugin process is currently streaming this surface. */
+    fun onConnectionChanged(connected: Boolean)
+}
+
+/**
+ * What a plugin declared about a surface when it registered it.
+ *
+ * Carried, not acted on: placing a remote surface in the window is the follow-up this transport unblocks,
+ * and it is what will read these. Mirrors the corresponding `UIRegistration` fields.
+ */
+data class RemoteUiSurfaceDescriptor(
+    val surfaceType: String = "",
+    val displayName: String = "",
+    val iconName: String = "",
+    val defaultSlot: String = "",
+)
+
+/** Outcome of a plugin's `RegisterUI`. */
+sealed interface SurfaceRegistration {
+    data class Accepted(
+        val surface: RemoteUiSurface,
+    ) : SurfaceRegistration
+
+    /** [reason] is written to be readable by a plugin author — it goes out as `error_message`. */
+    data class Rejected(
+        val reason: String,
+    ) : SurfaceRegistration
+}
+
+/** Outcome of a plugin's `StreamUI` binding to a surface. */
+sealed interface SurfaceStream {
+    data class Bound(
+        val surface: RemoteUiSurface,
+    ) : SurfaceStream
+
+    /**
+     * Split by recovery, not just by message: an unregistered surface is fixable by calling `RegisterUI`,
+     * an already-streaming one never is. Collapsing them left a plugin string-matching a description to
+     * tell "retry after registering" from "give up", which the proto now documents as contract.
+     */
+    sealed interface Refused : SurfaceStream {
+        val reason: String
+    }
+
+    data class Unregistered(
+        override val reason: String,
+    ) : Refused
+
+    data class AlreadyStreaming(
+        override val reason: String,
+    ) : Refused
+}
+
+/**
+ * Whether [surface] may still publish under its id, given the currently registered surfaces.
+ *
+ * `claim()` installs a replacement *before* closing the surface it reclaimed, and the publish lock is
+ * per-instance, so those two do not serialize against each other: without this check a predecessor's
+ * `close()` could announce "disconnected" *after* its successor had already announced a live stream,
+ * leaving the component reading disconnected while trees kept arriving.
+ *
+ * A surface whose id is now **free** still publishes — that is `closeStream`'s remove-then-close order
+ * delivering the legitimate "your plugin died" notice, and suppressing it would recreate the frozen
+ * surface this transport exists to avoid.
+ *
+ * A file-level predicate rather than a member: it needs nothing but the map, and reads as a question
+ * about the map.
+ */
+private fun Map<String, RemoteUiSurface>.stillOwnedBy(surface: RemoteUiSurface): Boolean {
+    val current = this[surface.surfaceId]
+    return current == null || current === surface
+}
+
+/**
+ * Directory of live remote UI surfaces, and the seam the two sides of a surface meet at.
+ *
+ * The problem this solves is that a surface's two halves start independently: the plugin process
+ * registers and streams whenever it happens to come up, while the host component is constructed when
+ * the user opens the panel or tab. Either order is normal, and a plugin can crash and respawn under a
+ * component that never went away.
+ *
+ * So neither half holds a reference to the other. Both are indexed by `surfaceId` in separate maps —
+ * plugin-side surfaces here, host-side renderers in [hosts] — and every delivery is a lookup at the
+ * moment it happens. A tree that arrives with nobody attached is retained on the surface for whoever
+ * attaches next; an event emitted with no plugin registered is reported undeliverable to its caller
+ * rather than queued into a void or thrown; and a component that attaches to an already-streaming
+ * surface is immediately given the current tree and connection state, so it does not render blank
+ * until the plugin's next update.
+ */
+class RemoteUiSurfaceRegistry {
+    private val surfaces = ConcurrentHashMap<String, RemoteUiSurface>()
+    private val hosts = ConcurrentHashMap<String, RemoteUiSurfaceHost>()
+
+    /**
+     * Claim [surfaceId] for a plugin process.
+     *
+     * A claim held by a *different* process is refused rather than taken over: two plugins rendering into
+     * one surface would interleave trees, and the second one's events would be delivered to the first's
+     * stream.
+     *
+     * A claim held by the **same** process with no stream open is taken over, because that is what a
+     * respawn looks like. [closeStream] releases the id when a stream dies, but a plugin can also die in
+     * the window between `RegisterUI` returning and `StreamUI` binding, or hold claims on more surfaces
+     * than it streams — and there is no notification for either. Refusing those would lock a plugin out of
+     * its own `surface_id` forever, leaving the attached component permanently disconnected: exactly the
+     * lockout `closeStream` exists to prevent, reached by a path it cannot see.
+     */
+    fun register(
+        surfaceId: String,
+        processId: String,
+        descriptor: RemoteUiSurfaceDescriptor = RemoteUiSurfaceDescriptor(),
+    ): SurfaceRegistration {
+        // process_id is not cosmetic: `claim()` compares it to decide whether a claim may be taken over, so
+        // a blank one is an authorization key every plugin shares. proto3 makes the empty string the
+        // default, so a runtime that simply forgets the field would let any plugin reclaim any other
+        // plugin's registered-but-not-yet-streaming surface — and then receive its TextChangeEvents.
+        val missing =
+            when {
+                surfaceId.isBlank() -> "surface_id"
+                processId.isBlank() -> "process_id"
+                else -> null
+            }
+        if (missing != null) {
+            return SurfaceRegistration.Rejected("$missing is required")
+        }
+        val created =
+            RemoteUiSurface(
+                surfaceId = surfaceId,
+                processId = processId,
+                descriptor = descriptor,
+                publishTree = { from, tree ->
+                    if (surfaces.stillOwnedBy(from)) hosts[surfaceId]?.onTreeUpdated(tree)
+                },
+                publishConnected = { from, connected ->
+                    if (surfaces.stillOwnedBy(from)) hosts[surfaceId]?.onConnectionChanged(connected)
+                },
+            )
+        val stale = claim(surfaceId, created)
+        return if (stale != null) {
+            SurfaceRegistration.Rejected(
+                "surface_id '$surfaceId' is already registered by process '${stale.processId}'",
+            )
+        } else {
+            logger.info(
+                LogCategory.UI,
+                "Remote UI surface registered",
+                mapOf("surfaceId" to surfaceId, "processId" to processId, "attached" to hosts.containsKey(surfaceId)),
+            )
+            SurfaceRegistration.Accepted(created)
+        }
+    }
+
+    /**
+     * Install [created], returning the surface that blocked it, or `null` on success.
+     *
+     * Loops because the abandoned-claim replacement is a compare-and-set: another `RegisterUI` for the
+     * same id can win the race, and the loser has to re-read rather than assume its own view.
+     */
+    private fun claim(
+        surfaceId: String,
+        created: RemoteUiSurface,
+    ): RemoteUiSurface? {
+        var blocker = surfaces.putIfAbsent(surfaceId, created)
+        while (blocker != null) {
+            val abandoned = blocker.processId == created.processId && !blocker.streaming
+            if (!abandoned) break
+            if (surfaces.replace(surfaceId, blocker, created)) {
+                logger.info(
+                    LogCategory.UI,
+                    "Reclaimed an abandoned UI surface for its own process — treating it as a respawn",
+                    mapOf("surfaceId" to surfaceId, "processId" to created.processId),
+                )
+                blocker.close()
+                blocker = null
+            } else {
+                // Another RegisterUI for this id won the swap; re-read rather than trust our own view.
+                blocker = surfaces.putIfAbsent(surfaceId, created)
+            }
+        }
+        return blocker
+    }
+
+    /**
+     * Tear a surface down at the plugin's request. @return `false` if it was not registered.
+     *
+     * Unattributed, unlike [closeStream]'s two-argument removal: `UIUnregistration` carries only a
+     * `surface_id`. Accidentally, that means a late call from a dying incarnation can evict a respawn's
+     * fresh surface — narrow (it must arrive after the respawn registered) and self-healing (the plugin's
+     * next `RegisterUI` recovers), so not worth widening the proto for.
+     *
+     * Deliberately, it means **any** connected plugin can tear down any other plugin's live surface, since
+     * there is nothing in the request to attribute it to. That is not fixable here: it needs per-connection
+     * identity rather than a body field, which is the same root cause as `StreamUI` having no owner check.
+     */
+    fun unregister(surfaceId: String): Boolean {
+        val surface = surfaces.remove(surfaceId) ?: return false
+        surface.close()
+        // debug, not info: register + unregister + closeStream at info is three lines per restart of a
+        // crash-looping plugin. The registration itself is the event worth seeing at info.
+        logger.debug(LogCategory.UI, "Remote UI surface unregistered", mapOf("surfaceId" to surfaceId))
+        return true
+    }
+
+    /**
+     * Bind a plugin's `StreamUI` call to its surface.
+     *
+     * Registration first, deliberately: a stream for an unknown id is a protocol error worth reporting,
+     * and accepting it would mean inventing a surface with no `surface_type`, `display_name` or slot —
+     * i.e. one the host could never place.
+     */
+    fun openStream(surfaceId: String): SurfaceStream {
+        val surface = surfaces[surfaceId]
+        return when {
+            surface == null -> {
+                SurfaceStream.Unregistered("surface_id '$surfaceId' is not registered — call RegisterUI first")
+            }
+
+            !surface.claimStream() -> {
+                SurfaceStream.AlreadyStreaming("surface_id '$surfaceId' already has an open StreamUI call")
+            }
+
+            else -> {
+                SurfaceStream.Bound(surface)
+            }
+        }
+    }
+
+    /**
+     * Release a stream that has ended, for any reason.
+     *
+     * This also drops the registration. A dying stream is the *only* signal the host gets that a plugin
+     * process is gone — there is no `UnregisterUI` from a process that crashed — so holding the claim
+     * would lock the id out and a respawned plugin could never re-register it. Any attached component
+     * stays attached and simply sees `connected == false`, ready for the replacement process.
+     */
+    fun closeStream(surface: RemoteUiSurface) {
+        surfaces.remove(surface.surfaceId, surface)
+        surface.close()
+        logger.debug(
+            LogCategory.UI,
+            "Remote UI stream closed",
+            mapOf("surfaceId" to surface.surfaceId, "processId" to surface.processId, "shed" to surface.shedEventCount),
+        )
+    }
+
+    /**
+     * Bind a host component to [surfaceId], replaying whatever the surface already holds.
+     *
+     * Ordered so no update can fall between the two steps: the host goes into [hosts] *first*, so a
+     * surface that registers a microsecond later delivers straight to it, and the replay then happens
+     * under that surface's publish lock, so it cannot hand back a tree older than one already delivered.
+     */
+    fun attach(
+        surfaceId: String,
+        host: RemoteUiSurfaceHost,
+    ) {
+        val displaced = hosts.put(surfaceId, host)
+        if (displaced != null && displaced !== host) {
+            // The registry routes to one host per id, and it is process-wide while the app is
+            // multi-window — so this is reachable, and silence would leave the displaced component
+            // rendering its last tree and still reporting `connected`, frozen from the host side rather
+            // than the plugin side. One surface renders in one place; saying so is better than the
+            // follow-up discovering it.
+            logger.warn(
+                LogCategory.UI,
+                "A second component attached to a surface already being rendered — the first is detached",
+                mapOf("surfaceId" to surfaceId),
+            )
+            displaced.onConnectionChanged(false)
+        }
+        val surface = surfaces[surfaceId]
+        if (surface == null) {
+            host.onConnectionChanged(false)
+        } else {
+            surface.replayTo(host)
+        }
+    }
+
+    /**
+     * Unbind a host component. Scoped to [host] so a component disposed late cannot evict its successor.
+     *
+     * The only path that removes from [hosts] — `clear()` deliberately leaves them, since components belong
+     * to the window rather than the kernel. So a component collected without `dispose()` leaves an entry
+     * behind for its surface id. Bounded by the number of surfaces a user opens, and the entry is a dead
+     * reference rather than a live subscription, but binding `attach`/`dispose` to the component's
+     * composition is what makes it structural — for the change that gives these components a caller.
+     */
+    fun detach(
+        surfaceId: String,
+        host: RemoteUiSurfaceHost,
+    ) {
+        hosts.remove(surfaceId, host)
+    }
+
+    /**
+     * Queue a user event for the plugin behind [surfaceId].
+     *
+     * @return `false` when there is nothing to deliver to — no registered surface, or one already closed.
+     *   Callers log and move on; a click that lands during teardown is not an error condition.
+     */
+    fun emit(
+        surfaceId: String,
+        event: UIEvent,
+    ): Boolean = surfaces[surfaceId]?.emit(event) == true
+
+    /** The live surface for [surfaceId], if a plugin currently holds it. */
+    fun surfaceOf(surfaceId: String): RemoteUiSurface? = surfaces[surfaceId]
+
+    /**
+     * Close and forget every surface.
+     *
+     * For kernel shutdown. [shared] outlives a single `KernelBootstrap`, so without this a restart would
+     * come up holding claims from processes that no longer exist. Attached components are left attached
+     * and simply see `connected == false` — they belong to the window, not to the kernel.
+     */
+    fun clear() {
+        val closing = surfaces.keys.toList()
+        closing.forEach { surfaceId -> surfaces.remove(surfaceId)?.close() }
+        if (closing.isNotEmpty()) {
+            logger.info(LogCategory.UI, "Closed all remote UI surfaces", mapOf("count" to closing.size))
+        }
+    }
+
+    companion object {
+        /**
+         * The host-wide registry.
+         *
+         * One per process, because the surfaces it indexes are process-wide: the single IPC server every
+         * plugin connects to is on one side and the single window's components on the other. Tests build
+         * their own instances instead, which is why every collaborator takes one as a parameter rather
+         * than reaching for this.
+         */
+        val shared = RemoteUiSurfaceRegistry()
+
+        private val logger = BossLogger.forComponent("RemoteUiSurfaceRegistry")
+    }
+}

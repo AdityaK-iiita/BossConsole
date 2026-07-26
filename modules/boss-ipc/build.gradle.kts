@@ -33,6 +33,9 @@ dependencies {
 
     // gRPC Netty transport (supports Unix domain sockets)
     implementation(libs.grpc.netty)
+
+    // MutableHandlerRegistry, for adding a service to an already-running server
+    implementation(libs.grpc.util)
     implementation(libs.netty.transport.native.unix.common)
 
     // Platform-specific UDS transports (all included — unused platforms are harmless)

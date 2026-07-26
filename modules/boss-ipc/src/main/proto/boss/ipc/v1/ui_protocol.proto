@@ -10,14 +10,50 @@ option java_multiple_files = true;
 // PluginUIService enables out-of-process plugins to render UI in the kernel's Compose window.
 // Plugins send declarative widget trees; the kernel renders them as Compose components.
 // User events flow back from kernel to plugin for handling.
+//
+// The PLUGIN is the client here and the KERNEL is the server, in both directions: a plugin dials the
+// kernel, streams WidgetUpdates up, and reads UIEvents back down off the same call. A host that
+// implements this as a client of the plugin cannot work — the request stream is typed WidgetUpdate, so
+// there is nowhere to put an outgoing event.
 service PluginUIService {
-  // Register a UI surface (panel or tab) with the kernel
+  // Register a UI surface (panel or tab) with the kernel.
+  //
+  // Required before StreamUI. A surface_id already held by a *different* process is refused, with the
+  // holder named in error_message. A surface_id held by the SAME process with no stream open is taken
+  // over, which is what a respawn after a crash looks like.
+  //
+  // That reclaim rule compares process_id as a string, so process_id must be STABLE FOR A PLUGIN ACROSS
+  // RESTARTS — an identity for the plugin, not for the OS process. A pid or a per-launch UUID silently
+  // costs a plugin its own surfaces: crash in the window between RegisterUI and StreamUI and the id is
+  // refused for the rest of the session, with no error to point at.
   rpc RegisterUI(UIRegistration) returns (UIRegistrationResponse);
 
-  // Bidirectional stream: plugin sends widget updates, kernel sends user events
+  // Bidirectional stream: plugin sends widget updates, kernel sends user events.
+  //
+  // The call carries no surface id of its own, so it is bound to the surface_id of its FIRST
+  // WidgetUpdate and pinned to it for its lifetime — send one (normally the full tree) to open the
+  // stream, or the call fails with INVALID_ARGUMENT when the request stream ends. Later updates for a
+  // different surface_id are ignored; use one call per surface.
+  //
+  // The first update is the only attempt at binding, and the status says what to do about it:
+  //   NOT_FOUND            the surface_id is not registered — call RegisterUI, then open a NEW StreamUI
+  //                        (later updates on this call are ignored, so retrying on it will not work)
+  //   FAILED_PRECONDITION  another call already streams that surface, and always will
+  //   INVALID_ARGUMENT     the request stream ended without ever sending a WidgetUpdate
+  //   DEADLINE_EXCEEDED    the call sent nothing and did not half-close, so it was reaped
+  //
+  // The two directions are independent. Half-closing the request stream is fine and keeps receiving
+  // events. But the call ENDING — cancelled, dropped, or the process dying — also unregisters the
+  // surface, since a dead stream is the only notice the kernel gets that a plugin is gone; reopening
+  // therefore needs a fresh RegisterUI.
+  //
+  // Events raised while a surface is registered but not yet streaming are buffered, and the buffer is
+  // bounded (256 events). Past that the kernel sheds from the HEAD, keeping the newest: TextChangeEvent
+  // carries a whole field value with last-write-wins semantics, so the newest is the one that must
+  // survive. A plugin that stops reading loses its oldest events, not its current state.
   rpc StreamUI(stream WidgetUpdate) returns (stream UIEvent);
 
-  // Unregister a UI surface
+  // Unregister a UI surface. Completes any open StreamUI call for it.
   rpc UnregisterUI(UIUnregistration) returns (Empty);
 }
 

@@ -229,12 +229,6 @@ class OutOfProcessPluginSpawnerImpl(
         }
 
     /**
-     * Get the gRPC channel to a plugin process.
-     * Used by RemotePanelComponent/RemoteTabComponent for UI streaming.
-     */
-    fun getChannel(pluginId: String): ManagedChannel? = pluginChannels[pluginId]
-
-    /**
      * Get the state bridge for a plugin.
      */
     fun getStateBridge(pluginId: String): PluginStateBridge? = stateBridges[pluginId]

@@ -2,6 +2,7 @@ package ai.rever.boss.ipc
 
 import io.grpc.BindableService
 import io.grpc.Server
+import io.grpc.util.MutableHandlerRegistry
 import org.slf4j.LoggerFactory
 import java.util.concurrent.TimeUnit
 
@@ -14,19 +15,31 @@ import java.util.concurrent.TimeUnit
  *     .addService(MyServiceImpl())
  *     .start()
  * ```
+ *
+ * Services may also be added *after* [start]; they go into a [MutableHandlerRegistry] installed as the
+ * fallback registry, so the socket is never touched. This used to stop the running server and rebuild it
+ * on the same address, which is destructive in a way that only shows up once something streams:
+ * `KernelBootstrap.registerPluginServices()` adds up to fifteen bridges one at a time, and a bidirectional
+ * RPC never completes gracefully, so each rebuild burned the full 2s shutdown grace period and then killed
+ * every in-flight call — with the address unbound in between. Unary bridges survived that by luck of
+ * timing; `PluginUIService.StreamUI`, whose whole job is to stay open, cannot.
  */
 class BossIpcServer(
     private val address: String,
 ) {
     private val logger = LoggerFactory.getLogger(BossIpcServer::class.java)
     private val services = mutableListOf<BindableService>()
+
+    /** Services added after the server started. Resolved per-call, so adding one disturbs nothing. */
+    private val lateServices = MutableHandlerRegistry()
     private var server: Server? = null
 
     fun addService(service: BindableService): BossIpcServer {
-        services.add(service)
-        // If server is already running, rebuild it with the new service
-        if (server != null && server?.isShutdown == false) {
-            rebuildServer()
+        if (isRunning) {
+            lateServices.addService(service)
+            logger.info("Registered service on the running IPC server: {}", service::class.java.simpleName)
+        } else {
+            services.add(service)
         }
         return this
     }
@@ -36,26 +49,14 @@ class BossIpcServer(
         return this
     }
 
-    /**
-     * Rebuild the running server with the current service list.
-     * Must stop old server first to release the Unix socket address.
-     */
-    private fun rebuildServer() {
-        val oldServer = server
-        // Stop old server FIRST to release the socket address
-        oldServer?.let { s ->
-            s.shutdown()
-            if (!s.awaitTermination(2, TimeUnit.SECONDS)) {
-                s.shutdownNow()
-            }
-        }
-        buildAndStart()
-        logger.info("IPC server rebuilt with {} services on: {}", services.size, address)
-    }
-
     private fun buildAndStart() {
         val builder = IpcAddressResolver.configureServerBuilder(address)
         services.forEach { builder.addService(it) }
+        // Consulted only for methods no directly-registered service claims, so build-time registration
+        // takes precedence. That is a CHANGE: a rebuild put everything in the primary registry, where the
+        // last one added won, so re-adding a service after start used to replace the build-time one and
+        // now silently does nothing. Nothing in the tree relies on either behaviour.
+        builder.fallbackHandlerRegistry(lateServices)
         server = builder.build().start()
         logger.info("IPC server started on: {}", address)
         IpcAddressResolver.secureSocketFile(address)
@@ -71,6 +72,10 @@ class BossIpcServer(
             }
         }
         IpcAddressResolver.cleanupAddress(address)
+        // Cleared with the server, so a stopped-and-restarted instance does not silently resurrect every
+        // service registered during its previous lifetime. `services` is deliberately NOT cleared: it is
+        // the build-time set, and a restart is expected to bring the same server back up.
+        lateServices.services.forEach { lateServices.removeService(it) }
         server = null
     }
 

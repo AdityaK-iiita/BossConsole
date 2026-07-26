@@ -5,6 +5,8 @@ import ai.rever.boss.ipc.services.EventBusServiceImpl
 import com.google.protobuf.ByteString
 import io.grpc.ManagedChannelBuilder
 import io.grpc.ServerBuilder
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -20,6 +22,12 @@ import kotlin.test.assertTrue
  * Integration tests for EventBusService — publish/subscribe round-trip.
  */
 class EventBusServiceTest {
+    private companion object {
+        const val POLL_MS = 25L
+        const val SETTLE_MS = 100L
+        const val BATCH_SIZE = 3
+    }
+
     private var server: io.grpc.Server? = null
     private var channel: io.grpc.ManagedChannel? = null
     private var port: Int = 0
@@ -48,6 +56,39 @@ class EventBusServiceTest {
         server?.shutdownNow()
     }
 
+    /**
+     * Publish until the subscriber has actually received something.
+     *
+     * These tests used to `delay(100)` and publish once. The service's `MutableSharedFlow` has **no
+     * replay**, so a publish that lands before the subscription is registered is lost for good — and then
+     * `subscriberJob.join()` waits out the enclosing 10s timeout. Latent on a fast machine, and it fails on
+     * the Windows CI runner, which is the slowest leg. Republishing is safe because every caller asserts on
+     * the *first* event it receives.
+     */
+    private suspend fun publishUntilDelivered(
+        subscriber: Job,
+        publish: suspend () -> Unit,
+    ) {
+        while (subscriber.isActive) {
+            publish()
+            delay(POLL_MS)
+        }
+    }
+
+    /**
+     * Wait until a subscription has been registered with the service.
+     *
+     * Weaker than [publishUntilDelivered] — the count increments when the RPC handler runs, which is still
+     * ahead of the flow being collected — but it is what a test asserting an exact event count can use,
+     * since republishing would change the count it asserts. Still strictly better than a fixed sleep.
+     */
+    private suspend fun awaitSubscriberRegistered() {
+        while (eventBusService.activeSubscribers < 1) {
+            delay(POLL_MS)
+        }
+        delay(SETTLE_MS)
+    }
+
     @Test
     fun `publish event is received by subscriber`() =
         runBlocking {
@@ -69,8 +110,6 @@ class EventBusServiceTest {
                     }
 
                 // Give subscriber time to connect
-                kotlinx.coroutines.delay(100)
-
                 // Publish event
                 val envelope =
                     EventEnvelope
@@ -81,7 +120,8 @@ class EventBusServiceTest {
                         .setTimestamp(System.currentTimeMillis())
                         .build()
 
-                val publishResponse = stub.publish(envelope)
+                var publishResponse = stub.publish(envelope)
+                publishUntilDelivered(subscriberJob) { publishResponse = stub.publish(envelope) }
 
                 subscriberJob.join()
 
@@ -111,8 +151,6 @@ class EventBusServiceTest {
                         receivedEnvelope = stub.subscribe(subscribeRequest).first()
                     }
 
-                kotlinx.coroutines.delay(100)
-
                 // Publish unmatched event first
                 stub.publish(
                     EventEnvelope
@@ -124,14 +162,14 @@ class EventBusServiceTest {
                 )
 
                 // Publish matching event
-                stub.publish(
+                val matching =
                     EventEnvelope
                         .newBuilder()
                         .setEventType("FilteredEvent")
                         .setPayload(ByteString.copyFromUtf8("should receive this"))
                         .setTimestamp(System.currentTimeMillis())
-                        .build(),
-                )
+                        .build()
+                publishUntilDelivered(subscriberJob) { stub.publish(matching) }
 
                 subscriberJob.join()
 
@@ -158,11 +196,11 @@ class EventBusServiceTest {
                     launch {
                         stub.subscribe(subscribeRequest).collect { envelope ->
                             received.add(envelope)
-                            if (received.size == 3) return@collect
+                            if (received.size == BATCH_SIZE) return@collect
                         }
                     }
 
-                kotlinx.coroutines.delay(100)
+                awaitSubscriberRegistered()
 
                 val batchRequest =
                     PublishBatchRequest
@@ -180,10 +218,15 @@ class EventBusServiceTest {
 
                 stub.publishBatch(batchRequest)
 
-                kotlinx.coroutines.delay(500)
+                // Wait for the three, rather than sleeping long enough that they have probably arrived. The
+                // enclosing withTimeout is the bound if they never do, so a real failure reports as a
+                // timeout instead of an off-by-a-few count that reads like a delivery bug.
+                while (received.size < BATCH_SIZE) {
+                    delay(POLL_MS)
+                }
                 subscriberJob.cancel()
 
-                assertEquals(3, received.size, "Should receive all 3 batch events")
+                assertEquals(BATCH_SIZE, received.size, "Should receive all 3 batch events")
             }
         }
 
@@ -206,16 +249,14 @@ class EventBusServiceTest {
                         receivedEnvelope = stub.subscribe(subscribeRequest).first()
                     }
 
-                kotlinx.coroutines.delay(100)
-
-                eventBusService.publishLocal(
+                val event =
                     EventEnvelope
                         .newBuilder()
                         .setEventType("LocalEvent")
                         .setPayload(ByteString.copyFromUtf8("local-payload"))
                         .setTimestamp(System.currentTimeMillis())
-                        .build(),
-                )
+                        .build()
+                publishUntilDelivered(subscriberJob) { eventBusService.publishLocal(event) }
 
                 subscriberJob.join()
                 assertEquals("LocalEvent", receivedEnvelope?.eventType)

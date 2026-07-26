@@ -11,6 +11,20 @@ import ai.rever.boss.ipc.proto.WidgetNode as ProtoWidgetNode
 import ai.rever.boss.ipc.proto.WidgetTree as ProtoWidgetTree
 import ai.rever.boss.ipc.proto.WidgetType as ProtoWidgetType
 
+/**
+ * A wire diff read back into SDK operations.
+ *
+ * @property skipped operations whose `oneof` was unset — a sender built against a newer proto, or a
+ *   malformed one. **Non-zero means the receiver's tree may now differ structurally from the sender's**:
+ *   a dropped `NodeAdded` or `NodeRemoved` cannot be reconstructed from the operations around it, so a
+ *   caller that applies the rest should stop trusting its own version numbering rather than pretend the
+ *   diff landed whole.
+ */
+data class DecodedWidgetDiff(
+    val operations: List<DiffOperation>,
+    val skipped: Int,
+)
+
 object WidgetProtoConverter {
     fun WidgetTree.toProto(): ProtoWidgetTree =
         ProtoWidgetTree
@@ -20,20 +34,77 @@ object WidgetProtoConverter {
             .setVersion(version)
             .build()
 
-    fun ProtoWidgetTree.toKotlin(): WidgetTree {
-        val nodeMap =
-            nodesList.associate { protoNode ->
-                protoNode.id to
-                    WidgetNode(
-                        id = protoNode.id,
-                        type = protoNode.type.toKotlin(),
-                        properties = protoNode.propertiesMap.toMap(),
-                        childIds = protoNode.childIdsList.toList(),
-                        modifier = protoNode.modifier.toKotlin(),
-                    )
-            }
-        return WidgetTree(rootId, nodeMap, version)
+    fun ProtoWidgetTree.toKotlin(): WidgetTree =
+        WidgetTree(
+            rootId = rootId,
+            nodes = nodesList.associate { it.id to it.toKotlin() },
+            version = version,
+        )
+
+    /**
+     * Read a wire diff back into SDK operations, ready for [WidgetDiffEngine.apply].
+     *
+     * The forward direction ([toProtoDiff]) shipped without an inverse, so `WidgetUpdate.diff` was a
+     * write-only half of the protocol: a receiver could decode `full_tree` and nothing else, which is
+     * why the host transport only ever handled full trees. Operations whose `oneof` is unset are
+     * skipped rather than guessed at — a sender built against a newer proto is not a reason to
+     * misapply the ops around it.
+     *
+     * The skipped count is returned rather than swallowed: a dropped `NodeAdded` or `NodeRemoved` leaves
+     * the receiver's tree structurally different from the sender's, and a caller that cannot see that
+     * happened has no way to stop trusting its own copy.
+     */
+    fun ProtoWidgetDiff.decodeOperations(): DecodedWidgetDiff {
+        // One pass, no intermediate nullable list: the proto documents diffs as the steady state after a
+        // surface's first full tree, so this runs on every update. Inlined rather than a named helper
+        // because WidgetProtoConverter sits one function below detekt's TooManyFunctions threshold for
+        // objects, and splitting the converter to name this would trade a real seam for a cosmetic one.
+        var skipped = 0
+        val operations = ArrayList<DiffOperation>(operationsCount)
+        operationsList.forEach { op ->
+            val decoded =
+                when (op.opCase) {
+                    ProtoDiffOp.OpCase.ADDED -> {
+                        DiffOperation.NodeAdded(op.added.node.toKotlin(), op.added.parentId, op.added.index)
+                    }
+
+                    ProtoDiffOp.OpCase.REMOVED -> {
+                        DiffOperation.NodeRemoved(op.removed.nodeId)
+                    }
+
+                    ProtoDiffOp.OpCase.UPDATED -> {
+                        DiffOperation.NodeUpdated(
+                            nodeId = op.updated.nodeId,
+                            changedProperties = op.updated.changedPropertiesMap.toMap(),
+                            // `NodeUpdated.modifier` documents "null = no change", and proto3 message presence
+                            // is the only thing that distinguishes that from "reset every field to its
+                            // default" — reading the field unconditionally would silently wipe a node's
+                            // layout on any property-only update.
+                            newModifier = if (op.updated.hasModifier()) op.updated.modifier.toKotlin() else null,
+                        )
+                    }
+
+                    ProtoDiffOp.OpCase.MOVED -> {
+                        DiffOperation.NodeMoved(op.moved.nodeId, op.moved.newParentId, op.moved.newIndex)
+                    }
+
+                    ProtoDiffOp.OpCase.OP_NOT_SET, null -> {
+                        null
+                    }
+                }
+            if (decoded == null) skipped++ else operations += decoded
+        }
+        return DecodedWidgetDiff(operations = operations, skipped = skipped)
     }
+
+    private fun ProtoWidgetNode.toKotlin(): WidgetNode =
+        WidgetNode(
+            id = id,
+            type = type.toKotlin(),
+            properties = propertiesMap.toMap(),
+            childIds = childIdsList.toList(),
+            modifier = modifier.toKotlin(),
+        )
 
     fun List<DiffOperation>.toProtoDiff(
         baseVersion: Long,
