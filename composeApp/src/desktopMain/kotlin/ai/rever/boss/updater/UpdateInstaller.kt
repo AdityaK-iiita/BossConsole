@@ -9,6 +9,7 @@ import ai.rever.boss.utils.logging.LogCategory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 import java.nio.file.Paths
 import java.util.Locale
 import java.util.concurrent.CompletableFuture
@@ -18,6 +19,12 @@ private const val APP_TRANSLOCATION_PATH_SEGMENT = "/AppTranslocation/"
 private const val MACOS_APP_BUNDLE_SUFFIX = ".app"
 private const val MACOS_APPLICATIONS_DIRECTORY = "/Applications"
 private const val SPOTLIGHT_LOOKUP_TIMEOUT_SECONDS = 5L
+
+/** Staging directory (inside the platform temp directory) that downloads land in. */
+internal const val UPDATE_STAGING_DIR_NAME = "boss-updates"
+
+/** Resolve the download staging directory without creating it. */
+internal fun defaultStagingDir(): File = File(System.getProperty("java.io.tmpdir"), UPDATE_STAGING_DIR_NAME)
 
 /** Return the outermost complete `.app` path segment in [path]. */
 internal fun macOSAppBundlePathIn(path: String): String? {
@@ -86,72 +93,107 @@ object UpdateInstaller {
     private val logger = BossLogger.forComponent("UpdateInstaller")
 
     /**
-     * Validate download file for security concerns
+     * Validate a downloaded update file, failing closed.
      *
-     * Performs early validation to detect potentially malicious files:
-     * - File existence check
-     * - Extension validation (.dmg, .msi, .jar)
-     * - Path canonicalization to prevent directory traversal
-     * - Filename sanitization check
+     * Checks, in order (name before filesystem, so a hostile name is refused
+     * without touching disk):
+     * 1. Filename characters, via the same [UpdatePathValidator] rules
+     *    [UpdateScriptGenerator] uses - the filename is about to be interpolated
+     *    into a generated shell/batch script
+     * 2. Expected extension (.dmg, .msi, .jar, .deb, .rpm)
+     * 3. Existence
+     * 4. Containment inside the staging directory, decided on the **real** path
+     *    (symlinks resolved)
+     *
+     * Every failure throws. Previously a canonical path escaping the staging
+     * directory, or a filename carrying a dollar sign, a backtick or a semicolon,
+     * only logged a warning and the update installed anyway - while
+     * `UpdateScriptGenerator.validatePath` rejected the identical input, so
+     * whether a suspicious artifact was installed depended on which entry point
+     * ran (Issue #37).
      *
      * @param downloadFile The file to validate
      * @param expectedExtension Expected file extension (e.g., ".dmg")
      * @throws SecurityException if file is invalid or suspicious
      */
-    private fun validateDownloadFile(
+    internal fun validateDownloadFile(
         downloadFile: File,
         expectedExtension: String,
+        stagingDir: File = defaultStagingDir(),
     ) {
+        val filename = downloadFile.name
+
+        // Filename characters: shared rules, hard failure. Checked before any
+        // filesystem access so a hostile name is refused outright.
+        UpdatePathValidator.validateFileName(filename, "Download filename")
+
+        // Validate file extension
+        if (!filename.endsWith(expectedExtension, ignoreCase = true)) {
+            throw SecurityException(
+                "Invalid file extension. Expected $expectedExtension but got: $filename",
+            )
+        }
+
         // Check file exists
         if (!downloadFile.exists()) {
             throw SecurityException("Download file does not exist: ${downloadFile.absolutePath}")
         }
 
-        // Validate file extension
-        if (!downloadFile.name.endsWith(expectedExtension, ignoreCase = true)) {
-            throw SecurityException(
-                "Invalid file extension. Expected $expectedExtension but got: ${downloadFile.name}",
-            )
-        }
-
-        // Canonicalize path to detect directory traversal attempts
-        val canonicalPath =
+        // Resolve BOTH sides to their real paths - symlinks followed - and compare
+        // as paths, not strings.
+        //
+        // File.getCanonicalPath() is not sound for this on Windows: JDK 17's
+        // windows/native/libjava/canonicalize_md.c has no reparse-point handling
+        // at all (it normalises via _wfullpath and fixes casing via
+        // FindFirstFileW), so a symlink inside the staging directory keeps a
+        // canonical path inside the staging directory and the containment check
+        // passed. Current JDKs added a getFinalPath() call, but deliberately
+        // best-effort - "Do not fail if the final path cannot be obtained" -
+        // returning the unresolved path when it fails, which is still no basis for
+        // a security decision. Path.toRealPath() is specified to resolve symbolic
+        // links on every platform and to fail rather than degrade. (java.io.File's
+        // own javadoc points at Path#toRealPath.) Caught by the Windows CI leg.
+        val realPath =
             try {
-                downloadFile.canonicalPath
-            } catch (e: Exception) {
+                downloadFile.toPath().toRealPath()
+            } catch (e: IOException) {
                 logger.warn(
                     LogCategory.SYSTEM,
-                    "Failed to canonicalize downloaded file path - rejecting update file",
+                    "Failed to resolve the real path of the downloaded file - rejecting update file",
                     error = e,
                 )
-                throw SecurityException("Failed to canonicalize path: ${downloadFile.absolutePath}")
+                throw SecurityException("Failed to resolve path: ${downloadFile.absolutePath}", e)
+            }
+        val realStagingDir =
+            try {
+                stagingDir.toPath().toRealPath()
+            } catch (e: IOException) {
+                logger.warn(
+                    LogCategory.SYSTEM,
+                    "Failed to resolve the real path of the staging directory - rejecting update file",
+                    error = e,
+                )
+                throw SecurityException("Failed to resolve staging directory: ${stagingDir.absolutePath}", e)
             }
 
-        // Ensure canonicalized path is in expected temp directory
-        val expectedTempDir = File(System.getProperty("java.io.tmpdir"), "boss-updates").canonicalPath
-        if (!canonicalPath.startsWith(expectedTempDir)) {
-            logger.warn(
+        // Path.startsWith compares name elements, so a sibling directory such as
+        // "boss-updates-evil" cannot satisfy it the way a string prefix could. The
+        // artifact must also be something *inside* the directory, not the directory.
+        if (realPath == realStagingDir || !realPath.startsWith(realStagingDir)) {
+            logger.error(
                 LogCategory.SYSTEM,
-                "Download file outside expected directory",
+                "Download file escapes the staging directory - rejecting update file",
                 mapOf(
-                    "expected" to expectedTempDir,
-                    "actual" to canonicalPath,
+                    "expected" to realStagingDir.toString(),
+                    "actual" to realPath.toString(),
                 ),
+            )
+            throw SecurityException(
+                "Download file is outside the staging directory - rejected for security: $realPath",
             )
         }
 
-        // Check for suspicious characters in filename
-        val filename = downloadFile.name
-        if (filename.contains('\u0000') || filename.contains('\n') || filename.contains('\r')) {
-            throw SecurityException("Filename contains invalid characters: $filename")
-        }
-
-        // Check for shell metacharacters (defense in depth)
-        if (filename.contains('$') || filename.contains('`') || filename.contains(';')) {
-            logger.warn(LogCategory.SYSTEM, "Filename contains shell metacharacters", mapOf("filename" to filename))
-        }
-
-        logger.debug(LogCategory.SYSTEM, "Validated download file", mapOf("filename" to downloadFile.name))
+        logger.debug(LogCategory.SYSTEM, "Validated download file", mapOf("filename" to filename))
     }
 
     /**
@@ -274,6 +316,14 @@ object UpdateInstaller {
     suspend fun installUpdate(downloadPath: String): InstallResult {
         return try {
             val downloadFile = File(downloadPath)
+
+            // Before ANY filesystem access: the artifact name came from the release
+            // catalog and is interpolated into a generated install script. The
+            // per-platform validateDownloadFile below repeats this; hoisting it here
+            // makes "validated before we touch the file" true for the whole entry
+            // point, not just inside that helper (Issue #37).
+            UpdatePathValidator.validateFileName(downloadFile.name, "Download filename")
+
             if (!downloadFile.exists()) {
                 logger.error(LogCategory.SYSTEM, "Update file not found", mapOf("path" to downloadPath))
                 return InstallResult.Error("Update file not found")

@@ -25,6 +25,26 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+/**
+ * Validate a release-catalog asset name before it is used as a path component.
+ *
+ * Applies the shared [UpdatePathValidator] filename rules and additionally
+ * requires a bare basename: `validateFileName` rejects `..` but not `/`, so
+ * without this a name like `sub/x.dmg` would still create a subdirectory, and an
+ * empty name would resolve to the staging directory itself.
+ *
+ * @throws SecurityException if [assetName] is not a safe single path component
+ */
+internal fun validateUpdateAssetName(assetName: String) {
+    if (assetName.isEmpty()) {
+        throw SecurityException("Update asset name is empty - refusing to use it as a download path")
+    }
+    UpdatePathValidator.validateFileName(assetName, "Update asset name")
+    if (UpdatePathValidator.fileNameComponent(assetName) != assetName) {
+        throw SecurityException("Update asset name is not a bare filename - rejected for security: $assetName")
+    }
+}
+
 actual class UpdateService {
     private val logger = BossLogger.forComponent("UpdateService")
 
@@ -205,8 +225,21 @@ actual class UpdateService {
         try {
             logger.info(LogCategory.SYSTEM, "Starting update download", mapOf("asset" to assetName, "size" to assetSize))
 
-            val tempDir = File(System.getProperty("java.io.tmpdir"), "boss-updates")
-            tempDir.mkdirs()
+            // The asset name comes off the remote release row, and everything below
+            // treats it as a path component: File(tempDir, assetName) with a ".."
+            // escapes the staging directory, and the delete() + write happen long
+            // before the install-time containment check would refuse it - an
+            // arbitrary-file delete/overwrite primitive running as the user. An
+            // empty name (the "?: \"\"" default upstream) resolves to the staging
+            // directory itself, so exists()/delete() would target the directory.
+            validateUpdateAssetName(assetName)
+
+            // Same constant the installer validates containment against, so the
+            // staging directory can't drift between download and install. Created
+            // owner-only: this is where the installer artifact waits between
+            // checksum verification and an elevated install, so another local user
+            // must not be able to swap it (fails closed).
+            val tempDir = createRestrictedDir(defaultStagingDir())
 
             val downloadFile = File(tempDir, assetName)
             if (downloadFile.exists()) {

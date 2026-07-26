@@ -15,7 +15,7 @@ import ai.rever.boss.plugin.browser.ScreenCapturePickerDialog
 import ai.rever.boss.plugin.ui.BossTheme
 import ai.rever.boss.plugin.ui.BossThemeController
 import ai.rever.boss.services.terminal.TerminalAPIAccess
-import ai.rever.boss.updater.UpdateManager
+import ai.rever.boss.updater.UpdateCoordinator
 import ai.rever.boss.utils.CLIInstaller
 import ai.rever.boss.utils.DisplayUtils
 import ai.rever.boss.utils.WindowFocusManager
@@ -839,10 +839,10 @@ fun ApplicationScope.BossWindow(
                 Item(
                     "Check for Updates...",
                     onClick = {
-                        menuScope.launch {
-                            // Manual check: bypass per-version dismissal
-                            UpdateManager.instance.checkForUpdates(force = true)
-                        }
+                        // Manual check: bypass per-version dismissal. Goes through the
+                        // app-level owner rather than the singleton, and runs on the
+                        // updater's own scope so closing this window can't cancel it.
+                        UpdateCoordinator.instance.checkForUpdatesInBackground(force = true)
                     },
                 )
 

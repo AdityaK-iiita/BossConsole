@@ -10,9 +10,12 @@ import ai.rever.boss.components.registery.PanelComponentStoreRegistry
 import ai.rever.boss.components.window_panel.SplitNode
 import ai.rever.boss.components.window_panel.SplitViewStateRegistry
 import ai.rever.boss.components.wizard.plugin.PluginWizardIntegration
+import ai.rever.boss.components.workspaces.LAST_SESSION_ID
+import ai.rever.boss.components.workspaces.LAST_SESSION_NAME
 import ai.rever.boss.components.workspaces.LayoutWorkspace
 import ai.rever.boss.components.workspaces.WorkspaceSettingsManager
 import ai.rever.boss.components.workspaces.applyWorkspace
+import ai.rever.boss.components.workspaces.asLastSession
 import ai.rever.boss.components.workspaces.extractCurrentWorkspace
 import ai.rever.boss.components.workspaces.workspaceManager
 import ai.rever.boss.consumePendingInitialProject
@@ -35,11 +38,11 @@ import ai.rever.boss.services.terminal.TerminalAPIAccess
 import ai.rever.boss.setupDownloadTabCloseCallback
 import ai.rever.boss.startup.StartupSettingsManager
 import ai.rever.boss.topofmind.TabTreeState
-import ai.rever.boss.updater.UpdateManager
-import ai.rever.boss.updater.UpdateSettings
+import ai.rever.boss.updater.UpdateCoordinator
 import ai.rever.boss.utils.CLIInstaller
 import ai.rever.boss.utils.CLIVersionManager
 import ai.rever.boss.utils.WindowFocusManager
+import ai.rever.boss.utils.logging.ComponentLogger
 import ai.rever.boss.utils.logging.LogCategory
 import ai.rever.boss.window.WindowGitStateRegistry
 import ai.rever.boss.window.WindowProjectStateRegistry
@@ -50,6 +53,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -109,6 +113,31 @@ internal fun BossAppStartupEffects(state: BossAppState) {
         PanelComponentStoreRegistry.register(windowId, state.panelComponentStore)
         onDispose {
             PanelComponentStoreRegistry.unregister(windowId)
+        }
+    }
+
+    // App-level window lifecycle, in one place and keyed only on windowId.
+    //
+    // Registers how to extract this window's layout so whoever ends up writing
+    // "Last Session" (the last window disposing, or the shutdown hook for the
+    // exits that never dispose - macOS Cmd+Q, quitForUpdate, SIGTERM) can read it,
+    // and hands the layout write to LastSessionCoordinator, which allows exactly
+    // one writer per session (#19).
+    //
+    // Deliberately NOT hung off the seven-key DefaultPlugin effect: a key change
+    // there would re-run onDispose and, in a single-window app, perform a
+    // mid-session app-level write.
+    DisposableEffect(windowId) {
+        LastSessionCoordinator.instance.register(
+            windowId = windowId,
+            isFirstWindow = isFirstWindow,
+        ) {
+            // Invoked at teardown, possibly from the shutdown-hook thread, so read
+            // live state here rather than closing over a recomposition snapshot.
+            extractCurrentWorkspace(splitViewState, windowProjectState.selectedProject.value.path)
+        }
+        onDispose {
+            LastSessionCoordinator.instance.onWindowDisposed(windowId)
         }
     }
 
@@ -351,32 +380,18 @@ internal fun BossAppStartupEffects(state: BossAppState) {
             // Browsers must be disposed BEFORE Compose disposal begins, not during it
             // See main.kt onCloseRequest for the disposeAllBrowsersBlocking() call
 
-            // Save current workspace as "Last Session" when app closes
-            try {
-                // Use runBlocking to ensure save completes before app closes
-                kotlinx.coroutines.runBlocking {
-                    val currentLayout = extractCurrentWorkspace(splitViewState, selectedProject.path)
-                    val lastSessionConfig =
-                        currentLayout.copy(
-                            id = "last-session",
-                            name = "Last Session",
-                            description = "Automatically saved session",
-                        )
-                    workspaceManager.updateCurrentWorkspace(lastSessionConfig)
-                    workspaceManager.saveCurrentWorkspace("Last Session")
-                }
-            } catch (e: Exception) {
-                // Shutdown path: never block window teardown, but leave a breadcrumb —
-                // a silently lost "Last Session" is exactly what users report as
-                // "my layout disappeared".
-                logger.warn(LogCategory.WORKSPACE, "Last Session save on window close failed", error = e)
-            }
+            // NOTE: the "Last Session" write is NOT here. It is app-level, not
+            // per-window (#19), and lives in the windowId-keyed lifecycle effect
+            // above via LastSessionCoordinator.
 
             // Cleanup plugin coroutines
             plugin.dispose()
 
-            // Cleanup update manager
-            UpdateManager.instance.cleanup()
+            // NOTE: the updater is NOT torn down here. It is process-wide; the
+            // first window to close used to cancel periodic checks and in-flight
+            // downloads for every window still open (#19, #37). This window's
+            // handle is released by rememberBossAppState, which also acquired it,
+            // and app-level teardown is UpdateCoordinator.shutdown() in main.kt.
 
             // Unregister this window's state from the global registries
             SplitViewStateRegistry.unregister(windowId)
@@ -520,22 +535,11 @@ internal fun BossAppStartupEffects(state: BossAppState) {
         }
     }
 
-    // Initialize update manager and conditionally start periodic checks
+    // Start the app's update machinery. Idempotent and app-scoped: every window
+    // asks, only the first one actually starts the periodic loop and the startup
+    // check (previously each new window restarted the loop and re-fired a check).
     LaunchedEffect(Unit) {
-        try {
-            // Only start periodic checks if enabled in settings
-            if (UpdateSettings.autoCheckEnabled) {
-                UpdateManager.instance.startPeriodicChecks()
-
-                // Check for updates on startup if enough time has passed
-                if (UpdateManager.instance.shouldCheckForUpdates()) {
-                    UpdateManager.instance.checkForUpdates()
-                }
-            }
-        } catch (e: Exception) {
-            // Non-fatal: user can still check for updates manually
-            logger.warn(LogCategory.SYSTEM, "Update manager startup check failed", error = e)
-        }
+        startUpdaterForApp(logger)
     }
 
     // Check and auto-update CLI version on startup
@@ -568,13 +572,13 @@ internal fun BossAppStartupEffects(state: BossAppState) {
                     // New windows should start fresh (Issue #129)
                     if (isFirstWindow) {
                         // Check if there's a saved "last-session" workspace
-                        val lastSessionConfig = configs.find { it.name == "Last Session" }
+                        val lastSessionConfig = configs.find { it.name == LAST_SESSION_NAME }
 
                         if (lastSessionConfig != null) {
                             // Ensure it has the correct ID
                             val configWithId =
-                                if (lastSessionConfig.id != "last-session") {
-                                    lastSessionConfig.copy(id = "last-session")
+                                if (lastSessionConfig.id != LAST_SESSION_ID) {
+                                    lastSessionConfig.copy(id = LAST_SESSION_ID)
                                 } else {
                                     lastSessionConfig
                                 }
@@ -675,7 +679,7 @@ internal fun BossAppStartupEffects(state: BossAppState) {
                     lastWorkspaceSnapshot = currentLayout
 
                     // Mark the current workspace as modified (if it's not "Last Session")
-                    if (loadedConfig.name != "Last Session") {
+                    if (loadedConfig.name != LAST_SESSION_NAME) {
                         TabTreeState.markWorkspaceAsModified(loadedConfig.id)
                     }
 
@@ -687,16 +691,10 @@ internal fun BossAppStartupEffects(state: BossAppState) {
                         launch {
                             delay(2000) // Wait 2 seconds before saving
 
-                            if (loadedConfig.name == "Last Session") {
+                            if (loadedConfig.name == LAST_SESSION_NAME) {
                                 // If we're already in "Last Session", update it
-                                val lastSessionConfig =
-                                    currentLayout.copy(
-                                        id = "last-session",
-                                        name = "Last Session",
-                                        description = "Automatically saved session",
-                                    )
-                                workspaceManager.updateCurrentWorkspace(lastSessionConfig)
-                                workspaceManager.saveCurrentWorkspace("Last Session")
+                                workspaceManager.updateCurrentWorkspace(asLastSession(currentLayout))
+                                workspaceManager.saveCurrentWorkspace(LAST_SESSION_NAME)
                             } else {
                                 // Update the current loaded workspace with changes
                                 val updatedConfig =
@@ -724,14 +722,8 @@ internal fun BossAppStartupEffects(state: BossAppState) {
                     saveJob =
                         launch {
                             delay(2000) // Wait 2 seconds before saving
-                            val lastSessionConfig =
-                                currentLayout.copy(
-                                    id = "last-session",
-                                    name = "Last Session",
-                                    description = "Automatically saved session",
-                                )
-                            workspaceManager.updateCurrentWorkspace(lastSessionConfig)
-                            workspaceManager.saveCurrentWorkspace("Last Session")
+                            workspaceManager.updateCurrentWorkspace(asLastSession(currentLayout))
+                            workspaceManager.saveCurrentWorkspace(LAST_SESSION_NAME)
                         }
                 }
             }
@@ -740,12 +732,29 @@ internal fun BossAppStartupEffects(state: BossAppState) {
         // Reset snapshot when workspace changes
         workspaceManager.currentWorkspace
             .onEach { config ->
-                if (config != null && config.name != "Last Session") {
+                if (config != null && config.name != LAST_SESSION_NAME) {
                     // Workspace loaded (but not Last Session), reset tracking
                     lastWorkspaceSnapshot = null
                     // Clear modified status when loading a workspace
                     TabTreeState.markWorkspaceAsSaved(config.id)
                 }
             }.launchIn(this)
+    }
+}
+
+/**
+ * Ask the app-level [UpdateCoordinator] to start update checks.
+ *
+ * App-scoped, not window-scoped: every window calls this, and only the first call
+ * starts anything (see [UpdateCoordinator.ensureStarted]).
+ */
+private suspend fun startUpdaterForApp(logger: ComponentLogger) {
+    try {
+        UpdateCoordinator.instance.ensureStarted()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        // Non-fatal: user can still check for updates manually
+        logger.warn(LogCategory.SYSTEM, "Update manager startup check failed", error = e)
     }
 }

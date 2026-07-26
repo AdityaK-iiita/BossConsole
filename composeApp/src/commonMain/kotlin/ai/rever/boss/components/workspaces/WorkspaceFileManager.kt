@@ -3,7 +3,13 @@ package ai.rever.boss.components.workspaces
 /**
  * Manages file-based workspace storage
  */
-expect class WorkspaceFileManager() {
+expect class WorkspaceFileManager(
+    /**
+     * Directory to store workspaces in. Defaults to the per-user documents
+     * location; overridden by tests so they never write to a real home directory.
+     */
+    directoryOverride: String? = null,
+) {
     /**
      * Get the default workspace directory path
      */
@@ -18,6 +24,19 @@ expect class WorkspaceFileManager() {
      * Save a workspace to a file
      */
     suspend fun saveWorkspace(
+        workspace: LayoutWorkspace,
+        fileName: String? = null,
+    ): String?
+
+    /**
+     * Save a workspace to a file on the calling thread, returning only once the
+     * bytes have been written.
+     *
+     * For shutdown paths, where dispatching the write to another thread or scope
+     * risks the process exiting first. Everything else should use the suspending
+     * [saveWorkspace].
+     */
+    fun saveWorkspaceBlocking(
         workspace: LayoutWorkspace,
         fileName: String? = null,
     ): String?

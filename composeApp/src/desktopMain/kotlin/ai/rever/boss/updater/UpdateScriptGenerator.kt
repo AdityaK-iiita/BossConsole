@@ -3,10 +3,43 @@ package ai.rever.boss.updater
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermission
 
 private val logger = BossLogger.forComponent("UpdateScriptGenerator")
+
+/** Subdirectory of the platform temp directory that holds helper scripts and installer logs. */
+internal const val UPDATER_TEMP_DIR_NAME = "boss-updater"
+
+/**
+ * Resolve the updater's working directory inside the **platform** temp directory.
+ *
+ * Pure resolution, no filesystem access. Callers must not hardcode `/tmp`: on
+ * Windows that resolves to a nonexistent `C:\tmp\boss-updater`, which silently
+ * throws away installer logging on the platform where installer failures are
+ * hardest to diagnose (Issue #37).
+ */
+internal fun resolveUpdaterTempDir(tempDirPath: String = System.getProperty("java.io.tmpdir")): File =
+    File(tempDirPath, UPDATER_TEMP_DIR_NAME)
+
+/** Path of the installer log for [timestamp], inside the platform temp directory. */
+internal fun resolveUpdaterLogFile(
+    timestamp: Long,
+    tempDirPath: String = System.getProperty("java.io.tmpdir"),
+): File = File(resolveUpdaterTempDir(tempDirPath), "update-$timestamp.log")
+
+/**
+ * The updater temp directory, created owner-only (0700) or not used at all.
+ *
+ * The parent temp directory is shared with every other local user, and the helper
+ * scripts written here are subsequently executed - on Linux under `pkexec`/`sudo`.
+ * [createRestrictedDir] therefore throws rather than degrading if an owner-only
+ * directory can't be guaranteed.
+ *
+ * @throws SecurityException if the directory cannot be created or secured.
+ */
+internal fun updaterTempDir(): File = createRestrictedDir(resolveUpdaterTempDir())
 
 /**
  * Generates platform-specific update helper scripts
@@ -60,13 +93,14 @@ object UpdateScriptGenerator {
     }
 
     /**
-     * Validate a path for security concerns
+     * Validate a path for security concerns.
      *
-     * Performs defensive checks to detect potentially malicious inputs:
-     * - Null bytes (directory traversal attacks)
-     * - Shell metacharacters (command injection)
-     * - Newlines (script injection)
-     * - Suspicious patterns (logs warnings)
+     * Delegates to [UpdatePathValidator] so this and [UpdateInstaller] apply the
+     * same rules: a path or filename refused here cannot be waved through by the
+     * other entry point (Issue #37). The whole path gets the unescapable-character
+     * rules; its filename component - the part the release catalog chose - gets the
+     * full denylist. Denylisting the whole path also rejected legitimate Windows
+     * account names such as `Bob!`, permanently breaking auto-update for them.
      *
      * @param path The path to validate
      * @param description Description for error messages (e.g., "DMG path")
@@ -75,40 +109,7 @@ object UpdateScriptGenerator {
     private fun validatePath(
         path: String,
         description: String,
-    ) {
-        // Check for null bytes (can bypass path checks)
-        if (path.contains('\u0000')) {
-            throw SecurityException("$description contains null byte - possible directory traversal attack")
-        }
-
-        // Check for shell metacharacters that could enable command injection
-        if (path.contains('$') || path.contains('`')) {
-            throw SecurityException("$description contains shell metacharacters - possible command injection")
-        }
-
-        // Check for newlines (could inject additional commands)
-        if (path.contains('\n') || path.contains('\r')) {
-            throw SecurityException("$description contains newline characters - possible script injection")
-        }
-
-        // HARDENED: Path traversal is now a hard failure (was warning)
-        // Legitimate update paths should always be absolute, never use ..
-        if (path.contains("..")) {
-            throw SecurityException("$description contains path traversal sequence '..' - rejected for security")
-        }
-
-        // HARDENED: Command separators are now hard failures (was warning)
-        // These characters are never legitimate in filenames and indicate attack attempts
-        if (path.contains(";") || path.contains("|") || path.contains("&")) {
-            throw SecurityException("$description contains command separator characters - rejected for security")
-        }
-
-        // NEW: Windows batch metacharacters validation
-        // These characters enable variable expansion and command injection in Windows batch files
-        if (path.contains("%") || path.contains("^") || path.contains("!")) {
-            throw SecurityException("$description contains Windows batch metacharacters - rejected for security")
-        }
-    }
+    ) = UpdatePathValidator.validatePathAndFileName(path, description)
 
     /**
      * Generate macOS update script
@@ -133,8 +134,7 @@ object UpdateScriptGenerator {
 
         logger.debug(LogCategory.SYSTEM, "Security: Validated and escaped macOS update script parameters")
 
-        val tempDir = File(System.getProperty("java.io.tmpdir"), "boss-updater")
-        tempDir.mkdirs()
+        val tempDir = updaterTempDir()
 
         val scriptFile = File(tempDir, "update_boss_${System.currentTimeMillis()}.sh")
 
@@ -280,8 +280,7 @@ object UpdateScriptGenerator {
 
         logger.debug(LogCategory.SYSTEM, "Security: Validated and escaped Windows update script parameters")
 
-        val tempDir = File(System.getProperty("java.io.tmpdir"), "boss-updater")
-        tempDir.mkdirs()
+        val tempDir = updaterTempDir()
 
         val scriptFile = File(tempDir, "update_boss_${System.currentTimeMillis()}.bat")
 
@@ -345,8 +344,8 @@ object UpdateScriptGenerator {
 
         logger.debug(LogCategory.SYSTEM, "Security: Validated and escaped Linux DEB update script parameters")
 
-        val tempDir = File(System.getProperty("java.io.tmpdir"), "boss-updater")
-        tempDir.mkdirs()
+        val tempDir = updaterTempDir()
+        val escapedUpdaterDir = escapeShellArg(tempDir.absolutePath)
 
         val scriptFile = File(tempDir, "update_boss_${System.currentTimeMillis()}.sh")
 
@@ -355,7 +354,10 @@ object UpdateScriptGenerator {
             #!/bin/bash
 
             # BOSS Update Helper Script (Debian/Ubuntu)
-            LOG_FILE="/tmp/boss-update-debug-${'$'}(date +%s).log"
+            # mktemp inside the updater's own 0700 directory: O_EXCL + an
+            # unpredictable name, so a pre-created symlink in a world-writable
+            # /tmp can no longer capture the write.
+            LOG_FILE=${'$'}(mktemp $escapedUpdaterDir/boss-update-debug-XXXXXX)
 
             # Log everything
             exec > >(tee -a "${'$'}LOG_FILE") 2>&1
@@ -447,14 +449,14 @@ object UpdateScriptGenerator {
 
             # Fallback to sudo with graphical askpass if pkexec failed
             if [ ${'$'}INSTALL_RESULT -ne 0 ]; then
-                ASKPASS_SCRIPT="/tmp/boss-askpass-${'$'}${'$'}.sh"
+                ASKPASS_SCRIPT=${'$'}(mktemp $escapedUpdaterDir/boss-askpass-XXXXXX)
                 if command -v zenity &> /dev/null && [ -n "${'$'}DISPLAY" ]; then
                     echo "Using sudo with zenity for graphical authentication..."
                     cat > "${'$'}ASKPASS_SCRIPT" << 'ASKPASS_EOF'
 #!/bin/bash
 zenity --password --title="BOSS Update Authentication" --text="Enter your password to install the BOSS update:"
 ASKPASS_EOF
-                    chmod +x "${'$'}ASKPASS_SCRIPT"
+                    chmod 700 "${'$'}ASKPASS_SCRIPT"
                     export SUDO_ASKPASS="${'$'}ASKPASS_SCRIPT"
                     sudo -A sh -c "${'$'}PRIVILEGED_SCRIPT"
                     INSTALL_RESULT=${'$'}?
@@ -465,7 +467,7 @@ ASKPASS_EOF
 #!/bin/bash
 kdialog --password "Enter your password to install the BOSS update:"
 ASKPASS_EOF
-                    chmod +x "${'$'}ASKPASS_SCRIPT"
+                    chmod 700 "${'$'}ASKPASS_SCRIPT"
                     export SUDO_ASKPASS="${'$'}ASKPASS_SCRIPT"
                     sudo -A sh -c "${'$'}PRIVILEGED_SCRIPT"
                     INSTALL_RESULT=${'$'}?
@@ -551,8 +553,8 @@ ASKPASS_EOF
 
         logger.debug(LogCategory.SYSTEM, "Security: Validated and escaped Linux RPM update script parameters")
 
-        val tempDir = File(System.getProperty("java.io.tmpdir"), "boss-updater")
-        tempDir.mkdirs()
+        val tempDir = updaterTempDir()
+        val escapedUpdaterDir = escapeShellArg(tempDir.absolutePath)
 
         val scriptFile = File(tempDir, "update_boss_${System.currentTimeMillis()}.sh")
 
@@ -561,7 +563,10 @@ ASKPASS_EOF
             #!/bin/bash
 
             # BOSS Update Helper Script (Fedora/RHEL)
-            LOG_FILE="/tmp/boss-update-debug-${'$'}(date +%s).log"
+            # mktemp inside the updater's own 0700 directory: O_EXCL + an
+            # unpredictable name, so a pre-created symlink in a world-writable
+            # /tmp can no longer capture the write.
+            LOG_FILE=${'$'}(mktemp $escapedUpdaterDir/boss-update-debug-XXXXXX)
 
             # Log everything
             exec > >(tee -a "${'$'}LOG_FILE") 2>&1
@@ -658,14 +663,14 @@ ASKPASS_EOF
 
             # Fallback to sudo with graphical askpass if pkexec failed
             if [ ${'$'}INSTALL_RESULT -ne 0 ]; then
-                ASKPASS_SCRIPT="/tmp/boss-askpass-${'$'}${'$'}.sh"
+                ASKPASS_SCRIPT=${'$'}(mktemp $escapedUpdaterDir/boss-askpass-XXXXXX)
                 if command -v zenity &> /dev/null && [ -n "${'$'}DISPLAY" ]; then
                     echo "Using sudo with zenity for graphical authentication..."
                     cat > "${'$'}ASKPASS_SCRIPT" << 'ASKPASS_EOF'
 #!/bin/bash
 zenity --password --title="BOSS Update Authentication" --text="Enter your password to install the BOSS update:"
 ASKPASS_EOF
-                    chmod +x "${'$'}ASKPASS_SCRIPT"
+                    chmod 700 "${'$'}ASKPASS_SCRIPT"
                     export SUDO_ASKPASS="${'$'}ASKPASS_SCRIPT"
                     sudo -A sh -c "${'$'}PRIVILEGED_SCRIPT"
                     INSTALL_RESULT=${'$'}?
@@ -676,7 +681,7 @@ ASKPASS_EOF
 #!/bin/bash
 kdialog --password "Enter your password to install the BOSS update:"
 ASKPASS_EOF
-                    chmod +x "${'$'}ASKPASS_SCRIPT"
+                    chmod 700 "${'$'}ASKPASS_SCRIPT"
                     export SUDO_ASKPASS="${'$'}ASKPASS_SCRIPT"
                     sudo -A sh -c "${'$'}PRIVILEGED_SCRIPT"
                     INSTALL_RESULT=${'$'}?
@@ -750,10 +755,12 @@ ASKPASS_EOF
      */
     fun launchScript(scriptFile: File) {
         try {
-            val logDir = File("/tmp/boss-updater")
-            logDir.mkdirs()
+            // Platform temp directory: "/tmp" is not a real path on Windows, so
+            // hardcoding it sent installer logs to a directory that never exists
+            // exactly where the log is the only evidence available (Issue #37).
+            updaterTempDir()
             val timestamp = System.currentTimeMillis()
-            val logFile = File(logDir, "update-$timestamp.log")
+            val logFile = resolveUpdaterLogFile(timestamp)
 
             val os = System.getProperty("os.name").lowercase()
             val command =
@@ -825,26 +832,32 @@ ASKPASS_EOF
      * @param file The file to make executable
      */
     fun makeExecutable(file: File) {
-        try {
-            val path = file.toPath()
-            val permissions = mutableSetOf<PosixFilePermission>()
-            permissions.add(PosixFilePermission.OWNER_READ)
-            permissions.add(PosixFilePermission.OWNER_WRITE)
-            permissions.add(PosixFilePermission.OWNER_EXECUTE)
-            permissions.add(PosixFilePermission.GROUP_READ)
-            permissions.add(PosixFilePermission.GROUP_EXECUTE)
-            permissions.add(PosixFilePermission.OTHERS_READ)
-            permissions.add(PosixFilePermission.OTHERS_EXECUTE)
+        val path = file.toPath()
 
+        // 0700, not 0755: these scripts sit in a temp directory other local users
+        // can enumerate and are then executed (on Linux, under pkexec) with
+        // elevated privileges. Nothing but the owner needs to read them.
+        val permissions =
+            setOf(
+                PosixFilePermission.OWNER_READ,
+                PosixFilePermission.OWNER_WRITE,
+                PosixFilePermission.OWNER_EXECUTE,
+            )
+
+        try {
             Files.setPosixFilePermissions(path, permissions)
             logger.debug(LogCategory.SYSTEM, "Set executable permissions", mapOf("file" to file.name))
-        } catch (e: Exception) {
-            // Not a POSIX system (Windows) - ignore
+        } catch (expected: UnsupportedOperationException) {
+            // Not a POSIX filesystem (Windows) - nothing to enforce
             logger.debug(
                 LogCategory.SYSTEM,
                 "Could not set POSIX permissions (probably Windows)",
-                mapOf("error" to e.toString()),
+                mapOf("error" to expected.toString()),
             )
+        } catch (e: IOException) {
+            // Fail closed: a script we cannot lock down must not be handed to
+            // sudo/pkexec (Issue #37).
+            throw SecurityException("Could not restrict helper script ${file.absolutePath} to its owner", e)
         }
     }
 }

@@ -308,10 +308,10 @@ private fun ErrorBanner(
  * Update settings section for the Settings window
  */
 @Composable
-fun UpdateSettingsSection(updateManager: UpdateManager = UpdateManager.instance) {
-    val updateState by updateManager.updateState.collectAsState()
-    val lastCheckTime by updateManager.lastCheckTime.collectAsState()
-    val currentVersion = updateManager.getCurrentVersion()
+fun UpdateSettingsSection(updateCoordinator: UpdateCoordinator = UpdateCoordinator.instance) {
+    val updateState by updateCoordinator.updateState.collectAsState()
+    val lastCheckTime by updateCoordinator.lastCheckTime.collectAsState()
+    val currentVersion = updateCoordinator.currentVersion()
     val coroutineScope = rememberCoroutineScope()
 
     // Version selection state
@@ -319,7 +319,7 @@ fun UpdateSettingsSection(updateManager: UpdateManager = UpdateManager.instance)
     var showDowngradeWarning by remember { mutableStateOf(false) }
     var selectedVersion by remember { mutableStateOf<VersionInfo?>(null) }
 
-    val versionListManager = remember { VersionListManager(updateManager.updateService) }
+    val versionListManager = remember { VersionListManager(updateCoordinator.updateService) }
     val versions by versionListManager.versions.collectAsState()
     val isLoadingVersions by versionListManager.isLoading.collectAsState()
     val versionError by versionListManager.error.collectAsState()
@@ -421,12 +421,9 @@ fun UpdateSettingsSection(updateManager: UpdateManager = UpdateManager.instance)
                             UpdateSettings.autoCheckEnabled = enabled
                             coroutineScope.launch {
                                 UpdateSettingsManager.saveSettings()
-                                // Apply change immediately
-                                if (enabled) {
-                                    updateManager.startPeriodicChecks()
-                                } else {
-                                    updateManager.stopPeriodicChecks()
-                                }
+                                // Apply change immediately, through the owner of the
+                                // periodic loop rather than the singleton.
+                                updateCoordinator.setPeriodicChecksEnabled(enabled)
                             }
                         },
                         colors =
@@ -487,10 +484,9 @@ fun UpdateSettingsSection(updateManager: UpdateManager = UpdateManager.instance)
                     // Check for Updates Button
                     TextButton(
                         onClick = {
-                            coroutineScope.launch {
-                                // Manual check: bypass per-version dismissal
-                                updateManager.checkForUpdates(force = true)
-                            }
+                            // Manual check: bypass per-version dismissal. On the
+                            // updater's scope, so closing Settings can't cancel it.
+                            updateCoordinator.checkForUpdatesInBackground(force = true)
                         },
                         enabled = updateState !is UpdateState.CheckingForUpdates,
                         colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.signal),
@@ -562,7 +558,7 @@ fun UpdateSettingsSection(updateManager: UpdateManager = UpdateManager.instance)
                             TextButton(
                                 onClick = {
                                     // Manager-owned scope: survives the settings window closing
-                                    updateManager.downloadUpdateInBackground(currentState.updateInfo)
+                                    updateCoordinator.downloadUpdateInBackground(currentState.updateInfo)
                                 },
                                 colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.ok),
                             ) {
@@ -612,9 +608,9 @@ fun UpdateSettingsSection(updateManager: UpdateManager = UpdateManager.instance)
                             )
                             TextButton(
                                 onClick = {
-                                    coroutineScope.launch {
-                                        updateManager.installUpdate(currentState.downloadPath)
-                                    }
+                                    // Manager-owned scope: an install must not be
+                                    // cancelled by the Settings window closing.
+                                    updateCoordinator.installUpdateInBackground(currentState.downloadPath)
                                 },
                                 colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.warn),
                             ) {
@@ -707,9 +703,7 @@ fun UpdateSettingsSection(updateManager: UpdateManager = UpdateManager.instance)
                         showDowngradeWarning = true
                     } else {
                         // Direct download for upgrades or same version
-                        coroutineScope.launch {
-                            updateManager.downloadSpecificVersion(versionInfo)
-                        }
+                        updateCoordinator.downloadSpecificVersionInBackground(versionInfo)
                     }
                 },
                 onDismiss = { showVersionDialog = false },
@@ -722,11 +716,9 @@ fun UpdateSettingsSection(updateManager: UpdateManager = UpdateManager.instance)
                 currentVersion = currentVersion,
                 targetVersion = selectedVersion!!.version,
                 onConfirm = {
-                    coroutineScope.launch {
-                        updateManager.downloadSpecificVersion(selectedVersion!!)
-                        showDowngradeWarning = false
-                        selectedVersion = null
-                    }
+                    updateCoordinator.downloadSpecificVersionInBackground(selectedVersion!!)
+                    showDowngradeWarning = false
+                    selectedVersion = null
                 },
                 onDismiss = {
                     showDowngradeWarning = false

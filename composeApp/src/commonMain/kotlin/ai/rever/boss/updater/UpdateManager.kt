@@ -14,7 +14,12 @@ import kotlin.time.Clock
 import kotlin.time.Duration
 
 /**
- * Central update manager that handles periodic update checks and state management
+ * Central update manager that handles periodic update checks and state management.
+ *
+ * This is **process-wide** state, not window state. Windows must never tear it
+ * down: see [UpdateCoordinator] / [UpdateHandle] for the ownership split — the
+ * coordinator is the single owner that can [shutdown], windows hold handles that
+ * cannot.
  */
 class UpdateManager {
     private val logger = BossLogger.forComponent("UpdateManager")
@@ -36,9 +41,33 @@ class UpdateManager {
     private val _showUpdateDialog = MutableStateFlow(false)
     val showUpdateDialog: StateFlow<Boolean> = _showUpdateDialog.asStateFlow()
 
-    // Background job for periodic checks
+    // Background job for periodic checks.
+    // @Volatile: written by the settings UI (start/stopPeriodicChecks) and by
+    // UpdateCoordinator.ensureStarted on other threads, and read by
+    // isPeriodicCheckActive - which ensureStarted's idempotency check relies on.
+    @Volatile
     private var periodicCheckJob: Job? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
+     * Whether the manager's own scope is still alive, i.e. whether periodic
+     * checks and background downloads can still run. Only [shutdown] flips this
+     * to false, and only the app-level owner may call that.
+     */
+    val isActive: Boolean
+        get() = scope.isActive
+
+    /** Whether the periodic check loop is currently running. */
+    val isPeriodicCheckActive: Boolean
+        get() = periodicCheckJob?.isActive == true
+
+    /**
+     * The periodic loop's current job, for the idempotency test: [startPeriodicChecks]
+     * cancels and replaces it, so "the same job is still there" is how a caller
+     * proves the loop was not restarted.
+     */
+    internal val periodicCheckJobOrNull: Job?
+        get() = periodicCheckJob
 
     companion object {
         val instance = UpdateManager()
@@ -196,8 +225,14 @@ class UpdateManager {
      * in-flight download.
      */
     fun downloadUpdateInBackground(updateInfo: UpdateInfo) {
-        scope.launch { downloadUpdate(updateInfo) }
+        launchInBackground { downloadUpdate(updateInfo) }
     }
+
+    /**
+     * Run [block] on the manager's own long-lived scope, so the work outlives any
+     * single window. The scope is only cancelled by [shutdown] (app exit).
+     */
+    internal fun launchInBackground(block: suspend CoroutineScope.() -> Unit): Job = scope.launch { block() }
 
     /**
      * Download the available update
@@ -309,9 +344,16 @@ class UpdateManager {
     }
 
     /**
-     * Clean up resources
+     * Tear down all update machinery: stop periodic checks and cancel the
+     * manager's scope (killing any in-flight download).
+     *
+     * **Owner-only, and irreversible.** Nothing re-creates the scope, so calling
+     * this while the app is still running silently disables updates for the rest
+     * of the session. Reach it through [UpdateCoordinator.shutdown] from the
+     * app-level exit path only — never from window or composable teardown, which
+     * is why [UpdateHandle] deliberately has no equivalent (Issues #19, #37).
      */
-    fun cleanup() {
+    internal fun shutdown() {
         stopPeriodicChecks()
         scope.cancel()
     }

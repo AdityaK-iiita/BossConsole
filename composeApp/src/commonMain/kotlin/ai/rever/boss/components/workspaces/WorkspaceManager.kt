@@ -119,6 +119,36 @@ class WorkspaceManager {
     }
 
     /**
+     * Persist [layout] as the "Last Session" workspace, blocking until the file
+     * has been written, and return whether the write succeeded.
+     *
+     * For the shutdown path only. [saveCurrentWorkspace] is fire-and-forget on a
+     * `Dispatchers.Main` scope, which cannot be trusted while the app is closing:
+     * the coroutine is queued behind the teardown that scheduled it, so the
+     * process can exit before the write ever starts — the layout users report as
+     * "disappeared". This writes on the calling thread instead, so returning
+     * means the session is on disk.
+     */
+    fun saveLastSessionBlocking(layout: LayoutWorkspace): Boolean {
+        val lastSession =
+            asLastSession(layout).copy(
+                timestamp = Clock.System.now().toEpochMilliseconds(),
+            )
+        val filePath = fileManager.saveWorkspaceBlocking(lastSession)
+        if (filePath == null) {
+            logger.warn(LogCategory.WORKSPACE, "Last Session save failed", mapOf("workspace" to lastSession.name))
+            return false
+        }
+        _currentWorkspace.value = lastSession
+        _workspaces.value =
+            _workspaces.value.toMutableList().also { workspaces ->
+                val existingIndex = workspaces.indexOfFirst { it.name == lastSession.name }
+                if (existingIndex >= 0) workspaces[existingIndex] = lastSession else workspaces.add(lastSession)
+            }
+        return true
+    }
+
+    /**
      * Reset to default workspace
      */
     fun resetToDefault() {

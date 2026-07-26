@@ -20,6 +20,8 @@ import ai.rever.boss.services.FileHandlerService
 import ai.rever.boss.services.TerminalHandlerService
 import ai.rever.boss.services.URLHandlerService
 import ai.rever.boss.services.WorkspaceHandlerService
+import ai.rever.boss.updater.UpdateCoordinator
+import ai.rever.boss.updater.UpdateHandle
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.window.Project
 import ai.rever.boss.window.WindowGitState
@@ -29,6 +31,7 @@ import ai.rever.boss.window.WindowProjectStateRegistry
 import ai.rever.boss.window.WindowRunnerState
 import ai.rever.boss.window.WindowRunnerStateRegistry
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,6 +65,7 @@ internal class BossAppState(
     val windowRunnerState: WindowRunnerState,
     val windowGitState: WindowGitState,
     val coroutineScope: CoroutineScope,
+    val updateHandle: UpdateHandle,
 ) {
     val logger = BossLogger.forComponent("BossApp")
 
@@ -177,6 +181,18 @@ internal fun ComponentContext.rememberBossAppState(
 
     val coroutineScope = rememberCoroutineScope()
 
+    // This window's view of the process-wide updater. A handle can observe and act
+    // but cannot shut the updater down (see UpdateCoordinator for the ownership
+    // split). Acquired and released in the same composable, keyed alike, so the
+    // pairing can't drift: a handle released while its window lives on would leave
+    // that window's update banner and dialog inert.
+    val updateHandle = remember(windowId) { UpdateCoordinator.instance.handleFor(windowId) }
+    DisposableEffect(updateHandle) {
+        onDispose {
+            updateHandle.release()
+        }
+    }
+
     return remember(windowId, panelRegistry, splitViewState) {
         BossAppState(
             windowId = windowId,
@@ -194,6 +210,7 @@ internal fun ComponentContext.rememberBossAppState(
             windowRunnerState = windowRunnerState,
             windowGitState = windowGitState,
             coroutineScope = coroutineScope,
+            updateHandle = updateHandle,
         )
     }
 }

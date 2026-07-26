@@ -29,7 +29,6 @@ import ai.rever.boss.plugin.sandbox.notification.PluginToastHost
 import ai.rever.boss.services.bookmarks.BookmarkAPIAccess
 import ai.rever.boss.updater.UpdateAvailableDialog
 import ai.rever.boss.updater.UpdateBanner
-import ai.rever.boss.updater.UpdateManager
 import ai.rever.boss.updater.UpdateState
 import ai.rever.boss.updater.rememberUpdateDialogOwnership
 import ai.rever.boss.window.LocalWindowGitState
@@ -153,55 +152,51 @@ internal fun BossAppScaffold(
                 }
 
                 // Update banner - always visible (even in focus mode)
-                val updateState by UpdateManager.instance.updateState.collectAsState()
+                val updateHandle = state.updateHandle
+                val updateState by updateHandle.updateState.collectAsState()
+                // Every action runs on the manager's scope, never this window's
+                // rememberCoroutineScope(): that scope dies with the composition, so
+                // closing the window mid-install used to cancel the install (leaving
+                // UpdateState on Installing) and could drop a persisted dismissal.
                 UpdateBanner(
                     updateState = updateState,
                     onCheckForUpdates = {
-                        coroutineScope.launch {
-                            // Manual retry: bypass per-version dismissal
-                            UpdateManager.instance.checkForUpdates(force = true)
-                        }
+                        // Manual retry: bypass per-version dismissal
+                        updateHandle.checkForUpdatesInBackground(force = true)
                     },
                     onDownloadUpdate = { updateInfo ->
-                        // Manager-owned scope: the download must survive this window closing
-                        UpdateManager.instance.downloadUpdateInBackground(updateInfo)
+                        updateHandle.downloadUpdateInBackground(updateInfo)
                     },
                     onInstallUpdate = { downloadPath ->
-                        coroutineScope.launch {
-                            UpdateManager.instance.installUpdate(downloadPath)
-                        }
+                        updateHandle.installUpdateInBackground(downloadPath)
                     },
                     onDismiss = {
                         val currentState = updateState
                         if (currentState is UpdateState.UpdateAvailable) {
                             // Persist dismissal so this version doesn't re-prompt
-                            coroutineScope.launch {
-                                UpdateManager.instance.dismissVersion(currentState.updateInfo.latestVersion)
-                            }
+                            updateHandle.dismissVersionInBackground(currentState.updateInfo.latestVersion)
                         } else {
-                            UpdateManager.instance.resetState()
+                            updateHandle.resetState()
                         }
                     },
                 )
 
                 // Update dialog - dismissible prompt for a new app version,
                 // rendered by exactly one window (ownership is reactive)
-                val showUpdateDialog by UpdateManager.instance.showUpdateDialog.collectAsState()
+                val showUpdateDialog by updateHandle.showUpdateDialog.collectAsState()
                 val isUpdateDialogOwner = rememberUpdateDialogOwnership(state.windowId)
                 val updateStateForDialog = updateState
                 if (showUpdateDialog && isUpdateDialogOwner && updateStateForDialog is UpdateState.UpdateAvailable) {
                     UpdateAvailableDialog(
                         updateInfo = updateStateForDialog.updateInfo,
                         onUpdateNow = {
-                            UpdateManager.instance.dismissDialogOnly()
+                            updateHandle.dismissDialogOnly()
                             // Manager-owned scope: the dialog lives only in the owner
                             // window — closing it must not cancel the download
-                            UpdateManager.instance.downloadUpdateInBackground(updateStateForDialog.updateInfo)
+                            updateHandle.downloadUpdateInBackground(updateStateForDialog.updateInfo)
                         },
                         onLater = {
-                            coroutineScope.launch {
-                                UpdateManager.instance.dismissVersion(updateStateForDialog.updateInfo.latestVersion)
-                            }
+                            updateHandle.dismissVersionInBackground(updateStateForDialog.updateInfo.latestVersion)
                         },
                     )
                 }

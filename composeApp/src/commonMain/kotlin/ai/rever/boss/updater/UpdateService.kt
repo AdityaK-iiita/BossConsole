@@ -92,6 +92,12 @@ expect class UpdateService() {
 sealed class UpdateResult {
     object NoUpdateAvailable : UpdateResult()
 
+    /**
+     * The window that asked has gone away, so nothing was done. Distinct from
+     * [NoUpdateAvailable], which is a real answer about the installed version.
+     */
+    object HandleReleased : UpdateResult()
+
     data class UpdateAvailable(
         val updateInfo: UpdateInfo,
     ) : UpdateResult()
