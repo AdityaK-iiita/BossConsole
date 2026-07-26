@@ -195,6 +195,9 @@ class RemoteUiSurfaceRegistry {
                     "Reclaimed an abandoned UI surface for its own process — treating it as a respawn",
                     mapOf("surfaceId" to surfaceId, "processId" to created.processId),
                 )
+                // No `announceDestroyed`: `abandoned` requires `!blocker.streaming`, and a surface is
+                // only ever announced *created* while streaming, so the latch cannot be set here. The
+                // one teardown path that opts out on purpose rather than because it cannot deliver.
                 blocker.close()
                 blocker = null
             } else {
@@ -219,6 +222,10 @@ class RemoteUiSurfaceRegistry {
      */
     fun unregister(surfaceId: String): Boolean {
         val surface = surfaces.remove(surfaceId) ?: return false
+        // Before close(), and that order is the whole reason `destroyed` is deliverable: Channel.close()
+        // is graceful, so an event queued first is handed to the still-collecting StreamUI call and only
+        // then does the flow complete. See RemoteUiLifecycle.
+        RemoteUiLifecycle.announceDestroyed(surface)
         surface.close()
         // debug, not info: register + unregister + closeStream at info is three lines per restart of a
         // crash-looping plugin. The registration itself is the event worth seeing at info.
@@ -245,6 +252,11 @@ class RemoteUiSurfaceRegistry {
             }
 
             else -> {
+                // Half two of the rendezvous. `claimStream()` above has already set `streaming`, and
+                // `attach` publishes its host into `hosts` before reading `streaming` — so whichever of
+                // the two runs second sees the other's write and announces. Neither ordering can miss it,
+                // and the latch in RemoteUiLifecycle means both racing cannot double-announce.
+                if (hosts.containsKey(surfaceId)) RemoteUiLifecycle.announceCreated(surface)
                 SurfaceStream.Bound(surface)
             }
         }
@@ -257,6 +269,12 @@ class RemoteUiSurfaceRegistry {
      * process is gone — there is no `UnregisterUI` from a process that crashed — so holding the claim
      * would lock the id out and a respawned plugin could never re-register it. Any attached component
      * stays attached and simply sees `connected == false`, ready for the replacement process.
+     *
+     * Pointedly **no** `destroyed` announcement here, unlike every other teardown path: this one is
+     * reached because the transport is gone, so there is nothing to send over and nobody to receive it.
+     * Stream completion is the plugin's notice, which is what #34 meant by inferring destruction from
+     * the stream. A graceful `UnregisterUI` still gets the event — it announces before closing, and
+     * arrives here afterwards with the latch already spent. See [RemoteUiLifecycle].
      */
     fun closeStream(surface: RemoteUiSurface) {
         surfaces.remove(surface.surfaceId, surface)
@@ -298,6 +316,10 @@ class RemoteUiSurfaceRegistry {
             host.onConnectionChanged(false)
         } else {
             surface.replayTo(host)
+            // Half one of the rendezvous — see openStream for why reading `streaming` *after* publishing
+            // into `hosts` is what makes the handshake gapless. Announced after the replay so the plugin
+            // never hears "you are rendered" before the component holds the tree it is rendering.
+            if (surface.streaming) RemoteUiLifecycle.announceCreated(surface)
         }
     }
 
@@ -314,7 +336,12 @@ class RemoteUiSurfaceRegistry {
         surfaceId: String,
         host: RemoteUiSurfaceHost,
     ) {
-        hosts.remove(surfaceId, host)
+        // Only the owner's removal ends the rendered lifetime. A late `dispose()` from a component that
+        // was already displaced must not tell a live plugin its successor's surface went away.
+        if (!hosts.remove(surfaceId, host)) return
+        // The plugin is still streaming here, so this is the `destroyed` most worth sending: its UI was
+        // closed by the user and it should stop doing work for a surface nobody is looking at.
+        surfaces[surfaceId]?.let(RemoteUiLifecycle::announceDestroyed)
     }
 
     /**
@@ -340,7 +367,14 @@ class RemoteUiSurfaceRegistry {
      */
     fun clear() {
         val closing = surfaces.keys.toList()
-        closing.forEach { surfaceId -> surfaces.remove(surfaceId)?.close() }
+        closing.forEach { surfaceId ->
+            surfaces.remove(surfaceId)?.let { surface ->
+                // Same before-close ordering as unregister: a plugin whose stream is still up on the way
+                // down gets a last `destroyed` rather than an abrupt completion.
+                RemoteUiLifecycle.announceDestroyed(surface)
+                surface.close()
+            }
+        }
         if (closing.isNotEmpty()) {
             logger.info(LogCategory.UI, "Closed all remote UI surfaces", mapOf("count" to closing.size))
         }

@@ -85,8 +85,16 @@ class KeymapMatcher(
      *
      * This follows JxBrowser's pattern: only intercept known system shortcuts,
      * let the component handle everything else (including Shift-only like '?').
+     *
+     * Public because it is also the honest answer to "would the host actually act on this key?", which
+     * is not the same question as "is this key in the keymap". `AWTKeyboardInterceptor` returns before
+     * it ever consults the keymap unless Meta, Ctrl or Alt is down, so a bound-but-modifier-less binding
+     * — `Shift+/` for the shortcut sheet, say — is never dispatched. Anything deciding whether a key is
+     * still available to something else (see `Modifier.forwardUnclaimedKeys` in the remote-UI renderer)
+     * must ask this too, or it will decline a key the host was never going to take and the key is lost
+     * to everyone.
      */
-    private fun hasSystemModifier(binding: KeyBinding): Boolean =
+    fun hasSystemModifier(binding: KeyBinding): Boolean =
         binding.modifiers.any { mod ->
             mod.equals("Cmd", true) || mod.equals("Meta", true) ||
                 mod.equals("Ctrl", true) || mod.equals("Control", true) ||

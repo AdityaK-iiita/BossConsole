@@ -93,6 +93,16 @@ class RemoteUiSurface internal constructor(
      */
     private val outgoing = Channel<UIEvent>(OUTGOING_BUFFER, BufferOverflow.DROP_OLDEST)
 
+    /**
+     * Whether this surface has told its plugin it is rendered, and therefore owes it a `destroyed`.
+     *
+     * Lives here rather than in [RemoteUiLifecycle] because it is per-surface state with exactly this
+     * object's lifetime — a map keyed by surface id there would need its own eviction, and would get it
+     * wrong across a respawn, where a *new* surface under the same id must start un-announced. Owned by
+     * [RemoteUiLifecycle]; nothing else may touch it.
+     */
+    internal val createdAnnounced = AtomicBoolean(false)
+
     private val streamClaimed = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
     private val eventsTaken = AtomicBoolean(false)

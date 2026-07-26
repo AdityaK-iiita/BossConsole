@@ -29,6 +29,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.consumeAsFlow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
@@ -215,7 +216,18 @@ class RemoteWidgetRendererComposeTest {
             assertTrue(runBlocking { plugin.registerUI(registration).success })
 
             val updates = Channel<WidgetUpdate>(Channel.UNLIMITED)
-            val events = pluginScope.async { plugin.streamUI(updates.consumeAsFlow()).take(1).toList() }
+            // Filtered to clicks, not `take(1)`. The rendezvous now announces `created` the moment this
+            // stream binds under the already-attached panel, so the first event on the wire is a
+            // lifecycle one — and `take(1)` cancels the RPC, which would tear the surface down before
+            // the click was made. Any consumer that reads "the first event" has to allow for that.
+            val events =
+                pluginScope.async {
+                    plugin
+                        .streamUI(updates.consumeAsFlow())
+                        .filter { it.hasClick() }
+                        .take(1)
+                        .toList()
+                }
             val fullTree =
                 WidgetUpdate
                     .newBuilder()

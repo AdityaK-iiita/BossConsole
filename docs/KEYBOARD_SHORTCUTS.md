@@ -223,3 +223,27 @@ Common issues:
 - **Stale settings file**: Delete `~/.boss/keymap-settings.json` and restart
 - **Conflicts**: Settings UI shows visual warnings for conflicting shortcuts
 - **Focus mode**: Settings window and shortcuts work in focus mode (fixed in Issue #74)
+
+## Remote plugin surfaces are keystroke sinks while focused
+
+A remote (out-of-process) plugin surface taps keys the host did not claim and forwards them to the
+plugin as `UIEvent.key`. Three things bound that, and one thing does not:
+
+- **The host keymap wins.** `AWTKeyboardInterceptor` runs at the `KeyboardFocusManager`, upstream of
+  Compose, and consumes what it dispatches — so a bound shortcut never reaches a plugin surface. The
+  tap re-checks the keymap itself as a backstop, using `KeymapMatcher.hasSystemModifier` so it declines
+  only keys the interceptor would actually have acted on. (Declining *everything* bound would lose keys
+  the host never dispatches, such as `Shift+/`.)
+- **The focused widget gets first refusal.** `onKeyEvent` fires on the way *up* from the focus target,
+  so a widget that handles a key keeps it: typing into a remote text field produces a text-change event,
+  not a key per character. The boundary is consumption, though — keys a widget ignores still reach the
+  plugin while that surface has focus.
+- **The tap never consumes.** It always returns `false`, so a plugin cannot swallow a shortcut or trap
+  the user in a panel.
+
+**What is not bounded is which plugin may listen.** `Modifier.forwardUnclaimedKeys` ends in
+`.focusable()`, so a remote surface is a focus target in its own right — a surface made only of labels
+can still take focus and receive every unclaimed key-down, including plain typing when no widget inside
+it holds focus. There is no plugin capability model gating that today. The intended fix is a declared
+opt-in (a `wants_keys` flag on `UIRegistration`), which makes both the focus stop and the tap something
+a plugin asks for; it needs the same per-connection plugin identity as attributing `UnregisterUI`.

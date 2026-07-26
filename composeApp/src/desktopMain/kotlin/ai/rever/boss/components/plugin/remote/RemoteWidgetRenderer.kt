@@ -39,7 +39,16 @@ fun RemoteWidgetRenderer(
     onEvent: (nodeId: String, event: WidgetEvent) -> Unit = { _, _ -> },
 ) {
     val root = tree.nodes[tree.rootId] ?: return
-    RenderNode(node = root, tree = tree, onEvent = onEvent)
+    // A wrapper only so the surface has one node above the whole tree to tap keys at — see
+    // Modifier.forwardUnclaimedKeys for why that node is the right place and why it never consumes.
+    // propagateMinConstraints so a root that fills its parent still does; the Box is otherwise
+    // transparent to layout.
+    Box(
+        modifier = Modifier.forwardUnclaimedKeys(onEvent),
+        propagateMinConstraints = true,
+    ) {
+        RenderNode(node = root, tree = tree, onEvent = onEvent)
+    }
 }
 
 @Composable
@@ -71,6 +80,10 @@ private fun RenderNode(
 
         WidgetType.SCROLL -> {
             val scrollState = rememberScrollState()
+            // Coalesced, not per-frame: an unthrottled scroll is one IPC message every ~16ms for the
+            // length of a fling. See ScrollCoalescer for the window and for why the resting position
+            // is always delivered.
+            ReportScrollPosition(node.id, scrollState, onEvent)
             Column(modifier = modifier.verticalScroll(scrollState)) {
                 // Everything below is measured with an unbounded max height — see the LIST branch.
                 CompositionLocalProvider(LocalUnboundedHeight provides true) {

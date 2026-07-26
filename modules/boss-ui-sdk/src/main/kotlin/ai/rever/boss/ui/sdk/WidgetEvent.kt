@@ -31,7 +31,14 @@ sealed interface WidgetEvent {
         val index: Int,
     ) : WidgetEvent
 
-    /** A key press on a focused widget. [keyCode] is the platform key code. */
+    /**
+     * A key press the surface received and nothing claimed.
+     *
+     * Surface-level, so it carries an empty node id: it arrives *because* neither the host keymap nor
+     * the focused widget wanted it, which leaves no node to attribute it to. [keyCode] is the platform
+     * key code (the AWT `VK_` constant on the JVM host). Key **down** only — the wire type has no
+     * up/down discriminator, so both edges would read as two presses.
+     */
     data class Key(
         val keyCode: Int,
         val ctrl: Boolean = false,
@@ -72,8 +79,8 @@ object LifecycleStates {
 /**
  * A [WidgetEvent] tagged with the node that produced it.
  *
- * Surface-level events (lifecycle) carry an empty [nodeId] — they belong to the surface, not to a
- * node in its tree.
+ * Surface-level events ([WidgetEvent.Lifecycle], and [WidgetEvent.Key] once no widget has claimed the
+ * press) carry an empty [nodeId] — they belong to the surface, not to a node in its tree.
  */
 data class EmittedEvent(
     val nodeId: String,

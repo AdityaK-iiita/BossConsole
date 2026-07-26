@@ -268,14 +268,48 @@ message SelectionEvent {
   int32 selected_index = 2;
 }
 
+// A key press the surface received and nothing claimed.
+//
+// The kernel keymap always wins: a key bound to a host shortcut is consumed before the surface sees
+// it and is never forwarded, so a plugin cannot swallow a window/tab/split binding. What arrives here
+// is what the host declined AND the focused widget declined: events travel UP from the focus target,
+// so a widget that handles a key keeps it. Typing into a text field therefore produces TextChangeEvent
+// rather than one KeyEvent per character — but note the boundary is "the focused widget consumed it",
+// so keys a widget ignores (function keys, unhandled chords) do reach the plugin while it has focus.
+//
+// Key DOWN only; there is no up/down discriminator here, so both edges would read as two presses. A
+// modifier pressed on its own is not sent — it arrives as a flag on the key it qualifies.
+// target_node_id is empty: no node claimed the press, so there is none to attribute it to.
+//
+// UNTHROTTLED, unlike ScrollEvent: a key held down produces one of these per OS auto-repeat tick
+// (~25-30/s). Plugins should not treat the rate as bounded, and should not do per-event work that
+// assumes it is.
 message KeyEvent {
-  int32 key_code = 1;
+  int32 key_code = 1;  // Platform key code (the AWT VK_ constant on the JVM host)
   bool ctrl = 2;
   bool alt = 3;
   bool shift = 4;
   bool meta = 5;
 }
 
+// A scroll movement, coalesced.
+//
+// Deltas, not positions. A conforming host coalesces them before they reach the transport — the
+// transport itself enforces nothing — to at most one event per ~60ms per scrolling NODE, with the
+// remainder always flushed when the gesture stops. A surface with several scroll containers therefore
+// produces that rate per container. The invariant a plugin may rely on is that the deltas SUM to the
+// total displacement: accumulate them and you are never out of step with the screen, you just learn
+// about the middle of a fling in fewer, larger steps. One event per frame would be ~60 IPC messages
+// per second per scrolling node.
+//
+// The sum holds across one surface's continuous scroll reporting. Treat a surface teardown or a tree
+// update that replaces the scrolling node as a RESET of the accumulator: the host re-seeds its baseline
+// from wherever the new node starts, and a delta bridging the two would be meaningless.
+//
+// Units are layout pixels, not density-independent units.
+//
+// The JVM host currently reports these for WIDGET_TYPE_SCROLL nodes only, and vertically only, so
+// delta_x is always 0 there. WIDGET_TYPE_LIST does not yet report its own scrolling.
 message ScrollEvent {
   float delta_x = 1;
   float delta_y = 2;
@@ -289,6 +323,26 @@ message ToggleEvent {
   bool checked = 1;
 }
 
+// A transition in the surface's RENDERED lifetime.
+//
+// "created" means a host renderer is attached and this stream is live — the widgets are on screen.
+// "destroyed" means that stopped being true. They are enqueued as a matched pair: the kernel never
+// queues "destroyed" without having queued "created", and never queues either twice in a row. A
+// plugin that crashes and respawns under a component that stayed open is told "created" again.
+//
+// Pairing is guaranteed at enqueue, not at delivery. A plugin that stops reading its event stream long
+// enough for the kernel to start shedding (see the surface event buffer) can lose its "created", since
+// it is the oldest event on the queue, and then see a "destroyed" on its own. Handle an unmatched
+// "destroyed" as a teardown rather than as a protocol error.
+//
+// "destroyed" is delivered on every teardown that still has a transport (the component detaching,
+// the plugin's own UnregisterUI, kernel shutdown) and is enqueued BEFORE the stream closes, so it
+// arrives as the last event. The one case it cannot be delivered is a stream that already died — a
+// crashed process — where the response stream simply completing is the notice.
+//
+// "resumed"/"paused" are reserved and not currently emitted. Unknown states must be ignored, not
+// rejected: the field stays a string so a newer kernel can add one without breaking older plugins.
+// target_node_id is empty — a lifecycle transition belongs to the surface, not to a node.
 message LifecycleEvent {
   string lifecycle_state = 1;  // "created", "resumed", "paused", "destroyed"
 }
