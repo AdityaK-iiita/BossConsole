@@ -7,6 +7,7 @@ import ai.rever.boss.components.workspaces.LayoutWorkspace
 import ai.rever.boss.components.workspaces.WorkspaceSerializer
 import ai.rever.boss.components.workspaces.applyWorkspace
 import ai.rever.boss.services.URLHandlerService
+import ai.rever.boss.utils.DeepLinkOrigin
 import ai.rever.boss.utils.WindowFocusManager
 import ai.rever.boss.utils.extractFileName
 import ai.rever.boss.utils.logging.BossLogger
@@ -29,7 +30,11 @@ class CLICommandHandler private constructor() {
     private val logger = BossLogger.forComponent("CLICommandHandler")
 
     private val commandQueue = ConcurrentLinkedQueue<CLICommand>()
-    private val terminalQueue = ConcurrentLinkedQueue<String>() // Use empty string as sentinel for null
+
+    // Holds whole commands, not just the command text: the origin decides whether
+    // the command may run unattended, and a queue that dropped it would turn a
+    // cold-start request into an unattributed one.
+    private val terminalQueue = ConcurrentLinkedQueue<CLICommand.OpenTerminal>()
     private val workspaceQueue = ConcurrentLinkedQueue<String>()
     private val fileQueue = ConcurrentLinkedQueue<String>()
 
@@ -106,19 +111,18 @@ class CLICommandHandler private constructor() {
         // Process queued terminal events
         scope.launch {
             while (terminalQueue.isNotEmpty()) {
-                val command = terminalQueue.poll()
-                if (command != null) {
-                    // Convert empty string sentinel back to null
-                    val actualCommand = if (command.isEmpty()) null else command
+                val queued = terminalQueue.poll()
+                if (queued != null) {
                     logger.debug(
                         LogCategory.SYSTEM,
                         "Processing queued terminal command",
                         mapOf(
-                            "hasCommand" to (actualCommand != null),
+                            "hasCommand" to (queued.command != null),
+                            "origin" to queued.origin.name,
                         ),
                     )
                     try {
-                        handleOpenTerminal(actualCommand)
+                        handleOpenTerminal(queued.command, queued.origin)
                     } catch (e: Exception) {
                         logger.error(LogCategory.SYSTEM, "Failed to process queued terminal event", error = e)
                     }
@@ -220,29 +224,28 @@ class CLICommandHandler private constructor() {
                 }
 
                 is CLICommand.OpenTerminal -> {
-                    val queuedCommand = command.command ?: "" // Use empty string as sentinel for null
-
                     if (isTerminalHandlerReady) {
                         // Terminal handler ready - execute immediately
                         logger.debug(
                             LogCategory.SYSTEM,
                             "Terminal handler ready, executing immediately",
                             mapOf(
-                                "hasCommand" to queuedCommand.isNotEmpty(),
+                                "hasCommand" to (command.command != null),
+                                "origin" to command.origin.name,
                             ),
                         )
-                        val actualCommand = if (queuedCommand.isEmpty()) null else queuedCommand
-                        handleOpenTerminal(actualCommand)
+                        handleOpenTerminal(command.command, command.origin)
                     } else {
                         // Terminal handler not ready - queue for later (cold start)
                         logger.debug(
                             LogCategory.SYSTEM,
                             "Terminal handler not ready, queueing",
                             mapOf(
-                                "hasCommand" to queuedCommand.isNotEmpty(),
+                                "hasCommand" to (command.command != null),
+                                "origin" to command.origin.name,
                             ),
                         )
-                        terminalQueue.add(queuedCommand)
+                        terminalQueue.add(command)
                     }
                 }
             }
@@ -460,13 +463,32 @@ class CLICommandHandler private constructor() {
      *
      * Direct emit only - queueing is handled in executeCommand().
      * This is called from markTerminalHandlerReady() after handler is ready.
+     *
+     * A command only runs unattended when [origin] says the operator asked for
+     * it themselves. Any other origin — above all a `boss://terminal?command=`
+     * link, which the OS will accept from any program that can ask it to open a
+     * URL — is marked for confirmation, and the window shows the operator the
+     * exact command before a shell ever sees it. Opening a terminal with no
+     * command is the same request either way and never prompts.
      */
-    private suspend fun handleOpenTerminal(command: String?) {
-        // Validate command for security if provided
-        if (command != null && !CLISecurityValidator.isValidCommand(command)) {
-            logger.warn(LogCategory.SYSTEM, "Invalid terminal command (security check failed)")
+    private suspend fun handleOpenTerminal(
+        command: String?,
+        origin: DeepLinkOrigin,
+    ) {
+        val disposition = terminalCommandDisposition(command, origin)
+        if (disposition == TerminalCommandDisposition.REJECT) {
+            logger.warn(
+                LogCategory.SYSTEM,
+                "Terminal command rejected before it could run",
+                mapOf(
+                    "origin" to origin.name,
+                    "wellFormed" to (command != null && CLISecurityValidator.isValidCommand(command)),
+                    "length" to (command?.length ?: 0),
+                ),
+            )
             return
         }
+        val requiresConfirmation = disposition == TerminalCommandDisposition.CONFIRM
 
         // Resolve the target window (see handleLoadWorkspace for why this is
         // not focusedWindowFlow).
@@ -484,13 +506,19 @@ class CLICommandHandler private constructor() {
         // The active window's BossApp will listen and create the terminal tab
         CoroutineScope(Dispatchers.Main).launch {
             try {
-                TerminalEventBus.openTerminal(command, sourceWindowId = focusedWindowId)
+                TerminalEventBus.openTerminal(
+                    command,
+                    sourceWindowId = focusedWindowId,
+                    requiresConfirmation = requiresConfirmation,
+                )
                 logger.debug(
                     LogCategory.SYSTEM,
                     "Emitted terminal open event",
                     mapOf(
                         "hasCommand" to (command != null),
                         "windowId" to focusedWindowId,
+                        "origin" to origin.name,
+                        "requiresConfirmation" to requiresConfirmation,
                     ),
                 )
 
@@ -506,6 +534,48 @@ class CLICommandHandler private constructor() {
         }
     }
 }
+
+/**
+ * Longest command BOSS will put in front of the operator for confirmation. A
+ * command it cannot show in full is not one anybody can meaningfully approve, so
+ * a longer one from outside the operator's own invocation is dropped rather than
+ * prompted. Commands the operator passed to `boss` themselves are never shown and
+ * are bounded only by [CLISecurityValidator.isValidCommand].
+ */
+internal const val TERMINAL_CONFIRM_MAX_COMMAND_LENGTH = 512
+
+/** What BOSS does with a `boss://terminal` request. */
+internal enum class TerminalCommandDisposition {
+    /** Open a terminal, typing the command if there is one. */
+    RUN,
+
+    /** Show the operator the command and open a terminal only if they confirm. */
+    CONFIRM,
+
+    /** Do nothing at all. */
+    REJECT,
+}
+
+/**
+ * Decides what happens to a terminal request, from the command's shape and who
+ * asked for it.
+ *
+ * A request with no command just opens a terminal, which is the same request
+ * whoever made it. A command runs unattended only when [origin] says the operator
+ * ran `boss` themselves; otherwise it is put in front of them first, and dropped
+ * outright if it is malformed or too long to display in full.
+ */
+internal fun terminalCommandDisposition(
+    command: String?,
+    origin: DeepLinkOrigin,
+): TerminalCommandDisposition =
+    when {
+        command == null -> TerminalCommandDisposition.RUN
+        !CLISecurityValidator.isValidCommand(command) -> TerminalCommandDisposition.REJECT
+        origin.isOperatorInitiated -> TerminalCommandDisposition.RUN
+        command.length > TERMINAL_CONFIRM_MAX_COMMAND_LENGTH -> TerminalCommandDisposition.REJECT
+        else -> TerminalCommandDisposition.CONFIRM
+    }
 
 /**
  * Sealed class representing CLI commands.
@@ -527,7 +597,15 @@ sealed class CLICommand {
         val folderPath: String,
     ) : CLICommand()
 
+    /**
+     * @property command the command to type into the terminal, or null to just
+     *   open one.
+     * @property origin who asked. Defaults to [DeepLinkOrigin.EXTERNAL] so a
+     *   caller that does not say gets the cautious handling; see
+     *   [CLICommandHandler.handleOpenTerminal].
+     */
     data class OpenTerminal(
         val command: String?,
+        val origin: DeepLinkOrigin = DeepLinkOrigin.EXTERNAL,
     ) : CLICommand()
 }

@@ -79,16 +79,33 @@ object CLISecurityValidator {
     }
 
     /**
-     * Validates terminal command for security.
+     * Longest terminal command BOSS will type into a shell — well past anything
+     * a person writes by hand, and a bound on what a caller can make the app
+     * hold. Commands that must be confirmed are held to the tighter
+     * [TERMINAL_CONFIRM_MAX_COMMAND_LENGTH], which is what the prompt can show in
+     * full.
      */
-    fun isValidCommand(command: String): Boolean {
-        // Check for null bytes
-        if (command.contains('\u0000')) {
-            return false
-        }
+    private const val MAX_COMMAND_LENGTH = 4096
 
-        // For now, allow all commands
-        // Could add whitelist or blacklist in future
-        return true
-    }
+    /**
+     * Checks that a terminal command is well formed: one non-empty line of
+     * printable text, no longer than [MAX_COMMAND_LENGTH].
+     *
+     * This is a shape check, not a judgement about what the command does. An
+     * allow-list of commands would rule out the legitimate use — `boss terminal
+     * -c` exists precisely to run whatever the operator types — without ruling
+     * out much else, so **who asked** is decided separately by
+     * [ai.rever.boss.utils.DeepLinkOrigin]: only a request the operator made
+     * themselves runs without a prompt.
+     *
+     * Control characters are rejected because the command is written into a
+     * shell followed by a single Enter — an embedded line break would submit
+     * further lines that nothing ever displayed, so keeping the command to one
+     * line is what makes the text shown equal to the text that runs. The NUL
+     * byte the previous check looked for is one of them.
+     */
+    fun isValidCommand(command: String): Boolean =
+        command.isNotBlank() &&
+            command.length <= MAX_COMMAND_LENGTH &&
+            command.none { it.isISOControl() }
 }

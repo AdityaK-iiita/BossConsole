@@ -12,6 +12,7 @@ import ai.rever.boss.plugin.pathutils.BossDirectories
 import ai.rever.boss.plugin.ui.BossThemeController
 import ai.rever.boss.services.passkey.PasskeyPlatformInit
 import ai.rever.boss.utils.DeepLinkHandler
+import ai.rever.boss.utils.DeepLinkOrigin
 import ai.rever.boss.utils.SingleInstanceManager
 import ai.rever.boss.utils.WindowsProtocolHandler
 import ai.rever.boss.utils.logging.BossLogger
@@ -146,13 +147,19 @@ fun main(args: Array<String>) {
         if (deepLink != null) {
             logger.info(LogCategory.SYSTEM, "Sending URL to existing instance")
 
+            // The origin is stated, not assumed: a `boss://` argument in this
+            // process's argv is how the OS protocol handler delivers a URL
+            // somebody asked it to open, so it is forwarded as external. The
+            // running instance takes that label rather than inferring anything
+            // from the fact that this process could present the channel token.
+
             // Try to send with retry logic (important for auth deep links during sign-in)
             // Note: runBlocking is acceptable here as this runs during pre-UI initialization,
             // before the Compose application starts. No UI thread exists yet to block.
             var success = false
             val maxRetries = 3
             for (attempt in 1..maxRetries) {
-                if (SingleInstanceManager.sendToExistingInstance(deepLink)) {
+                if (SingleInstanceManager.sendToExistingInstance(deepLink, DeepLinkOrigin.EXTERNAL)) {
                     logger.info(LogCategory.SYSTEM, "URL sent successfully", mapOf("attempt" to attempt))
                     success = true
                     break

@@ -11,11 +11,18 @@ import kotlinx.coroutines.flow.asSharedFlow
  * @property command Optional initial command to run in the terminal
  * @property sourceWindowId The window that initiated this event (required for multi-window support)
  * @property workingDirectory Optional working directory for the terminal
+ * @property requiresConfirmation True when [command] must be shown to the
+ *   operator and confirmed before it reaches a shell, because the request came
+ *   from somewhere other than the operator's own invocation of BOSS (see
+ *   `DeepLinkOrigin`). Ignored when [command] is null — opening an empty
+ *   terminal is the same request whoever asked. Defaults to false so the
+ *   in-app callers, which are the operator clicking something, stay direct.
  */
 data class TerminalOpenEvent(
     val command: String?,
     val sourceWindowId: String,
     val workingDirectory: String? = null,
+    val requiresConfirmation: Boolean = false,
 )
 
 /**
@@ -46,13 +53,15 @@ object TerminalEventBus {
      * @param command Optional command to run in the terminal
      * @param sourceWindowId The window that initiated this event (required for multi-window support)
      * @param workingDirectory Optional working directory for the terminal
+     * @param requiresConfirmation See [TerminalOpenEvent.requiresConfirmation]
      */
     suspend fun openTerminal(
         command: String? = null,
         sourceWindowId: String,
         workingDirectory: String? = null,
+        requiresConfirmation: Boolean = false,
     ) {
-        val event = TerminalOpenEvent(command, sourceWindowId, workingDirectory)
+        val event = TerminalOpenEvent(command, sourceWindowId, workingDirectory, requiresConfirmation)
         _terminalOpenEvents.emit(event)
         ipcBridge?.forward("TerminalOpenEvent", event, sourceWindowId)
     }

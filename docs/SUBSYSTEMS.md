@@ -180,6 +180,10 @@ CoroutineScope(Dispatchers.IO).launch {
 4. If boss://: processes as authentication deep link
 5. Creates new browser tab in active window
 
+Anything arriving this way is tagged `DeepLinkOrigin.EXTERNAL`, since the OS
+accepts a URL from any program; only links BOSS's own CLI parsed out of `argv`
+are tagged `OPERATOR_CLI`. See the Deep Links section of `AGENTS.md`.
+
 ## Runner Terminal System
 
 **Overview**: Run configurations execute in terminal with run/stop/re-run controls (Issue #347).

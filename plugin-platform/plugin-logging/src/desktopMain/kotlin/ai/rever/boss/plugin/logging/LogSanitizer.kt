@@ -218,55 +218,183 @@ object LogSanitizer {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Patterns and vocabularies for sanitization.
+    //
+    // All compiled/allocated once: every log line and every crash report is put
+    // through them, so none of this may be rebuilt per call.
+    // -------------------------------------------------------------------------
+
+    private val filePathPattern = Regex("""(?:/[^\s:]+)+|(?:[A-Za-z]:\\[^\s:]+)+""")
+    private val urlPattern = Regex("""https?://[^\s]+""")
+    private val emailPattern = Regex("""[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}""")
+
+    /**
+     * Runs of text that are a credential by their own structure, wherever they
+     * appear: a JWT (three base64url segments — the first is the base64url of a
+     * JSON header, which is why every JWT begins `eyJ`), a GitHub token prefix,
+     * or a vendor `sk_`/`pk_` key prefix.
+     *
+     * Each alternative is anchored on the left by a boundary that rules out word
+     * characters and `.`, so a name that merely *contains* one of these prefixes
+     * keeps its text: `task_manager_configuration` is not a Stripe key, and
+     * neither is `com.example.pk_utilities`. That precision is what makes the
+     * pattern safe to run over message text and stack traces, which consist
+     * mostly of long class and method names.
+     */
+    private val credentialShapePattern =
+        Regex(
+            "(?<![A-Za-z0-9_.])(?:" +
+                """eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*""" +
+                "|(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{8,}" +
+                "|(?:sk|pk)[-_][A-Za-z0-9_-]{8,}" +
+                ")",
+        )
+
+    /**
+     * A `name=value` pair inside a message — the shape a quoted config line,
+     * environment entry or command line arrives in. Group 1 is the name, group 2
+     * the value.
+     *
+     * Only the value is ever masked. The name is what makes a report actionable
+     * (it says *which* setting was wrong) and is not itself the secret.
+     *
+     * A value whose first character is `[` is excluded, so a value an earlier
+     * pass already replaced keeps the more informative result: `token=/home/me/x`
+     * becomes `token=[PATH]` rather than degrading further to `token=***`.
+     */
+    private val assignmentPattern = Regex("""(?<![A-Za-z0-9_.])([A-Za-z][A-Za-z0-9_.-]*)=([^\s\[][^\s]*)""")
+
+    /** Inserts a word boundary into camelCase names, so `accessToken` splits like `access_token`. */
+    private val camelCaseBoundary = Regex("""(?<=[a-z0-9])(?=[A-Z])""")
+
+    /**
+     * Names whose value is sensitive. Shared by [sanitizeMap] and the
+     * `name=value` pass of [redactLocationsAndCredentials] so that the map path
+     * and the free-text path cannot drift apart; [nameMarksSecret] explains why
+     * free text matches this list more strictly than a map key does.
+     */
+    private val sensitiveValueNames =
+        setOf(
+            "token",
+            "access_token",
+            "refresh_token",
+            "password",
+            "secret",
+            "api_key",
+            "key",
+            "credential",
+            "credential_id",
+        )
+
+    /**
+     * Values kept verbatim even under a sensitive name: they cannot be
+     * credential material, and they answer the question a reader actually has.
+     * `token=null` is a useful thing to read; `token=***` is not.
+     */
+    private val nonSecretValues = setOf("null", "true", "false")
+
     /**
      * Check if a string looks like it might be a token/secret.
      * Used for defensive logging to avoid accidentally logging secrets.
+     *
+     * This is the *value-position* test: the argument is a single datum a caller
+     * chose to log, so mere length is reason enough to mask it here. Message text
+     * is held to the stricter [credentialShapePattern] instead, because a run of
+     * 20-plus characters inside a sentence or a stack frame is usually just a
+     * long identifier.
      */
     fun looksLikeSecret(value: String?): Boolean {
         if (value.isNullOrBlank()) return false
 
-        // Check for common patterns
+        // Check for common patterns.
+        //
+        // A former `^[a-zA-Z0-9_-]{20,}$` alternative is gone: it required a
+        // length of 20 or more, so the first condition below already covered
+        // every string it could match, and it compiled a fresh Regex per call.
         return value.length >= 20 ||
             value.contains("eyJ") || // JWT prefix
-            value.matches(Regex("^[a-zA-Z0-9_-]{20,}$")) ||
             value.contains("sk_") ||
             value.contains("pk_") ||
             value.contains("ghp_") ||
-            value.contains("gho_")
+            value.contains("gho_") ||
+            credentialShapePattern.containsMatchIn(value)
     }
 
     /**
      * Safely format a map for logging, masking known sensitive keys.
+     *
+     * A key is matched against [sensitiveValueNames] by substring: the caller
+     * named this field deliberately, so `userAccessTokenV2` redacts like `token`.
+     * Message text is matched more narrowly — see [nameMarksSecret].
      */
     fun sanitizeMap(map: Map<String, Any?>?): Map<String, Any?> {
         if (map == null) return emptyMap()
 
-        val sensitiveKeys =
-            setOf(
-                "token",
-                "access_token",
-                "refresh_token",
-                "password",
-                "secret",
-                "api_key",
-                "key",
-                "credential",
-                "credential_id",
-            )
-
         return map.mapValues { (key, value) ->
             when {
-                sensitiveKeys.any { key.contains(it, ignoreCase = true) } -> "[REDACTED]"
+                sensitiveValueNames.any { key.contains(it, ignoreCase = true) } -> "[REDACTED]"
                 value is String && looksLikeSecret(value) -> maskToken(value)
                 else -> value
             }
         }
     }
 
-    // Regex patterns for sanitization (compiled once for performance)
-    private val filePathPattern = Regex("""(?:/[^\s:]+)+|(?:[A-Za-z]:\\[^\s:]+)+""")
-    private val urlPattern = Regex("""https?://[^\s]+""")
-    private val emailPattern = Regex("""[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}""")
+    /**
+     * Whether the name of a `name=value` pair marks its value as sensitive.
+     *
+     * Matched per word rather than by substring, which is the one deliberate
+     * difference from [sanitizeMap]'s key test. A map key is a field the caller
+     * named; a name lifted out of arbitrary message text is not, and substring
+     * matching there would mask the value of `KEYBOARD_LAYOUT` for containing
+     * "key". Words are split on the separators [assignmentPattern] admits, plus
+     * camelCase boundaries, so `SUPABASE_ANON_KEY`, `api_key` and `apiKey` all
+     * yield a "key" word while `KEYBOARD_LAYOUT` yields "keyboard".
+     *
+     * The multi-word entries of [sensitiveValueNames] ("access_token",
+     * "credential_id", ...) can never equal a single word; their "token", "key"
+     * and "credential" words do, so nothing is left uncovered.
+     */
+    private fun nameMarksSecret(name: String): Boolean =
+        name
+            .replace(camelCaseBoundary, "_")
+            .split('_', '-', '.')
+            .any { word -> word.isNotEmpty() && sensitiveValueNames.any { word.equals(it, ignoreCase = true) } }
+
+    /**
+     * The shared body of [sanitizeExceptionMessage] and [sanitizeStackTrace].
+     *
+     * The order of the passes is deliberate. Locations go first, and
+     * [filePathPattern]'s `(?:/[^\s:]+)+` consumes everything after a scheme's
+     * colon — so a value carried in a URL query string or fragment, which is the
+     * usual way one reaches a message, is already `[PATH]` by the time the later
+     * passes see the text. Those later passes exist for what that cannot reach:
+     * a credential written into a message on its own, with no URL or path around
+     * it.
+     *
+     * The passes compose in either order because [maskToken] is a fixed point on
+     * its own output at these lengths (`ghp...345` masks to `ghp...345`), so a
+     * value both of them match is masked once in effect.
+     */
+    private fun redactLocationsAndCredentials(text: String): String {
+        val withoutLocations =
+            text
+                .replace(filePathPattern, "[PATH]")
+                .replace(urlPattern, "[URL]")
+                .replace(emailPattern, "[EMAIL]")
+
+        val withMaskedAssignments =
+            assignmentPattern.replace(withoutLocations) { match ->
+                val (name, value) = match.destructured
+                if (nameMarksSecret(name) && value.lowercase() !in nonSecretValues) {
+                    "$name=${maskToken(value)}"
+                } else {
+                    match.value
+                }
+            }
+
+        return credentialShapePattern.replace(withMaskedAssignments) { match -> maskToken(match.value) }
+    }
 
     /**
      * Sanitize an exception message by removing potentially sensitive data.
@@ -275,6 +403,8 @@ object LogSanitizer {
      * - File paths (Unix and Windows)
      * - URLs
      * - Email addresses
+     * - Credentials recognisable by shape: JWTs, GitHub tokens, `sk_`/`pk_` keys
+     * - The value of a `name=value` pair whose name marks it sensitive
      *
      * @param message The exception message to sanitize
      * @return The sanitized message
@@ -283,10 +413,7 @@ object LogSanitizer {
         if (message.isNullOrBlank()) return "[no message]"
 
         return try {
-            message
-                .replace(filePathPattern, "[PATH]")
-                .replace(urlPattern, "[URL]")
-                .replace(emailPattern, "[EMAIL]")
+            redactLocationsAndCredentials(message)
         } catch (ignored: Exception) {
             // Deliberately unlogged: LogSanitizer runs inside the logging pipeline,
             // so logging from here could recurse. The placeholder marks the failure.
@@ -306,6 +433,10 @@ object LogSanitizer {
     /**
      * Sanitize a stack trace by removing file paths and other sensitive data.
      *
+     * Applies the same rules as [sanitizeExceptionMessage], which a stack trace
+     * needs too: the `Caused by:` lines of a trace are exception messages, and a
+     * value quoted into one arrives here rather than there.
+     *
      * @param stackTrace The stack trace string to sanitize
      * @return The sanitized stack trace
      */
@@ -313,10 +444,7 @@ object LogSanitizer {
         if (stackTrace.isNullOrBlank()) return "[no stack trace]"
 
         return try {
-            stackTrace
-                .replace(filePathPattern, "[PATH]")
-                .replace(urlPattern, "[URL]")
-                .replace(emailPattern, "[EMAIL]")
+            redactLocationsAndCredentials(stackTrace)
         } catch (ignored: Exception) {
             // Deliberately unlogged: LogSanitizer runs inside the logging pipeline,
             // so logging from here could recurse. The placeholder marks the failure.

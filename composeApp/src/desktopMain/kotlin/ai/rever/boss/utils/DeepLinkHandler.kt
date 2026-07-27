@@ -125,7 +125,11 @@ actual object DeepLinkHandler {
                         logger.debug(LogCategory.BROWSER, "Handling as HTTP(S) URL")
                         URLHandlerService.handleURL(uri)
                     } else {
-                        // Handle boss:// deep links for auth
+                        // Handle boss:// deep links for auth. The flow carries
+                        // OS-delivered links only, and its collectors re-enter
+                        // through processDeepLink(uri), which is
+                        // DeepLinkOrigin.EXTERNAL — the correct origin for
+                        // everything the OS hands over.
                         _deepLinkFlow.value = uri
                     }
                 }
@@ -209,13 +213,40 @@ actual object DeepLinkHandler {
         if (isWindows) {
             WindowsProtocolHandler.extractDeepLinkFromArgs(args)?.let { url ->
                 logger.info(LogCategory.SYSTEM, "Received deep link from command line", mapOf("uri" to LogSanitizer.maskUriParams(url)))
-                processDeepLink(url)
+                // A `boss://` argument on Windows is how the registered protocol
+                // handler delivers a URL somebody asked the OS to open, so it is
+                // external regardless of who launched the process.
+                processDeepLink(url, DeepLinkOrigin.EXTERNAL)
             }
         }
     }
 
+    /**
+     * Processes a link of unstated origin, which is therefore
+     * [DeepLinkOrigin.EXTERNAL]. This is the multiplatform entry point and the
+     * one the OS-delivered [deepLinkFlow] re-enters through; callers that know
+     * the request came from the operator use the overload below.
+     */
     actual fun processDeepLink(uri: String) {
-        logger.info(LogCategory.SYSTEM, "Processing deep link", mapOf("uri" to LogSanitizer.maskUriParams(uri)))
+        processDeepLink(uri, DeepLinkOrigin.EXTERNAL)
+    }
+
+    /**
+     * Processes a link whose [origin] the caller can vouch for.
+     *
+     * [origin] reaches the handlers that need it (currently `boss://terminal`)
+     * because no later stage can tell an operator's request apart from one some
+     * other program asked the OS to open.
+     */
+    fun processDeepLink(
+        uri: String,
+        origin: DeepLinkOrigin,
+    ) {
+        logger.info(
+            LogCategory.SYSTEM,
+            "Processing deep link",
+            mapOf("uri" to LogSanitizer.maskUriParams(uri), "origin" to origin.name),
+        )
 
         // Routes match the whole host, never a prefix, so an unknown longer host
         // (boss://plugins, boss://filesystem) reaches the default flow instead of
@@ -242,7 +273,7 @@ actual object DeepLinkHandler {
         // window is plainly registered. Resolving here instead of inside each
         // handler is what keeps the window-targeting links from diverging again.
         // Safe on this thread: resolveActionableWindowId reads volatile state.
-        dispatch(host, uri, targetWindowIdFor(host) { WindowFocusManager.resolveActionableWindowId() })
+        dispatch(host, uri, targetWindowIdFor(host) { WindowFocusManager.resolveActionableWindowId() }, origin)
     }
 
     /**
@@ -254,12 +285,13 @@ actual object DeepLinkHandler {
         host: DeepLinkHost,
         uri: String,
         targetWindowId: String?,
+        origin: DeepLinkOrigin,
     ) {
         when (host) {
             DeepLinkHost.URL -> handleUrlLink(uri)
             DeepLinkHost.WORKSPACE -> handleWorkspaceLink(uri)
             DeepLinkHost.FILE -> handleFileLink(uri)
-            DeepLinkHost.TERMINAL -> handleTerminalLink(uri)
+            DeepLinkHost.TERMINAL -> handleTerminalLink(uri, origin)
             DeepLinkHost.FOLDER -> handleFolderLink(uri, targetWindowId)
             DeepLinkHost.PLUGIN -> handlePluginLink(uri, targetWindowId)
             DeepLinkHost.SPLIT -> handleSplitLink(uri, targetWindowId)
@@ -275,9 +307,18 @@ actual object DeepLinkHandler {
      * Examples:
      *   boss://terminal
      *   boss://terminal?command=ls%20-la
+     *
+     * [origin] travels with the command all the way to
+     * [ai.rever.boss.cli.CLICommandHandler], which runs a command outright only
+     * for [DeepLinkOrigin.OPERATOR_CLI] and asks the operator to confirm the
+     * exact text otherwise. Opening a terminal with no command needs no such
+     * distinction and behaves the same either way.
      */
-    private fun handleTerminalLink(uri: String) {
-        logger.debug(LogCategory.TERMINAL, "Handling terminal link")
+    private fun handleTerminalLink(
+        uri: String,
+        origin: DeepLinkOrigin,
+    ) {
+        logger.debug(LogCategory.TERMINAL, "Handling terminal link", mapOf("origin" to origin.name))
 
         val params = parseQueryParams(uri)
         val command = params["command"]?.urlDecode()
@@ -285,12 +326,16 @@ actual object DeepLinkHandler {
         // Create a CLI command and queue it
         val cliCommand =
             ai.rever.boss.cli.CLICommand
-                .OpenTerminal(command)
+                .OpenTerminal(command, origin)
         ai.rever.boss.cli.CLICommandHandler
             .getInstance()
             .queueCommand(cliCommand)
 
-        logger.info(LogCategory.TERMINAL, "Terminal command queued", mapOf("hasCommand" to (command != null)))
+        logger.info(
+            LogCategory.TERMINAL,
+            "Terminal command queued",
+            mapOf("hasCommand" to (command != null), "origin" to origin.name),
+        )
     }
 
     /**

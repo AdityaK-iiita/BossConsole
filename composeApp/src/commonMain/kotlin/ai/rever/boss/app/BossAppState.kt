@@ -90,6 +90,10 @@ internal class BossAppState(
     var pendingTerminalLinkUrl by mutableStateOf("")
     var pendingTerminalSourceId by mutableStateOf<String?>(null)
 
+    // A terminal command that arrived from outside this BOSS invocation and is
+    // waiting for the operator to confirm it. Null whenever nothing is pending.
+    var pendingTerminalCommand by mutableStateOf<PendingTerminalCommand?>(null)
+
     // Snapshot of the in-progress MRU tab cycle, drives the Ctrl+Tab switcher overlay
     // (null in positional mode and whenever no cycle is active).
     var tabCycleOverlay by mutableStateOf<TabCycleOverlayData?>(null)
@@ -134,6 +138,19 @@ internal class BossAppState(
         }
     }
 }
+
+/**
+ * A terminal command held back for the operator's confirmation.
+ *
+ * BOSS reaches this state when a `boss://terminal?command=` request arrives over
+ * a path any program can drive, rather than from the operator's own `boss`
+ * invocation (see `DeepLinkOrigin`). The command is carried verbatim so the
+ * prompt shows exactly what would run.
+ */
+internal data class PendingTerminalCommand(
+    val command: String,
+    val workingDirectory: String?,
+)
 
 /**
  * Builds the window's [BossAppState]: the component graph is remembered against

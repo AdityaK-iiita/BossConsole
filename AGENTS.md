@@ -145,6 +145,31 @@ logger.error(LogCategory.NETWORK, "Request failed", error = exception)
 
 App registers `boss://` protocol for authentication callbacks from external browsers.
 
+Because the scheme is registered with the OS, a `boss://` link is not evidence
+that the operator asked for anything — any program that can ask the OS to open a
+URL produces the same input. Entry points therefore tag each link with a
+`DeepLinkOrigin`:
+
+- `OPERATOR_CLI` — BOSS's own CLI parsed it out of this process's `argv`
+  (`createBossCLI`), i.e. arguments passed to the BOSS executable directly.
+- `EXTERNAL` — the OS URL-open handler, a `boss://` argument from the registered
+  protocol handler, or a forward over the single-instance channel that said so.
+  Also the default for an unstated origin, so a new caller that forgets to say
+  gets the cautious handling.
+
+Only `boss://terminal?command=` consults it today: an `OPERATOR_CLI` command runs
+as before, anything else is shown to the operator for confirmation first (the
+`boss` shell shim converts to a `boss://` URL and opens it via the OS, so its
+`terminal -c` still works, with one confirmation). Other hosts — including
+`boss://plugin?id=…&action=…` — are unchanged.
+
+**Single-instance channel**: `SingleInstanceManager` publishes
+`~/.boss/run/single-instance` (owner-only) with the channel endpoint and a token
+minted at startup, and listens on a Unix-domain socket in that directory (macOS,
+Linux) or a loopback port (Windows). Every request must present the token,
+"another instance is running" means something answered on the channel rather than
+a pid existing, and a descriptor nobody answers on is reclaimed.
+
 ## Documentation
 
 - [Core Subsystems](docs/SUBSYSTEMS.md) - Auth, UI, keyboard shortcuts, threading, default browser, runner, BossTerm

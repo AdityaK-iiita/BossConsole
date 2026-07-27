@@ -93,9 +93,10 @@ object ApplicationRestarter {
 
         // Windows / Linux packaged native launcher → re-exec it (with the same args)
         // once the old process exits. The wait-for-old-PID is essential on every
-        // platform: SingleInstanceManager.acquireLock() returns false while the old PID
-        // is still alive, so a new instance that starts too early just exits — and
-        // nothing comes back (the very bug this fixes).
+        // platform: SingleInstanceManager.acquireLock() returns false while the old
+        // instance still answers on the single-instance channel, so a new instance
+        // that starts too early just exits — and nothing comes back (the very bug
+        // this fixes).
         if (launcher != null && !isJavaLauncher) {
             val args =
                 runCatching {

@@ -23,6 +23,7 @@ import ai.rever.boss.components.wizard.plugin.PluginWizardWindow
 import ai.rever.boss.components.wizard.plugin.rememberPluginInstallWizardState
 import ai.rever.boss.components.workspaces.applyWorkspace
 import ai.rever.boss.components.workspaces.workspaceManager
+import ai.rever.boss.dashboard.DashboardStatsManager
 import ai.rever.boss.icons.FileIcons
 import ai.rever.boss.keymap.KeymapSettingsManager
 import ai.rever.boss.keymap.model.KeymapActions
@@ -412,6 +413,30 @@ internal fun BossAppDialogs(state: BossAppState) {
             onOpenSettings = {
                 state.settingsInitialSection = "KEYMAP"
                 state.showSettingsDialog = true
+            },
+        )
+    }
+
+    // A terminal command that reached BOSS from outside the operator's own
+    // `boss` invocation. `boss://` is registered with the OS, so this request
+    // carries no evidence of who made it — the operator says whether it runs,
+    // and sees the exact text first.
+    state.pendingTerminalCommand?.let { pending ->
+        ConfirmationDialog(
+            title = "Run this command?",
+            message =
+                "BOSS was asked from outside the app to run a command in a new terminal tab. " +
+                    "It has not run. Confirm only if you recognise it:\n\n${pending.command}",
+            confirmText = "Run command",
+            onDismiss = { state.pendingTerminalCommand = null },
+            onConfirm = {
+                logger.info(
+                    LogCategory.TERMINAL,
+                    "Operator confirmed an externally requested terminal command",
+                    mapOf("windowId" to windowId),
+                )
+                splitViewState.openTerminalInActivePanel(pending.command, pending.workingDirectory)
+                DashboardStatsManager.recordTerminalSession()
             },
         )
     }

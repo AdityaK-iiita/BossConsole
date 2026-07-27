@@ -79,8 +79,20 @@ internal fun BossAppEventBusEffects(state: BossAppState) {
         TerminalEventBus.terminalOpenEvents
             .filter { event -> event.sourceWindowId == windowId }
             .onEach { event ->
-                splitViewState.openTerminalInActivePanel(event.command, event.workingDirectory)
-                DashboardStatsManager.recordTerminalSession()
+                val command = event.command
+                if (event.requiresConfirmation && command != null) {
+                    // Show the operator the command and let them decide; the
+                    // prompt in BossAppDialogs opens the terminal on confirm.
+                    logger.info(
+                        LogCategory.TERMINAL,
+                        "Holding an externally requested terminal command for confirmation",
+                        mapOf("windowId" to windowId),
+                    )
+                    state.pendingTerminalCommand = PendingTerminalCommand(command, event.workingDirectory)
+                } else {
+                    splitViewState.openTerminalInActivePanel(command, event.workingDirectory)
+                    DashboardStatsManager.recordTerminalSession()
+                }
             }.launchIn(this)
 
         // Note: We DON'T call markReady() here - that happens AFTER Last Session loads

@@ -1,6 +1,7 @@
 package ai.rever.boss.cli
 
 import ai.rever.boss.utils.DeepLinkHandler
+import ai.rever.boss.utils.DeepLinkOrigin
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.core.NoOpCliktCommand
@@ -20,6 +21,12 @@ import java.net.URLEncoder
  *   boss folder <path>              # Opens folder in codebase
  *   boss terminal                   # Opens terminal
  *   boss terminal -c <command>      # Opens terminal with command
+ *
+ * These commands are only ever built from this process's own `argv` — `main()`
+ * hands the arguments the operator passed to the BOSS executable to
+ * [createBossCLI] — so every link they produce carries
+ * [DeepLinkOrigin.OPERATOR_CLI]. That is the one origin the terminal handler
+ * runs a command for without prompting; see [DeepLinkOrigin].
  */
 class BossCommand : NoOpCliktCommand(name = "boss") {
     override fun help(context: Context) = "BOSS Console - Business Operating System + Simulation"
@@ -38,7 +45,7 @@ class BossUrlCommand : CliktCommand(name = "url") {
         // Convert to deep link
         val encodedUrl = URLEncoder.encode(url, "UTF-8")
         val deepLink = "boss://url?url=$encodedUrl"
-        DeepLinkHandler.processDeepLink(deepLink)
+        DeepLinkHandler.processDeepLink(deepLink, DeepLinkOrigin.OPERATOR_CLI)
     }
 }
 
@@ -55,7 +62,7 @@ class BossWorkspaceCommand : CliktCommand(name = "workspace") {
         // Convert to deep link
         val encodedPath = URLEncoder.encode(configPath, "UTF-8")
         val deepLink = "boss://workspace?path=$encodedPath"
-        DeepLinkHandler.processDeepLink(deepLink)
+        DeepLinkHandler.processDeepLink(deepLink, DeepLinkOrigin.OPERATOR_CLI)
     }
 }
 
@@ -72,7 +79,7 @@ class BossFileCommand : CliktCommand(name = "file") {
         // Convert to deep link
         val encodedPath = URLEncoder.encode(filePath, "UTF-8")
         val deepLink = "boss://file?path=$encodedPath"
-        DeepLinkHandler.processDeepLink(deepLink)
+        DeepLinkHandler.processDeepLink(deepLink, DeepLinkOrigin.OPERATOR_CLI)
     }
 }
 
@@ -89,7 +96,7 @@ class BossFolderCommand : CliktCommand(name = "folder") {
         // Convert to deep link
         val encodedPath = URLEncoder.encode(folderPath, "UTF-8")
         val deepLink = "boss://folder?path=$encodedPath"
-        DeepLinkHandler.processDeepLink(deepLink)
+        DeepLinkHandler.processDeepLink(deepLink, DeepLinkOrigin.OPERATOR_CLI)
     }
 }
 
@@ -113,7 +120,7 @@ class BossTerminalCommand : CliktCommand(name = "terminal") {
             } else {
                 "boss://terminal"
             }
-        DeepLinkHandler.processDeepLink(deepLink)
+        DeepLinkHandler.processDeepLink(deepLink, DeepLinkOrigin.OPERATOR_CLI)
     }
 }
 
