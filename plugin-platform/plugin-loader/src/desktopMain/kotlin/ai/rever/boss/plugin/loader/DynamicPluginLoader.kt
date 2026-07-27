@@ -403,7 +403,14 @@ class DynamicPluginLoaderImpl(
             // Update state
             loadedPlugins[pluginId] = loadedPlugin.copy(state = PluginState.UNLOADING)
 
-            // Dispose plugin instance
+            // Dispose plugin instance.
+            //
+            // ORDER MATTERS: dispose() must run BEFORE prepareUnload() below.
+            // Once the classloader leaves ACTIVE it refuses to resolve anything
+            // new against the host (PluginClassLoader.loadClassChildFirst), so
+            // moving the mark up would make every plugin's dispose() that
+            // lazily touches a host class start throwing. PluginUnloadOrderingTest
+            // pins this.
             try {
                 loadedPlugin.instance.dispose()
             } catch (e: Exception) {

@@ -17,12 +17,23 @@ kotlin = "2.4.0"
 kotlinx-coroutines = "1.11.0"
 ktlint-gradle = "14.2.0"
 kotlinx-datetime = "0.8.0-0.6.x-compat"
-# Pinned to the stack the MCP Kotlin SDK supports (ktor <= 3.3/3.4 → serialization 1.9.x).
-# The terminal-tab plugin bundles ktor 3.3 + mcp-sdk, but resolves kotlinx-serialization
-# parent-first from the host; ktor 3.5 / serialization 1.11 break the bundled MCP server
-# (encodeToSink / sse signature drift). Revert when the MCP SDK supports ktor 3.5+.
-# (ktor 3.5.0 was an automated bump in #736; 3.4.3 was the prior known-good version.)
+# kotlinx-serialization is a SHARED, parent-first package for plugins
+# (PluginClassLoader.defaultSharedPackages): this line is the version every
+# plugin gets at runtime no matter what it bundles — terminal-tab, for one,
+# bundles ktor + the MCP Kotlin SDK and ships zero kotlinx.serialization classes
+# of its own. A bump here is a cross-repo change; re-check the plugins riding on
+# it rather than trusting a comment. (History of the 1.9.0 -> 1.11.0 move and
+# how it was re-verified: PR #57.)
 kotlinx-serialization = "1.11.0"
+# ktor is NOT shared with plugins (no io.ktor prefix in defaultSharedPackages),
+# so a plugin's bundled ktor is unaffected by this pin; it constrains the host's
+# own client stack only.
+#
+# 3.5.0 arrived as an automated bump (#736) and was reverted. The reason on
+# record was plugin compatibility, which cannot be right — the host's ktor never
+# reaches a plugin. NO host-side diagnosis was ever recorded, so there is no
+# known reason this cannot move: treat the next 3.5.x bump as worth trying, and
+# if it fails, write down what broke here.
 ktor = "3.4.3"
 logback = "1.5.38"
 precompose = "1.6.2"

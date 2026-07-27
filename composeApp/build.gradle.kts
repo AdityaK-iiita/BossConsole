@@ -828,6 +828,47 @@ kotlin {
 }
 
 // ---------------------------------------------------------------------------
+// Drop the accidental ktor SERVER stack.
+//
+// BossConsole declares ktor CLIENT only (see desktopMain above). ktor-server-cio
+// and ktor-server-core arrive transitively through
+// io.github.jan-tennert.supabase:auth-kt, whose only consumer of them is
+// io.github.jan.supabase.auth.server.HttpCallback* — the localhost HTTP callback
+// used by desktop OAuth-provider / SSO sign-in (Utils_desktopKt.startExternalAuth).
+// BOSS never takes that path: it authenticates with OTP, email and passkeys, and
+// no source file outside the standalone `server/` module (not on this graph)
+// imports io.ktor.server.*. Verified with
+// `./gradlew :composeApp:dependencyInsight --configuration desktopRuntimeClasspath
+//  --dependency ktor-server-cio`.
+//
+// Keeping them was not free: 529 io.ktor.server.* classes sat in the host
+// classloader as fallback targets for any plugin that bundles its own ktor
+// server, which is exactly the material a plugin-classloader parent fallback
+// turns into a loader-constraint LinkageError.
+//
+// If BOSS ever adds OAuth-provider or SSO sign-in, delete this block — the
+// symptom would be a NoClassDefFoundError on io/ktor/server/cio/CIO.
+//
+// Blanket rather than a per-dependency exclude on purpose: auth-kt reaches this
+// graph twice, once as composeApp's own dependency and once transitively via
+// project(':plugin-platform:plugin-repository'), so an exclude attached to the
+// declaration here would only remove one of them. Consequence to know about:
+// libs.ktor.server.tests (ktor-server-test-host) needs ktor-server-core, so it
+// cannot be added to a composeApp source set while this block stands.
+//
+// Gradle has no module-name wildcard, so this list is an enumeration and cannot
+// anticipate a future ktor-server-sse / -websockets / -netty arriving by some
+// new transitive path. KtorServerAbsentFromHostTest is the drift guard: it
+// scans the classpath for io/ktor/server/ rather than for these four names, so
+// a newcomer fails CI and names itself.
+configurations.configureEach {
+    exclude(group = "io.ktor", module = "ktor-server-cio")
+    exclude(group = "io.ktor", module = "ktor-server-cio-jvm")
+    exclude(group = "io.ktor", module = "ktor-server-core")
+    exclude(group = "io.ktor", module = "ktor-server-core-jvm")
+}
+
+// ---------------------------------------------------------------------------
 // macOS code signing resolution
 //
 // Release builds sign with a "Developer ID Application" certificate. CI imports
