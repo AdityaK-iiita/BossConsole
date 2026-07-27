@@ -1,5 +1,6 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi"
 import type { PasskeyContext } from "../types/context.ts"
+import { requireAuthenticatedCaller } from "../utils/authorization.ts"
 import { listUserPasskeys, deleteUserPasskey, updatePasskeyDisplayName } from "../services/management.ts"
 import {
   ManagementListRequestSchema,
@@ -12,6 +13,35 @@ import {
 } from "../types/schemas.ts"
 
 const management = new OpenAPIHono<{ Variables: PasskeyContext }>()
+
+/**
+ * Resolves the account these management routes may act on.
+ *
+ * They act on somebody's credentials — listing them, disabling them, renaming
+ * them — against the service-role client on a function deployed with
+ * `verify_jwt = false`. Taking `userId` from the request body therefore let any
+ * caller enumerate and de-enrol another account's passkeys, which is
+ * de-enrolment and a forced downgrade to email sign-in. The account is now the
+ * authenticated caller; a body `userId` may only agree with it.
+ */
+async function resolveManagementUser(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  authorizationHeader: string | null | undefined,
+  claimedUserId?: string
+): Promise<{ userId: string } | { error: string; status: 401 | 403 }> {
+  const caller = await requireAuthenticatedCaller(supabase, authorizationHeader)
+  if (!caller.success || !caller.caller) {
+    return { error: caller.error || 'Authentication required', status: caller.status ?? 401 }
+  }
+
+  if (claimedUserId && claimedUserId !== caller.caller.userId) {
+    console.error('❌ manage: body userId does not match the authenticated caller')
+    return { error: 'userId does not match the authenticated user', status: 403 }
+  }
+
+  return { userId: caller.caller.userId }
+}
 
 // ============================================================================
 // POST /manage/list - List user passkeys
@@ -49,6 +79,22 @@ const listPasskeysRoute = createRoute({
         }
       }
     },
+    401: {
+      description: 'Authentication required - a valid user session must be presented',
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema
+        }
+      }
+    },
+    403: {
+      description: 'The requested userId is not the authenticated user',
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema
+        }
+      }
+    },
     500: {
       description: 'Internal server error',
       content: {
@@ -65,7 +111,12 @@ management.openapi(listPasskeysRoute, async (ctx) => {
     const supabase = ctx.get("supabase")
     const { userId } = ctx.req.valid('json')
 
-    const result = await listUserPasskeys(supabase, userId)
+    const resolved = await resolveManagementUser(supabase, ctx.req.header('Authorization'), userId)
+    if ('error' in resolved) {
+      return ctx.json({ error: resolved.error }, resolved.status)
+    }
+
+    const result = await listUserPasskeys(supabase, resolved.userId)
 
     if (!result.success) {
       return ctx.json({ error: result.error || 'Failed to list passkeys' }, 400)
@@ -113,6 +164,22 @@ const deletePasskeyRoute = createRoute({
         }
       }
     },
+    401: {
+      description: 'Authentication required - a valid user session must be presented',
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema
+        }
+      }
+    },
+    403: {
+      description: 'The requested userId is not the authenticated user',
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema
+        }
+      }
+    },
     500: {
       description: 'Internal server error',
       content: {
@@ -129,7 +196,12 @@ management.openapi(deletePasskeyRoute, async (ctx) => {
     const supabase = ctx.get("supabase")
     const { userId, passkeyId } = ctx.req.valid('json')
 
-    const result = await deleteUserPasskey(supabase, userId, passkeyId)
+    const resolved = await resolveManagementUser(supabase, ctx.req.header('Authorization'), userId)
+    if ('error' in resolved) {
+      return ctx.json({ error: resolved.error }, resolved.status)
+    }
+
+    const result = await deleteUserPasskey(supabase, resolved.userId, passkeyId)
 
     if (!result.success) {
       return ctx.json({ error: result.error || 'Failed to delete passkey' }, 400)
@@ -177,6 +249,22 @@ const updatePasskeyRoute = createRoute({
         }
       }
     },
+    401: {
+      description: 'Authentication required - a valid user session must be presented',
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema
+        }
+      }
+    },
+    403: {
+      description: 'The requested userId is not the authenticated user',
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema
+        }
+      }
+    },
     500: {
       description: 'Internal server error',
       content: {
@@ -193,9 +281,14 @@ management.openapi(updatePasskeyRoute, async (ctx) => {
     const supabase = ctx.get("supabase")
     const { userId, passkeyId, displayName } = ctx.req.valid('json')
 
+    const resolved = await resolveManagementUser(supabase, ctx.req.header('Authorization'), userId)
+    if ('error' in resolved) {
+      return ctx.json({ error: resolved.error }, resolved.status)
+    }
+
     const result = await updatePasskeyDisplayName(
       supabase,
-      userId,
+      resolved.userId,
       passkeyId,
       displayName
     )

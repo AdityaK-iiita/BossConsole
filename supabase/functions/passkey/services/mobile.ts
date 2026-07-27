@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { withErrorHandler } from "../utils/error-handler.ts"
+import { normalizeBase64Url } from "../utils/base64.ts"
 
 /**
  * Mobile Registration Service
@@ -118,7 +119,10 @@ export const generateMobileAuthenticationPage = withErrorHandler(
     const { data: passkey, error: passkeyError } = await supabase
       .from('user_passkeys')
       .select('*')
-      .eq('credential_id', credentialId)
+      // Canonicalised, like findPasskeyByCredentialId: credential ids are stored
+      // as unpadded base64url, so an exact match on a padded or standard-base64
+      // parameter would miss the row
+      .eq('credential_id', normalizeBase64Url(credentialId))
       .eq('user_id', userId)
       .eq('active', true)
       .single()

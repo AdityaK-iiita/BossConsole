@@ -12,107 +12,31 @@ import { generateRegistrationChallenge, completeRegistration } from "../services
 import { generateAuthChallenge, completeAuthentication } from "../services/auth.ts"
 import { encodeBase64Url } from "@std/encoding/base64url"
 import { jwtVerify } from "jose"
+import { createAssertion, createRegistrationCredential, TEST_RP_ID } from "./helpers/webauthn.ts"
 
 // Test JWT secret
 const TEST_JWT_SECRET = "test-secret-key-for-e2e-testing-only-minimum-32-characters-required-for-security"
 
+// Pin the relying party: SUPABASE_URL is not set in tests
+Deno.env.set('PASSKEY_RP_ID', TEST_RP_ID)
+
 /**
  * Helper to create a complete WebAuthn registration credential with real crypto
  */
-async function createRealRegistrationCredential(challenge: string, userId: string) {
-  // Generate a real ECDSA P-256 key pair
-  const keyPair = await crypto.subtle.generateKey(
-    { name: 'ECDSA', namedCurve: 'P-256' },
-    true,
-    ['sign', 'verify']
-  )
-
-  // Export the public key
-  const publicKeyBytes = new Uint8Array(await crypto.subtle.exportKey('raw', keyPair.publicKey))
-
-  // Extract x and y coordinates (skip first byte 0x04)
-  const x = publicKeyBytes.slice(1, 33)
-  const y = publicKeyBytes.slice(33, 65)
-
-  // Create COSE key (ES256)
-  const coseKey = createCOSEKey(x, y)
-
-  // Create authenticator data
-  const credentialId = crypto.getRandomValues(new Uint8Array(16))
-  const authData = createAuthenticatorData(credentialId, coseKey)
-
-  // Create attestation object
-  const attestationObject = createAttestationObject(authData)
-
-  // Create client data JSON
-  const clientDataJSON = {
-    type: 'webauthn.create',
-    challenge: challenge,
-    origin: 'https://api.risaboss.com'
-  }
-
-  return {
-    credential: {
-      id: encodeBase64Url(credentialId),
-      rawId: encodeBase64Url(credentialId),
-      type: 'public-key',
-      response: {
-        clientDataJSON: btoa(JSON.stringify(clientDataJSON)),
-        attestationObject: encodeBase64Url(attestationObject)
-      }
-    },
-    keyPair,
-    credentialId
-  }
+function createRealRegistrationCredential(challenge: string) {
+  return createRegistrationCredential({ challenge })
 }
 
 /**
  * Helper to create a real authentication credential with valid signature
  */
-async function createRealAuthenticationCredential(
+function createRealAuthenticationCredential(
   challenge: string,
   credentialId: Uint8Array,
-  privateKey: CryptoKey
+  privateKey: CryptoKey,
+  signCount = 1
 ) {
-  // Create authenticator data (minimal)
-  const rpIdHash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('api.risaboss.com'))
-  const flags = new Uint8Array([0x05]) // User present + User verified
-  const signCount = new Uint8Array([0x00, 0x00, 0x00, 0x01])
-  const authenticatorData = new Uint8Array([...new Uint8Array(rpIdHash), ...flags, ...signCount])
-
-  // Create client data JSON
-  const clientDataJSON = {
-    type: 'webauthn.get',
-    challenge: challenge,
-    origin: 'https://api.risaboss.com'
-  }
-  const clientDataJSONString = JSON.stringify(clientDataJSON)
-
-  // Create data to sign
-  const clientDataHash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(clientDataJSONString))
-  const signedData = new Uint8Array([...authenticatorData, ...new Uint8Array(clientDataHash)])
-
-  // Sign the data
-  const rawSignature = await crypto.subtle.sign(
-    { name: 'ECDSA', hash: 'SHA-256' },
-    privateKey,
-    signedData
-  )
-
-  // Convert to DER format
-  const signature = convertRawToDERSignature(new Uint8Array(rawSignature))
-
-  return {
-    id: encodeBase64Url(credentialId),
-    rawId: encodeBase64Url(credentialId),
-    type: 'public-key',
-    response: {
-      clientDataJSON: btoa(clientDataJSONString),
-      authenticatorData: encodeBase64Url(authenticatorData),
-      signature: encodeBase64Url(signature),
-      userHandle: 'user-e2e-test'
-    }
-  }
+  return createAssertion({ challenge, credentialId, privateKey, signCount })
 }
 
 /**
@@ -125,6 +49,7 @@ Deno.test("E2E - Complete registration and authentication flow with real crypto"
 
   // Set JWT_SECRET for token generation
   Deno.env.set('JWT_SECRET', TEST_JWT_SECRET)
+  mockClient.mockAuthUser(testEmail, testUserId)
 
   // STEP 1: Generate registration challenge
   console.log("📝 Step 1: Generating registration challenge")
@@ -149,8 +74,7 @@ Deno.test("E2E - Complete registration and authentication flow with real crypto"
   console.log("🔐 Step 2: Completing registration with real credential")
 
   const { credential: regCredential, keyPair, credentialId } = await createRealRegistrationCredential(
-    registrationChallenge,
-    testUserId
+    registrationChallenge
   )
 
   // Mock challenge verification
@@ -190,10 +114,9 @@ Deno.test("E2E - Complete registration and authentication flow with real crypto"
 
   const regCompleteResult = await completeRegistration(
     mockClient as unknown as SupabaseClient,
-    testUserId,
     regCredential,
     registrationChallenge,
-    'E2E Test Passkey'
+    { claimedUserId: testUserId, displayName: 'E2E Test Passkey' }
   )
 
   assertEquals(regCompleteResult.success, true)
@@ -316,25 +239,37 @@ Deno.test("E2E - Complete registration and authentication flow with real crypto"
   assertEquals(authCompleteResult.success, true, "Authentication should succeed")
   console.log("✅ Authentication completed successfully")
 
-  // STEP 5: Verify JWT tokens
+  // STEP 5: Verify the JWT parked for the polling desktop
   console.log("🎫 Step 5: Verifying JWT tokens")
 
-  if (authCompleteResult.success) {
-    const result = authCompleteResult as {
-      userId: string
-      email: string
-      accessToken?: string
-      refreshToken?: string
-      expiresAt?: number
+  {
+    // This is the cross-device path (the challenge carries a session_id), so the
+    // session is written to completed_authentications for the desktop to claim
+    // via /auth/status — it is deliberately not returned to the device that ran
+    // the ceremony.
+    const completion = mockClient.getQueryHistory().find(
+      entry => entry.table === 'completed_authentications' && entry.operation === 'insert'
+    )
+    assertExists(completion, "The completion row should be written")
+    const parked = completion!.params.data as {
+      access_token?: string
+      refresh_token?: string
+      expires_at?: number
     }
 
-    assertExists(result.accessToken, "Access token should be present")
-    assertExists(result.refreshToken, "Refresh token should be present")
-    assertExists(result.expiresAt, "expiresAt should be present")
+    assertExists(parked.access_token, "Access token should be parked for the poller")
+    assertExists(parked.refresh_token, "Refresh token should be parked for the poller")
+    assertExists(parked.expires_at, "expires_at should be parked for the poller")
+
+    assertEquals(
+      (authCompleteResult as { accessToken?: string }).accessToken,
+      undefined,
+      "The ceremony device must not receive the desktop's session"
+    )
 
     // Verify access token structure
     const secret = new TextEncoder().encode(TEST_JWT_SECRET)
-    const { payload } = await jwtVerify(result.accessToken!, secret, {
+    const { payload } = await jwtVerify(parked.access_token!, secret, {
       issuer: 'supabase',
       audience: 'authenticated'
     })
@@ -467,98 +402,3 @@ Deno.test("E2E - Should prevent replay attacks by rejecting reused challenges", 
 
   console.log("✅ Replay attack prevention verified")
 })
-
-// ===== Helper Functions =====
-
-function createCOSEKey(x: Uint8Array, y: Uint8Array): Uint8Array {
-  const coseKeyMap: number[] = [
-    0xA5, // map(5)
-    0x01, 0x02, // kty: EC2 (1: 2)
-    0x03, 0x26, // alg: ES256 (3: -7)
-    0x20, 0x01, // crv: P-256 (-1: 1)
-    0x21, 0x58, 0x20, // x coordinate (-2: bytes(32))
-    ...Array.from(x),
-    0x22, 0x58, 0x20, // y coordinate (-3: bytes(32))
-    ...Array.from(y)
-  ]
-  return new Uint8Array(coseKeyMap)
-}
-
-function createAuthenticatorData(credentialId: Uint8Array, coseKey: Uint8Array): Uint8Array {
-  const rpIdHash = new Uint8Array(32).fill(0x00)
-  const flags = new Uint8Array([0x45]) // UP + UV + AT
-  const signCount = new Uint8Array([0x00, 0x00, 0x00, 0x00])
-  const aaguid = new Uint8Array(16).fill(0x00)
-  const credentialIdLength = new Uint8Array([
-    (credentialId.length >> 8) & 0xFF,
-    credentialId.length & 0xFF
-  ])
-
-  return new Uint8Array([
-    ...rpIdHash,
-    ...flags,
-    ...signCount,
-    ...aaguid,
-    ...credentialIdLength,
-    ...credentialId,
-    ...coseKey
-  ])
-}
-
-function createAttestationObject(authData: Uint8Array): Uint8Array {
-  // Simplified attestation object: {authData: bytes}
-  const attestationCBOR: number[] = [
-    0xA1, // map(1)
-    0x68, // text string, length 8
-    ...Array.from(new TextEncoder().encode("authData")), // "authData" in UTF-8
-  ]
-
-  // Encode authData as CBOR byte string
-  if (authData.length <= 23) {
-    attestationCBOR.push(0x40 | authData.length)
-  } else if (authData.length <= 255) {
-    attestationCBOR.push(0x58, authData.length)
-  } else {
-    attestationCBOR.push(0x59, (authData.length >> 8) & 0xFF, authData.length & 0xFF)
-  }
-
-  attestationCBOR.push(...Array.from(authData))
-  return new Uint8Array(attestationCBOR)
-}
-
-function convertRawToDERSignature(rawSignature: Uint8Array): Uint8Array {
-  const r = rawSignature.slice(0, 32)
-  const s = rawSignature.slice(32, 64)
-
-  let rStart = 0
-  while (rStart < r.length - 1 && r[rStart] === 0) rStart++
-  const rBytes = r.slice(rStart)
-
-  let sStart = 0
-  while (sStart < s.length - 1 && s[sStart] === 0) sStart++
-  const sBytes = s.slice(sStart)
-
-  const rNeedsPadding = (rBytes[0] & 0x80) !== 0
-  const sNeedsPadding = (sBytes[0] & 0x80) !== 0
-
-  const rLength = rBytes.length + (rNeedsPadding ? 1 : 0)
-  const sLength = sBytes.length + (sNeedsPadding ? 1 : 0)
-
-  const totalLength = 2 + rLength + 2 + sLength
-  const der = new Uint8Array(2 + totalLength)
-
-  let offset = 0
-  der[offset++] = 0x30
-  der[offset++] = totalLength
-  der[offset++] = 0x02
-  der[offset++] = rLength
-  if (rNeedsPadding) der[offset++] = 0x00
-  der.set(rBytes, offset)
-  offset += rBytes.length
-  der[offset++] = 0x02
-  der[offset++] = sLength
-  if (sNeedsPadding) der[offset++] = 0x00
-  der.set(sBytes, offset)
-
-  return der
-}

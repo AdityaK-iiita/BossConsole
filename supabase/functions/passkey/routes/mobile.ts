@@ -2,6 +2,16 @@ import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi"
 import type { PasskeyContext } from "../types/context.ts"
 import { getMobileRegistrationHTML, getMobileAuthenticationHTML, getMobileErrorHTML } from "../utils/html.ts"
 import { generateMobileRegistrationPage, generateMobileAuthenticationPage } from "../services/mobile.ts"
+import { getAllowedRpIds } from "../utils/config.ts"
+
+/**
+ * The rpId query parameter decides what the credential is pinned to, so it
+ * cannot be free text. An rpId outside the allow-list would either fail in the
+ * browser or, worse, mint a credential nothing can later authenticate against.
+ */
+function isAllowedRpId(rpId: string): boolean {
+  return getAllowedRpIds().includes(rpId)
+}
 
 const mobile = new OpenAPIHono<{ Variables: PasskeyContext }>()
 
@@ -59,6 +69,11 @@ mobile.openapi(registerMobileRoute, async (ctx) => {
 
     if (!challenge || !email || !sessionId) {
       return ctx.html(getMobileErrorHTML('Missing required parameters: challenge, email, sessionId'), 400)
+    }
+
+    if (!isAllowedRpId(rpId)) {
+      console.error('❌ Mobile registration requested an rpId outside the allow-list')
+      return ctx.html(getMobileErrorHTML('Unsupported relying party for this deployment'), 400)
     }
 
     // Generate mobile registration page using service layer
@@ -152,6 +167,11 @@ mobile.openapi(authMobileRoute, async (ctx) => {
 
     if (!challenge || !email || !sessionId || !credentialId) {
       return ctx.html(getMobileErrorHTML('Missing required parameters for mobile authentication'), 400)
+    }
+
+    if (!isAllowedRpId(rpId)) {
+      console.error('❌ Mobile authentication requested an rpId outside the allow-list')
+      return ctx.html(getMobileErrorHTML('Unsupported relying party for this deployment'), 400)
     }
 
     // Generate mobile authentication page using service layer

@@ -2,9 +2,11 @@ import { createRoute, OpenAPIHono } from "@hono/zod-openapi"
 import type { PasskeyContext } from "../types/context.ts"
 import {
   generateRegistrationChallenge,
-  completeRegistration,
-  ALLOWED_ORIGINS
+  completeRegistration
 } from "../services/registration.ts"
+import { getAllowedOrigins } from "../utils/config.ts"
+import { parseClientDataJSON } from "../utils/webauthn.ts"
+import { requireAuthenticatedCaller, resolveOptionalCaller } from "../utils/authorization.ts"
 import {
   RegisterChallengeRequestSchema,
   RegisterChallengeResponseSchema,
@@ -24,7 +26,7 @@ const registerChallengeRoute = createRoute({
   path: '/challenge',
   tags: ['Registration'],
   summary: 'Generate WebAuthn registration challenge',
-  description: 'Generates a challenge for registering a new passkey',
+  description: 'Generates a challenge for registering a new passkey. Requires a signed-in caller: the challenge is bound to the authenticated user, not to a userId in the request body.',
   request: {
     body: {
       content: {
@@ -51,6 +53,22 @@ const registerChallengeRoute = createRoute({
         }
       }
     },
+    401: {
+      description: 'Authentication required - a valid user session must be presented',
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema
+        }
+      }
+    },
+    403: {
+      description: 'The requested userId is not the authenticated user',
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema
+        }
+      }
+    },
     500: {
       description: 'Internal server error',
       content: {
@@ -67,7 +85,23 @@ register.openapi(registerChallengeRoute, async (ctx) => {
     const supabase = ctx.get("supabase")
     const { userId, sessionId } = ctx.req.valid('json')
 
-    const result = await generateRegistrationChallenge(supabase, userId, sessionId)
+    // Enrolling a passkey grants a permanent way into an account, so the caller
+    // has to prove they own it. Everything downstream — the challenge row, and
+    // therefore the credential — is bound to *this* identity, never to the
+    // userId in the body.
+    const caller = await requireAuthenticatedCaller(supabase, ctx.req.header('Authorization'))
+    if (!caller.success || !caller.caller) {
+      return ctx.json({ error: caller.error || 'Authentication required' }, caller.status ?? 401)
+    }
+
+    // A body userId is still accepted for compatibility, but it may only confirm
+    // who the token already says this is.
+    if (userId && userId !== caller.caller.userId) {
+      console.error('❌ register/challenge body userId does not match the authenticated caller')
+      return ctx.json({ error: 'userId does not match the authenticated user' }, 403)
+    }
+
+    const result = await generateRegistrationChallenge(supabase, caller.caller.userId, sessionId)
 
     if (!result.success) {
       return ctx.json({ error: result.error || 'Failed to generate challenge' }, 400)
@@ -88,7 +122,7 @@ const registerCompleteRoute = createRoute({
   path: '/complete',
   tags: ['Registration'],
   summary: 'Complete WebAuthn registration',
-  description: 'Completes the registration ceremony by storing the new passkey',
+  description: 'Completes the registration ceremony by storing the new passkey. The enrolling user is taken from the challenge issued at /register/challenge; a bearer token, if presented, must match it.',
   request: {
     body: {
       content: {
@@ -109,6 +143,14 @@ const registerCompleteRoute = createRoute({
     },
     400: {
       description: 'Bad request or registration failed',
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema
+        }
+      }
+    },
+    401: {
+      description: 'A session was presented but is invalid or expired',
       content: {
         'application/json': {
           schema: ErrorResponseSchema
@@ -139,19 +181,34 @@ register.openapi(registerCompleteRoute, async (ctx) => {
     const supabase = ctx.get("supabase")
     const { userId, credential, challenge, displayName } = ctx.req.valid('json')
 
-    // Parse and validate origin
-    const clientData = JSON.parse(atob(credential.response.clientDataJSON))
-    if (!ALLOWED_ORIGINS.includes(clientData.origin)) {
+    // Parse and validate origin (base64url-tolerant; see utils/base64.ts).
+    // A payload we cannot decode is a bad request, not a server fault.
+    let clientData
+    try {
+      clientData = parseClientDataJSON(credential.response.clientDataJSON).data
+    } catch (error) {
+      console.error('❌ Malformed clientDataJSON on register/complete:', (error as Error).message)
+      return ctx.json({ error: 'Invalid clientDataJSON' }, 400)
+    }
+
+    if (!getAllowedOrigins().includes(clientData.origin)) {
       return ctx.json({ error: 'Invalid origin' }, 403)
     }
 
-    const result = await completeRegistration(
-      supabase,
-      userId,
-      credential,
-      challenge,
+    // The enrolling user comes from the challenge row, which can only be created
+    // by an authenticated caller (see /register/challenge above). A bearer token
+    // is honoured when the transport can carry one — the cross-device page runs
+    // in a phone browser and cannot — and then has to agree with that row.
+    const caller = await resolveOptionalCaller(supabase, ctx.req.header('Authorization'))
+    if (!caller.success) {
+      return ctx.json({ error: caller.error || 'Invalid or expired session' }, caller.status ?? 401)
+    }
+
+    const result = await completeRegistration(supabase, credential, challenge, {
+      claimedUserId: userId,
+      authenticatedUserId: caller.caller?.userId,
       displayName
-    )
+    })
 
     if (!result.success) {
       return ctx.json({ error: result.error || 'Registration failed' }, 400)

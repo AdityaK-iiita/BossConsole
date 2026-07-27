@@ -5,6 +5,7 @@ import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import ai.rever.boss.utils.logging.LogSanitizer
 import io.ktor.client.statement.*
+import io.ktor.http.HttpStatusCode
 
 /**
  * Handles passkey registration flow operations
@@ -36,6 +37,16 @@ internal object PasskeyRegistrationHandler {
 
             // Call Edge Function for registration challenge
             val response = SupabaseApiClient.invokeRegistrationChallenge(requestData)
+
+            // Enrolling a passkey requires a live session. A 401 here means the
+            // session could not be presented or refreshed, which is a "sign in
+            // again" for the user rather than a passkey failure.
+            if (response.status == HttpStatusCode.Unauthorized) {
+                logger.warn(LogCategory.PASSKEY, "Registration challenge rejected: no valid session")
+                return Result.failure(
+                    IllegalStateException("Your session has expired. Please sign in again to add a passkey."),
+                )
+            }
 
             val responseText = response.bodyAsText()
             val parsedChallenge =

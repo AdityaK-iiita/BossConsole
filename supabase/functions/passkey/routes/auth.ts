@@ -3,9 +3,10 @@ import type { PasskeyContext } from "../types/context.ts"
 import {
   generateAuthChallenge,
   completeAuthentication,
-  checkAuthStatus,
-  ALLOWED_ORIGINS
+  checkAuthStatus
 } from "../services/auth.ts"
+import { getAllowedOrigins } from "../utils/config.ts"
+import { parseClientDataJSON } from "../utils/webauthn.ts"
 import {
   AuthChallengeRequestSchema,
   AuthChallengeResponseSchema,
@@ -141,9 +142,17 @@ auth.openapi(authCompleteRoute, async (ctx) => {
     const supabase = ctx.get("supabase")
     const { credential, challenge } = ctx.req.valid('json')
 
-    // Parse and validate origin
-    const clientData = JSON.parse(atob(credential.response.clientDataJSON))
-    if (!ALLOWED_ORIGINS.includes(clientData.origin)) {
+    // Parse and validate origin (base64url-tolerant; see utils/base64.ts).
+    // A payload we cannot decode is a bad request, not a server fault.
+    let clientData
+    try {
+      clientData = parseClientDataJSON(credential.response.clientDataJSON).data
+    } catch (error) {
+      console.error('❌ Malformed clientDataJSON on auth/complete:', (error as Error).message)
+      return ctx.json({ error: 'Invalid clientDataJSON' }, 400)
+    }
+
+    if (!getAllowedOrigins().includes(clientData.origin)) {
       return ctx.json({ error: 'Invalid origin' }, 403)
     }
 

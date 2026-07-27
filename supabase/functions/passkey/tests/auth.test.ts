@@ -6,6 +6,10 @@ import { assertEquals, assertExists } from "jsr:@std/assert"
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { generateAuthChallenge, completeAuthentication, checkAuthStatus } from "../services/auth.ts"
 import { createMockSupabaseClient, mockPasskey, mockChallenge, mockAuthenticationCredential } from "./helpers/mocks.ts"
+import { buildAuthenticatorData, encodePayload, TEST_RP_ID } from "./helpers/webauthn.ts"
+
+// Pin the relying party: SUPABASE_URL is not set in tests
+Deno.env.set('PASSKEY_RP_ID', TEST_RP_ID)
 
 Deno.test("generateAuthChallenge - should generate challenge for existing user", async () => {
   const mockClient = createMockSupabaseClient()
@@ -152,13 +156,19 @@ Deno.test("completeAuthentication - should properly decode base64 clientDataJSON
   // Base64 encode the client data (as it comes from the browser)
   const clientDataJSONBase64 = btoa(JSON.stringify(clientData))
 
+  // Well-formed authenticator data for our RP, so the ceremony reaches the
+  // signature check rather than failing earlier on structure
+  const authenticatorData = encodePayload(
+    await buildAuthenticatorData({ rpId: TEST_RP_ID, signCount: 1 })
+  )
+
   const testCredential = {
     id: 'credential-test',
     rawId: 'credential-test-raw',
     type: 'public-key',
     response: {
       clientDataJSON: clientDataJSONBase64, // Base64 encoded
-      authenticatorData: 'dGVzdC1hdXRoZW50aWNhdG9yLWRhdGE', // base64url encoded test data
+      authenticatorData,
       signature: 'dGVzdC1zaWduYXR1cmU', // base64url encoded test signature
       userHandle: 'user-456'
     }

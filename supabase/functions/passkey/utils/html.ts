@@ -313,6 +313,9 @@ const REGISTRATION_TEMPLATE = `<!DOCTYPE html>
                         name: email,
                         displayName: email
                     },
+                    // Both algorithms are verified server side (utils/crypto.ts):
+                    // ES256 as a raw EC point, RS256 as SPKI. Do not advertise an
+                    // algorithm the verification path cannot handle.
                     pubKeyCredParams: [
                         { alg: -7, type: "public-key" },
                         { alg: -257, type: "public-key" }

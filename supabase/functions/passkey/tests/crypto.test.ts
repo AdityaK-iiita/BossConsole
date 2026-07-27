@@ -100,11 +100,11 @@ function createTestAttestationObject(): Uint8Array {
   return new Uint8Array(attestationCBOR)
 }
 
-Deno.test("extractPublicKeyFromAttestation - should extract public key from valid attestation", () => {
+Deno.test("extractPublicKeyFromAttestation - should extract public key from valid attestation", async () => {
   const attestationObject = createTestAttestationObject()
   const attestationBase64 = encodeBase64Url(attestationObject)
 
-  const publicKeyBase64 = extractPublicKeyFromAttestation(attestationBase64)
+  const publicKeyBase64 = await extractPublicKeyFromAttestation(attestationBase64)
 
   assertExists(publicKeyBase64)
   assertEquals(publicKeyBase64.length > 0, true)
@@ -114,23 +114,23 @@ Deno.test("extractPublicKeyFromAttestation - should extract public key from vali
   assertEquals(decoded.length, 65) // Uncompressed EC key is 65 bytes (0x04 + 32 + 32)
 })
 
-Deno.test("extractPublicKeyFromAttestation - should reject invalid base64", () => {
+Deno.test("extractPublicKeyFromAttestation - should reject invalid base64", async () => {
   let errorThrown = false
   try {
-    extractPublicKeyFromAttestation("not-valid-base64!!!")
+    await extractPublicKeyFromAttestation("not-valid-base64!!!")
   } catch (_error) {
     errorThrown = true
   }
   assertEquals(errorThrown, true)
 })
 
-Deno.test("extractPublicKeyFromAttestation - should reject malformed CBOR", () => {
+Deno.test("extractPublicKeyFromAttestation - should reject malformed CBOR", async () => {
   const invalidCBOR = new Uint8Array([0xFF, 0xFF, 0xFF])
   const invalidBase64 = encodeBase64Url(invalidCBOR)
 
   let errorThrown = false
   try {
-    extractPublicKeyFromAttestation(invalidBase64)
+    await extractPublicKeyFromAttestation(invalidBase64)
   } catch (_error) {
     errorThrown = true
   }

@@ -88,13 +88,20 @@ export const AuthStatusResponseSchema = z.object({
 // ============================================================================
 
 export const RegisterChallengeRequestSchema = z.object({
-  userId: z.string(),
+  // Optional, and never authoritative: the challenge is bound to the
+  // authenticated caller. Sending it asks the server to confirm the caller is
+  // who the client thinks they are — a mismatch is rejected with 403.
+  userId: z.string().optional(),
   sessionId: z.string().optional() // For cross-device registration polling
 })
 
 export const RegisterChallengeResponseSchema = z.object({
   success: z.boolean(),
   challenge: z.string().optional(),
+  // Server-chosen relying party for this ceremony. The client passes it to
+  // /register/mobile so registration and authentication cannot pin different
+  // relying parties.
+  rpId: z.string().optional(),
   rp: z.object({
     name: z.string(),
     id: z.string()
@@ -120,7 +127,10 @@ export const RegisterChallengeResponseSchema = z.object({
 })
 
 export const RegisterCompleteRequestSchema = z.object({
-  userId: z.string(),
+  // Optional, and never authoritative: the enrolling user comes from the
+  // challenge issued at /register/challenge. A value that disagrees with it is
+  // rejected rather than used.
+  userId: z.string().optional(),
   credential: RegistrationCredentialSchema,
   challenge: z.string(),
   displayName: z.string().optional()
@@ -136,8 +146,10 @@ export const RegisterCompleteResponseSchema = z.object({
 // Management Route Schemas
 // ============================================================================
 
+// userId is optional throughout /manage: the account is the authenticated
+// caller, and a value that disagrees with the session is rejected with 403.
 export const ManagementListRequestSchema = z.object({
-  userId: z.string()
+  userId: z.string().optional()
 })
 
 export const PasskeySchema = z.object({
@@ -156,7 +168,7 @@ export const ManagementListResponseSchema = z.object({
 })
 
 export const ManagementDeleteRequestSchema = z.object({
-  userId: z.string(),
+  userId: z.string().optional(),
   passkeyId: z.string()
 })
 
@@ -166,7 +178,7 @@ export const ManagementDeleteResponseSchema = z.object({
 })
 
 export const ManagementUpdateRequestSchema = z.object({
-  userId: z.string(),
+  userId: z.string().optional(),
   passkeyId: z.string(),
   displayName: z.string()
 })

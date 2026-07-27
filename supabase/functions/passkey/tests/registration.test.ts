@@ -21,19 +21,14 @@ Deno.test("generateRegistrationChallenge - should generate challenge for user", 
   assertEquals(result.success, true)
   if (result.success) {
     assertExists(result.challenge)
-    assertEquals(result.rp.name, 'BOSS')
-    assertEquals(result.rp.id, 'api.risaboss.com')
-    assertEquals(result.user.id, 'user-456')
-    assertEquals(result.timeout, 60000)
-    assertEquals(result.attestation, 'none')
-    assertExists(result.authenticatorSelection)
-    assertEquals(result.authenticatorSelection.authenticatorAttachment, 'platform')
-    assertEquals(result.authenticatorSelection.userVerification, 'preferred')
-    assertEquals(result.authenticatorSelection.requireResidentKey, false)
+    // rpId is deliberately NOT returned here: only the client knows the domain
+    // the browser will run the ceremony on (see the service for the rationale)
+    assertEquals((result as { rp?: unknown }).rp, undefined)
+    assertEquals(result.sessionId, undefined)
   }
 })
 
-Deno.test("generateRegistrationChallenge - should include ES256 algorithm", async () => {
+Deno.test("generateRegistrationChallenge - should advertise only verifiable algorithms", async () => {
   const mockClient = createMockSupabaseClient()
 
   // Mock insert operation
@@ -47,9 +42,12 @@ Deno.test("generateRegistrationChallenge - should include ES256 algorithm", asyn
   assertEquals(result.success, true)
   if (result.success) {
     assertExists(result.pubKeyCredParams)
-    assertEquals(result.pubKeyCredParams.length, 1)
-    assertEquals(result.pubKeyCredParams[0].type, 'public-key')
-    assertEquals(result.pubKeyCredParams[0].alg, -7) // ES256
+    // Both advertised algorithms must be verifiable at /register/complete:
+    // ES256 (-7) and RS256 (-257)
+    assertEquals(result.pubKeyCredParams.map(param => param.alg), [-7, -257])
+    for (const param of result.pubKeyCredParams) {
+      assertEquals(param.type, 'public-key')
+    }
   }
 })
 
@@ -74,7 +72,6 @@ Deno.test("generateRegistrationChallenge - should accept and return sessionId fo
     // Should return the sessionId for cross-device polling
     assertEquals(result.sessionId, sessionId)
     assertExists(result.challenge)
-    assertEquals(result.user.id, 'user-456')
   }
 })
 
@@ -138,10 +135,9 @@ Deno.test("completeRegistration - should reject invalid ceremony type", async ()
 
   const result = await completeRegistration(
     mockClient as unknown as SupabaseClient,
-    'user-456',
     invalidCredential as RegistrationCredential,
     'mock-challenge-base64',
-    'My Passkey'
+    { claimedUserId: 'user-456', displayName: 'My Passkey' }
   )
 
   assertEquals(result.success, false)
@@ -169,10 +165,9 @@ Deno.test("completeRegistration - should verify and consume challenge", async ()
   // In real tests, you'd need to mock extractPublicKeyFromAttestation
   const result = await completeRegistration(
     mockClient as unknown as SupabaseClient,
-    'user-456',
     mockRegistrationCredential as RegistrationCredential,
     'mock-challenge-base64',
-    'My New Passkey'
+    { claimedUserId: 'user-456', displayName: 'My New Passkey' }
   )
 
   console.log('completeRegistration result:', result)
@@ -198,9 +193,9 @@ Deno.test("completeRegistration - should use default display name if not provide
   // Note: Will fail due to crypto, but tests the display_name logic
   const result = await completeRegistration(
     mockClient as unknown as SupabaseClient,
-    'user-456',
     mockRegistrationCredential as RegistrationCredential,
-    'mock-challenge-base64'
+    'mock-challenge-base64',
+    { claimedUserId: 'user-456' }
     // No displayName provided
   )
 
@@ -219,10 +214,9 @@ Deno.test("completeRegistration - should handle invalid challenge", async () => 
 
   const result = await completeRegistration(
     mockClient as unknown as SupabaseClient,
-    'user-456',
     mockRegistrationCredential as RegistrationCredential,
     'invalid-challenge',
-    'My Passkey'
+    { claimedUserId: 'user-456', displayName: 'My Passkey' }
   )
 
   assertEquals(result.success, false)
@@ -248,10 +242,9 @@ Deno.test("completeRegistration - should store credential with correct fields", 
 
   const result = await completeRegistration(
     mockClient as unknown as SupabaseClient,
-    'user-456',
     mockRegistrationCredential as RegistrationCredential,
     'mock-challenge-base64',
-    'Test Device'
+    { claimedUserId: 'user-456', displayName: 'Test Device' }
   )
 
   // In a complete test, you'd verify the insert call included:

@@ -83,11 +83,14 @@ export function withErrorHandler<TArgs extends unknown[], TResult extends Servic
   errorMessage: string,
   logPrefix = '❌'
 ): (...args: TArgs) => Promise<TResult | { success: false; error: string }> {
+  // The caller-supplied message is what the client sees. Exception text can
+  // carry parser internals ("expected at least 37 bytes, got 12"), which is
+  // detail for the log, not for a response.
   return withGenericErrorHandler(
     fn,
-    (error) => ({
+    () => ({
       success: false,
-      error: error.message || errorMessage
+      error: errorMessage
     }),
     `${logPrefix} ${errorMessage}`
   )
@@ -119,9 +122,9 @@ export function withStatusErrorHandler<TArgs extends unknown[], TResult>(
 ): (...args: TArgs) => Promise<TResult | { status: 'error'; message: string }> {
   return withGenericErrorHandler(
     fn,
-    (error) => ({
+    () => ({
       status: 'error' as const,
-      message: error.message
+      message: errorMessage
     }),
     `${logPrefix} ${errorMessage}`
   )
