@@ -7,6 +7,7 @@ import ai.rever.boss.utils.logging.LogCategory
 import ai.rever.boss.utils.logging.LogSanitizer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -104,9 +105,40 @@ internal fun entriesToEvict(
     }
 }
 
+/**
+ * How strongly an entry should be suggested: visits dominate, recency breaks ties.
+ *
+ * The previous expression — `visitCount * 1000 + lastVisited / 1_000_000` — was effectively
+ * pure recency, because the recency term is around 1.75e6 at current epoch milliseconds, so
+ * a site needed roughly 1750 visits before its count moved it at all. Bounding recency to a
+ * 0..100 decay over a few days restores what the comment always claimed. Matches
+ * `RecentBrowserPagesManager.getSuggestions`, so the dashboard and the URL bar order the
+ * same history the same way.
+ */
+internal fun rankOf(
+    entry: UrlHistoryEntry,
+    now: Long,
+): Double {
+    val hoursAgo = (now - entry.lastVisited) / (1000.0 * 60 * 60)
+    val recencyScore = maxOf(0.0, 100 - hoursAgo)
+    return (entry.visitCount * 1000.0) + recencyScore
+}
+
 object UrlHistoryManager {
     private val logger = BossLogger.forComponent("UrlHistoryManager")
-    private val historyFile = BossDirectories.resolve("browser-history.json")
+
+    /** Overridable so tests exercise the real read/write path without touching `~/.boss`. */
+    internal var historyFile: File = BossDirectories.resolve("browser-history.json")
+
+    /**
+     * Keyed by [distinctPageKey], not by the raw URL.
+     *
+     * Two spellings of one page — `https://x.com` as typed, `https://www.x.com/` as
+     * committed — used to occupy two slots and show up as two suggestions until a restart
+     * merged them. Keying by page identity means the second recording finds the first, so
+     * [mergeDuplicateHistoryEntries] is a one-time migration for old files rather than a
+     * repair that has to run on every load.
+     */
     private val history = ConcurrentHashMap<String, UrlHistoryEntry>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -117,6 +149,14 @@ object UrlHistoryManager {
      * reports as "no history" and silently starts empty.
      */
     private val saveLock = Mutex()
+
+    /**
+     * The most recent background write, so a caller that needs the file to be current can
+     * wait for it. Deletions and evictions persist without blocking the caller, which
+     * leaves no other way to know when the bytes have landed.
+     */
+    @Volatile
+    private var pendingWrite: Job? = null
     private val json =
         Json {
             prettyPrint = true
@@ -127,39 +167,63 @@ object UrlHistoryManager {
         loadHistory()
     }
 
-    private fun loadHistory() {
+    internal fun loadHistory() {
         try {
-            if (historyFile.exists()) {
-                val content = historyFile.readText()
-                if (content.isNotEmpty()) {
-                    val entries = json.decodeFromString<List<UrlHistoryEntry>>(content)
-                    mergeDuplicateHistoryEntries(entries).forEach { entry ->
-                        history[entry.url] = entry
-                    }
-                }
+            history.clear()
+            val content = if (historyFile.exists()) historyFile.readText() else ""
+            if (content.isEmpty()) return
+
+            val entries = json.decodeFromString<List<UrlHistoryEntry>>(content)
+            mergeDuplicateHistoryEntries(entries).forEach { entry ->
+                // Recompute the domain rather than trusting the stored one: files written
+                // before host normalization was shared carry a `www.` that keeps the entry
+                // out of the domain-prefix bucket when ranking.
+                val domain = suggestableHost(entry.url) ?: entry.domain
+                history[distinctPageKey(entry.url)] = entry.copy(domain = domain)
             }
         } catch (e: Exception) {
             logger.warn(LogCategory.BROWSER, "Failed to load browser history", error = e)
         }
     }
 
-    suspend fun saveHistory() =
-        withContext(Dispatchers.IO) {
-            saveLock.withLock {
-                try {
-                    val entries =
-                        history.values
-                            .toList()
-                            .sortedByDescending { it.visitCount * 1000 + (it.lastVisited / 1000000) }
-                            .take(1000) // Keep only top 1000 entries
-                    // Atomic: a crash or a concurrent writer leaves the previous file
-                    // intact rather than a half-written one.
-                    historyFile.atomicWriteText(json.encodeToString(entries))
-                } catch (e: Exception) {
-                    logger.warn(LogCategory.BROWSER, "Failed to save browser history", error = e)
-                }
+    suspend fun saveHistory() = writeTo(historyFile, entriesToPersist())
+
+    /**
+     * The entries a save would write: best first, capped.
+     *
+     * Snapshotted by the caller rather than read inside the write, so what lands on disk
+     * is the history as it stood when the save was asked for.
+     */
+    private fun entriesToPersist(): List<UrlHistoryEntry> {
+        val now = System.currentTimeMillis()
+        return history.values
+            .toList()
+            .sortedByDescending { rankOf(it, now) }
+            .take(1000) // Keep only top 1000 entries
+    }
+
+    /**
+     * Write [entries] to [target].
+     *
+     * Both are parameters, never fields read here: a background save that resolved its
+     * destination at execution time would follow [historyFile] if it changed in between,
+     * which is how a test pointing the store at a scratch file wrote an empty history over
+     * the real one.
+     */
+    private suspend fun writeTo(
+        target: File,
+        entries: List<UrlHistoryEntry>,
+    ) = withContext(Dispatchers.IO) {
+        saveLock.withLock {
+            try {
+                // Atomic: a crash or a concurrent writer leaves the previous file intact
+                // rather than a half-written one.
+                target.atomicWriteText(json.encodeToString(entries))
+            } catch (e: Exception) {
+                logger.warn(LogCategory.BROWSER, "Failed to save browser history", error = e)
             }
         }
+    }
 
     fun addUrl(
         url: String,
@@ -170,12 +234,17 @@ object UrlHistoryManager {
         val domain = suggestableHost(url) ?: return
         if (NavigationOutcomeTracker.didFail(url)) return
 
-        val existing = history[url]
+        val key = distinctPageKey(url)
+        val existing = history[key]
 
-        history[url] =
+        history[key] =
             if (existing != null) {
                 existing.copy(
+                    // Keep the URL the browser committed over one a caller typed: it is
+                    // the spelling we will navigate back to.
+                    url = if (url.startsWith("https", ignoreCase = true)) url else existing.url,
                     title = title.ifBlank { existing.title },
+                    domain = domain,
                     visitCount = existing.visitCount + 1,
                     lastVisited = System.currentTimeMillis(),
                 )
@@ -197,6 +266,7 @@ object UrlHistoryManager {
         if (query.isBlank()) return emptyList()
 
         val lowerQuery = query.lowercase()
+        val now = System.currentTimeMillis()
 
         return history.values
             .filter { entry ->
@@ -207,15 +277,12 @@ object UrlHistoryManager {
                 compareBy(
                     // Prioritize domain starts with query
                     { !it.domain.startsWith(lowerQuery) },
-                    // Then URL starts with query
-                    {
-                        !it.url
-                            .removePrefix("https://")
-                            .removePrefix("http://")
-                            .startsWith(lowerQuery)
-                    },
-                    // Then by visit count and recency
-                    { -(it.visitCount * 1000 + (it.lastVisited / 1000000)) },
+                    // Then URL starts with query. Matched against the canonical form —
+                    // no scheme, no `www.` — so a stored `www.` doesn't sink an entry the
+                    // user is plainly typing towards.
+                    { !canonicalUrlKey(it.url).startsWith(lowerQuery) },
+                    // Then by visit count, with recency breaking ties
+                    { -rankOf(it, now) },
                 ),
             ).take(limit)
     }
@@ -227,9 +294,22 @@ object UrlHistoryManager {
      * deletion.
      */
     fun deleteUrl(url: String) {
-        if (history.remove(url) != null) {
-            scope.launch { saveHistory() }
+        // By page identity, so a caller holding a different spelling of the same entry
+        // than the one stored still removes it.
+        if (history.remove(distinctPageKey(url)) != null) {
+            persistInBackground()
         }
+    }
+
+    private fun persistInBackground() {
+        val target = historyFile
+        val entries = entriesToPersist()
+        pendingWrite = scope.launch { writeTo(target, entries) }
+    }
+
+    /** Wait for any background write to reach disk. */
+    internal suspend fun awaitPendingWrites() {
+        pendingWrite?.join()
     }
 
     /**
@@ -255,7 +335,7 @@ object UrlHistoryManager {
         val matches = entriesToEvict(history.values, url, recordedWithinMs)
 
         if (matches.isNotEmpty()) {
-            matches.forEach { history.remove(it.url) }
+            matches.forEach { history.remove(distinctPageKey(it.url)) }
             logger.info(
                 LogCategory.BROWSER,
                 "Removed history entries for an address that failed to load",
@@ -268,7 +348,7 @@ object UrlHistoryManager {
             // Persist here rather than waiting for the next saveHistory() — an evicted
             // entry that survives in the file is exactly the stale suggestion we just
             // removed.
-            scope.launch { saveHistory() }
+            persistInBackground()
         }
         return matches.size
     }

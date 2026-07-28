@@ -180,13 +180,6 @@ internal class BrowserHandleImpl(
     // Main-thread scope for injection/teardown (rrweb inject + executeJavaScript run on Main).
     private val coBrowseScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    /**
-     * Runs history retraction off the engine's event thread. Not tied to this handle's
-     * lifetime on purpose — a retraction triggered by the navigation that closed a tab
-     * still has to complete.
-     */
-    private val retractionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
     // Lock for thread-safe browser operations
     private val browserLock = ReentrantReadWriteLock()
 
@@ -1760,6 +1753,13 @@ internal class BrowserHandleImpl(
 
         private val uploadCallbackInstalled = AtomicBoolean(false)
         private val staticLogger = BossLogger.forComponent("BrowserHandleImpl")
+
+        /**
+         * Runs history retraction off the engine's event thread. Deliberately not tied to
+         * any handle's lifetime — a retraction triggered by the navigation that closed a
+         * tab still has to complete — and one per process rather than one per browser.
+         */
+        private val retractionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
         /** Best-effort cap on [loadUrlAndWait]; returns (no throw) if a load runs long. */
         private const val LOAD_TIMEOUT_MS = 30_000L

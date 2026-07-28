@@ -68,7 +68,9 @@ object RecentBrowserPagesManager {
     private val logger = BossLogger.forComponent("RecentBrowserPagesManager")
     private const val MAX_PAGES = 30
     private const val SAVE_DEBOUNCE_MS = 5000L // Debounce saves to max once per 5 seconds
-    private val settingsFile = BossDirectories.resolve("recent-browser-pages.json")
+
+    /** Overridable so tests exercise the real read/write path without touching `~/.boss`. */
+    internal var settingsFile: File = BossDirectories.resolve("recent-browser-pages.json")
     private val json =
         Json {
             prettyPrint = false
@@ -287,12 +289,13 @@ object RecentBrowserPagesManager {
         // Swap the debounce job under a lock: callers now arrive from concurrent
         // coroutines (a visit and an eviction racing), and an unsynchronized
         // cancel-then-assign can drop the reference to a job that is still pending.
+        val target = settingsFile
         synchronized(saveJobLock) {
             saveJob?.cancel()
             saveJob =
                 scope.launch {
                     delay(SAVE_DEBOUNCE_MS)
-                    saveImmediately()
+                    saveImmediately(target)
                 }
         }
     }
@@ -300,15 +303,21 @@ object RecentBrowserPagesManager {
     /**
      * Immediately save recent pages to disk (bypasses debounce).
      */
-    private suspend fun saveImmediately() =
+
+    /**
+     * @param target resolved by the caller, never read here: a debounced save that picked
+     *   its destination at execution time would follow [settingsFile] if it changed in
+     *   between, and write one profile's pages into another's file.
+     */
+    private suspend fun saveImmediately(target: File = settingsFile) =
         withContext(Dispatchers.IO) {
             try {
-                settingsFile.parentFile?.mkdirs()
+                target.parentFile?.mkdirs()
                 val data = RecentBrowserPagesData(pages = _recentPages.value)
                 val content = json.encodeToString(RecentBrowserPagesData.serializer(), data)
                 // Atomic: the debounced save and an eviction can land together, and a
                 // half-written file reads back as "no recent pages".
-                settingsFile.atomicWriteText(content)
+                target.atomicWriteText(content)
             } catch (e: Exception) {
                 logger.warn(LogCategory.SYSTEM, "Error saving recent pages", error = e)
             }
@@ -413,6 +422,9 @@ object RecentBrowserPagesManager {
                     pages.filterNot { page ->
                         shouldRetireVisit(page.url, page.lastVisited, page.visitCount, key, cutoff)
                     }
+                // Assigned inside the lambda: MutableStateFlow.update retries on
+                // contention, so only the winning invocation's value survives — which is
+                // exactly the count that matches the list we committed.
                 removed = pages.size - remaining.size
                 remaining
             }

@@ -99,6 +99,35 @@ class NavigationOutcomeTrackerTest {
     }
 
     @Test
+    fun `a root path and a bare host with a query are one key`() {
+        // Chromium always commits the slashed form; a caller may report either.
+        assertEquals(
+            canonicalUrlKey("https://example.com/?q=1"),
+            canonicalUrlKey("https://example.com?q=1"),
+        )
+    }
+
+    @Test
+    fun `a trailing slash inside a query is part of the query`() {
+        // These keys drive deletion, so trimming the whole remainder would let a search
+        // for "a/" retire the entry for a search for "a".
+        assertNotEquals(
+            canonicalUrlKey("https://example.com/s?q=a/"),
+            canonicalUrlKey("https://example.com/s?q=a"),
+        )
+    }
+
+    @Test
+    fun `the host a suggestion is filed under matches the key it is found by`() {
+        // One normalization: the stored domain and the lookup key agree on `www.` and
+        // on the port, which is what makes prefix ranking work.
+        assertEquals("youtube.com", suggestableHost("https://www.YouTube.com/watch"))
+        assertEquals("localhost:3000", suggestableHost("http://localhost:3000/app"))
+        assertTrue(canonicalUrlKey("https://www.youtube.com/watch").startsWith("youtube.com"))
+        assertTrue(canonicalUrlKey("http://localhost:3000/app").startsWith("localhost:3000"))
+    }
+
+    @Test
     fun `a host reached over both schemes is the same place`() {
         assertEquals(canonicalUrlKey("http://example.com"), canonicalUrlKey("https://example.com"))
     }

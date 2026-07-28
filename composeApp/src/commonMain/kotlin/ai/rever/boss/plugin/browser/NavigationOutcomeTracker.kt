@@ -207,7 +207,16 @@ fun suggestableHost(url: String): String? =
         val parsed = java.net.URL(url)
         val scheme = parsed.protocol?.lowercase()
         val host = parsed.host?.lowercase().orEmpty()
-        if ((scheme == "http" || scheme == "https") && host.isNotBlank()) host else null
+        if ((scheme == "http" || scheme == "https") && host.isNotBlank()) {
+            // Normalized the same way [canonicalUrlKey] normalizes an authority, because
+            // this value is stored as the entry's domain and then matched against what
+            // the user types. Keeping the `www.` meant typing "you" never ranked
+            // www.youtube.com in the domain-prefix bucket; dropping the port meant
+            // localhost:3000 and localhost:8080 were indistinguishable in the list.
+            normalizeAuthority(host + (parsed.port.takeIf { it != -1 }?.let { ":$it" } ?: ""))
+        } else {
+            null
+        }
     } catch (e: java.net.MalformedURLException) {
         // Not a URL we can key on, which is the answer the caller wants. The message
         // would echo the whole URL including its query, so it isn't logged here — callers
@@ -298,10 +307,31 @@ private fun hasOpaqueBody(value: String): Boolean {
     return value.substringAfter(':').firstOrNull()?.isDigit() != true
 }
 
-/** Lowercase the authority and strip a `www.` prefix; leave path and query untouched. */
+/**
+ * Lowercase an authority and strip a `www.` prefix, keeping any port.
+ *
+ * The one place host normalization is defined, so a key and a stored domain can't
+ * disagree about what host a URL is on.
+ */
+internal fun normalizeAuthority(authority: String): String = authority.lowercase().removePrefix("www.")
+
+/**
+ * Normalize an authority and append its path and query.
+ *
+ * The path keeps its case and its internal shape; only a trailing slash goes, and only
+ * from the path — trimming the whole remainder would make `?q=a/` and `?q=a` the same
+ * key, and these keys drive deletion. A path of exactly `/` is dropped so
+ * `example.com/?q=1` and `example.com?q=1` agree, since Chromium always commits the
+ * former and a caller may well report the latter.
+ */
 private fun normalizeAuthorityAndPath(value: String): String {
     val authorityEnd = value.indexOfFirst { it == '/' || it == '?' }
     val authority = if (authorityEnd < 0) value else value.substring(0, authorityEnd)
-    val path = if (authorityEnd < 0) "" else value.substring(authorityEnd)
-    return authority.lowercase().removePrefix("www.") + path.trimEnd('/')
+    val remainder = if (authorityEnd < 0) "" else value.substring(authorityEnd)
+
+    val queryStart = remainder.indexOf('?')
+    val path = if (queryStart < 0) remainder else remainder.substring(0, queryStart)
+    val query = if (queryStart < 0) "" else remainder.substring(queryStart)
+
+    return normalizeAuthority(authority) + path.trimEnd('/') + query
 }
