@@ -1,6 +1,7 @@
 package ai.rever.boss.plugin.browser
 
 import ai.rever.boss.cache.FaviconCache
+import ai.rever.boss.dashboard.RecentBrowserPagesManager
 import ai.rever.boss.plugin.window.LocalWindowId
 import ai.rever.boss.tabfullscreen.FullscreenBrowserWindow
 import ai.rever.boss.utils.MacOSGestureHandler
@@ -38,6 +39,7 @@ import com.teamdev.jxbrowser.navigation.event.NavigationFinished
 import com.teamdev.jxbrowser.navigation.event.NavigationStarted
 import com.teamdev.jxbrowser.net.ByteData
 import com.teamdev.jxbrowser.net.HttpHeader
+import com.teamdev.jxbrowser.net.NetError
 import com.teamdev.jxbrowser.net.callback.BeforeSendUploadDataCallback
 import com.teamdev.jxbrowser.ui.KeyCode
 import com.teamdev.jxbrowser.ui.KeyModifiers
@@ -178,6 +180,13 @@ internal class BrowserHandleImpl(
     // Main-thread scope for injection/teardown (rrweb inject + executeJavaScript run on Main).
     private val coBrowseScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+    /**
+     * Runs history retraction off the engine's event thread. Not tied to this handle's
+     * lifetime on purpose — a retraction triggered by the navigation that closed a tab
+     * still has to complete.
+     */
+    private val retractionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     // Lock for thread-safe browser operations
     private val browserLock = ReentrantReadWriteLock()
 
@@ -240,6 +249,13 @@ internal class BrowserHandleImpl(
         // Navigation finished - track loading state, notify URL change, and inject trackers
         subscriptions +=
             browser.navigation().on(NavigationFinished::class.java) { event ->
+                // Record the outcome BEFORE notifying anyone: the loading, navigation and
+                // title callbacks below are what feed the URL history and the dashboard's
+                // recent pages, and they must see whether this navigation actually landed
+                // on a page. A mistyped host (youtube.como) commits an error page and still
+                // fires all three, so without this it gets recorded as a visited page.
+                recordNavigationOutcome(event)
+
                 _isLoading = false
                 loadingListeners.forEach { listener ->
                     try {
@@ -349,6 +365,91 @@ internal class BrowserHandleImpl(
                 coBrowseSink = null
                 coBrowseBridge.onEvent = null
             }
+    }
+
+    /**
+     * Publish whether a finished main-frame navigation actually loaded a page, so the URL
+     * history and the dashboard's recent pages can skip the ones that didn't.
+     *
+     * Two kinds of eviction follow a failure, because publishing a verdict is not enough
+     * on its own. The loading and navigation callbacks below run inside this handler and
+     * are guaranteed to see it, but **title callbacks are a separate event stream**
+     * (`TitleChanged`, wired in [setupEventListeners]) and Chromium sets an error page's
+     * title around commit time — so a visit can already have been recorded by the time
+     * this runs. Retracting anything recorded in the last few seconds closes that race
+     * for every failure class, not just the ones that evict unconditionally.
+     *
+     * Failures that mean "this address does not exist" evict regardless of age, which is
+     * what retires a typo recorded before this gating existed. Failures about the
+     * connection rather than the address (offline, timeout, aborted) only ever retract the
+     * racing entry — a site you can't reach right now is still a site you visited.
+     */
+    private fun recordNavigationOutcome(event: NavigationFinished) {
+        try {
+            val error =
+                try {
+                    event.error()
+                } catch (e: Exception) {
+                    logger.debug(
+                        LogCategory.BROWSER,
+                        "Navigation error state unavailable",
+                        mapOf("error" to e.toString()),
+                    )
+                    NetError.OK
+                }
+            val url = event.url()
+            val verdict =
+                classifyNavigation(
+                    isMainFrame = event.isInMainFrame,
+                    hasUrl = url.isNotBlank(),
+                    isErrorPage = event.isErrorPage,
+                    hasCommitted = event.hasCommitted(),
+                    hasNetworkError = error != NetError.OK,
+                )
+
+            when (verdict) {
+                NavigationVerdict.IGNORED -> {
+                    return
+                }
+
+                NavigationVerdict.LOADED -> {
+                    NavigationOutcomeTracker.recordSuccess(url)
+                    // This host can serve pages, so it is never a candidate for the
+                    // "address does not exist" eviction below, however it fails later.
+                    suggestableHost(url)?.let(ResolvedHostsStore::recordLoaded)
+                }
+
+                NavigationVerdict.FAILED -> {
+                    NavigationOutcomeTracker.recordFailure(url)
+
+                    // "The address does not exist" needs more than a name error. Two
+                    // things have to hold: something else resolved recently, so this isn't
+                    // a total DNS outage; and this host has never served a page, so it
+                    // isn't an address the user relies on that happens to be unreachable
+                    // from where they are — the split-horizon case, where a developer off
+                    // the VPN watches `jira.internal.corp` fail while public DNS is fine.
+                    val host = suggestableHost(url)
+                    val addressIsGone =
+                        error in ADDRESS_DOES_NOT_EXIST_ERRORS &&
+                            NavigationOutcomeTracker.hasLoadedRecently() &&
+                            (host == null || !ResolvedHostsStore.hasEverLoaded(host))
+
+                    val window =
+                        when (retractionScopeFor(event.isErrorPage, addressIsGone)) {
+                            RetractionScope.EVICT_ALL -> null
+                            RetractionScope.RETRACT_RECENT -> RACE_RETRACTION_MS
+                            RetractionScope.LEAVE_ALONE -> return
+                        }
+                    // Off the engine's event thread: this walks the whole history.
+                    retractionScope.launch {
+                        UrlHistoryManager.removeMatchingUrls(url, window)
+                    }
+                    RecentBrowserPagesManager.removeMatchingPages(url, window)
+                }
+            }
+        } catch (e: Exception) {
+            logger.warn(LogCategory.BROWSER, "Failed to record navigation outcome", error = e)
+        }
     }
 
     private fun setupBrowserHandlers() {
@@ -1662,6 +1763,30 @@ internal class BrowserHandleImpl(
 
         /** Best-effort cap on [loadUrlAndWait]; returns (no throw) if a load runs long. */
         private const val LOAD_TIMEOUT_MS = 30_000L
+
+        /**
+         * How far back a failure retracts visits recorded by a callback that raced ahead
+         * of it. Long enough to cover the title/load callbacks for the navigation that
+         * just failed, short enough that a genuine earlier visit to the same address is
+         * never mistaken for one.
+         */
+        private const val RACE_RETRACTION_MS = 5_000L
+
+        /**
+         * Network errors that mean the address itself is wrong rather than temporarily
+         * unreachable — a typo like `youtube.como` resolves to nothing, and no retry will
+         * change that. Only these can evict history entries regardless of age, and only
+         * while name resolution is otherwise working; see [recordNavigationOutcome].
+         */
+        private val ADDRESS_DOES_NOT_EXIST_ERRORS =
+            setOf(
+                NetError.NAME_NOT_RESOLVED,
+                NetError.NAME_RESOLUTION_FAILED,
+                NetError.ADDRESS_INVALID,
+                NetError.INVALID_URL,
+                NetError.UNKNOWN_URL_SCHEME,
+                NetError.DISALLOWED_URL_SCHEME,
+            )
 
         /**
          * Install an engine-wide [BeforeSendUploadDataCallback] that captures

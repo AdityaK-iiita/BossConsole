@@ -1,8 +1,14 @@
 package ai.rever.boss.dashboard
 
+import ai.rever.boss.plugin.browser.NavigationOutcomeTracker
+import ai.rever.boss.plugin.browser.canonicalUrlKey
+import ai.rever.boss.plugin.browser.shouldRetireVisit
+import ai.rever.boss.plugin.browser.suggestableHost
 import ai.rever.boss.plugin.pathutils.BossDirectories
+import ai.rever.boss.utils.atomicWriteText
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
+import ai.rever.boss.utils.logging.LogSanitizer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -11,6 +17,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -71,6 +78,7 @@ object RecentBrowserPagesManager {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var saveJob: Job? = null
+    private val saveJobLock = Any()
 
     private val _recentPages = MutableStateFlow<List<RecentBrowserPage>>(emptyList())
     val recentPages: StateFlow<List<RecentBrowserPage>> = _recentPages.asStateFlow()
@@ -276,12 +284,17 @@ object RecentBrowserPagesManager {
      * Cancels any pending save and schedules a new one after SAVE_DEBOUNCE_MS.
      */
     private fun scheduleSave() {
-        saveJob?.cancel()
-        saveJob =
-            scope.launch {
-                delay(SAVE_DEBOUNCE_MS)
-                saveImmediately()
-            }
+        // Swap the debounce job under a lock: callers now arrive from concurrent
+        // coroutines (a visit and an eviction racing), and an unsynchronized
+        // cancel-then-assign can drop the reference to a job that is still pending.
+        synchronized(saveJobLock) {
+            saveJob?.cancel()
+            saveJob =
+                scope.launch {
+                    delay(SAVE_DEBOUNCE_MS)
+                    saveImmediately()
+                }
+        }
     }
 
     /**
@@ -293,7 +306,9 @@ object RecentBrowserPagesManager {
                 settingsFile.parentFile?.mkdirs()
                 val data = RecentBrowserPagesData(pages = _recentPages.value)
                 val content = json.encodeToString(RecentBrowserPagesData.serializer(), data)
-                settingsFile.writeText(content)
+                // Atomic: the debounced save and an eviction can land together, and a
+                // half-written file reads back as "no recent pages".
+                settingsFile.atomicWriteText(content)
             } catch (e: Exception) {
                 logger.warn(LogCategory.SYSTEM, "Error saving recent pages", error = e)
             }
@@ -313,40 +328,49 @@ object RecentBrowserPagesManager {
         title: String,
         faviconCacheKey: String? = null,
     ) {
-        // Skip internal URLs and empty titles
-        if (url.isBlank() || title.isBlank()) return
-        if (url.startsWith("about:") || url.startsWith("chrome:") || url.startsWith("data:")) return
+        // A navigation that ended on an error page never showed the user anything — it
+        // still reports a title and a finished load, so without the outcome check a
+        // mistyped host would sit in the recent pages (and come back as a suggestion) as
+        // if it had loaded. The host check is shared with the URL history so the two
+        // stores can't drift on what counts as a page: `about:`, `data:`, `blob:`,
+        // `chrome://` and `file://` have no domain to match or display.
+        val describesAPage = title.isNotBlank() && suggestableHost(url) != null
+        if (!describesAPage || NavigationOutcomeTracker.didFail(url)) return
 
         scope.launch {
-            val currentPages = _recentPages.value.toMutableList()
-            val existingIndex = currentPages.indexOfFirst { it.url == url }
+            // update{} rather than read-then-write: this runs on a multi-threaded
+            // dispatcher and is *expected* to race an eviction — that is the whole
+            // TitleChanged-arrived-first case — so a lost update here would put back the
+            // entry that was just retracted.
+            _recentPages.update { pages ->
+                val currentPages = pages.toMutableList()
+                val existingIndex = currentPages.indexOfFirst { it.url == url }
 
-            val newPage =
-                if (existingIndex >= 0) {
-                    // Update existing entry
-                    val existing = currentPages.removeAt(existingIndex)
-                    existing.copy(
-                        title = title,
-                        lastVisited = System.currentTimeMillis(),
-                        faviconCacheKey = faviconCacheKey ?: existing.faviconCacheKey,
-                        visitCount = existing.visitCount + 1,
-                    )
-                } else {
-                    // Create new entry
-                    RecentBrowserPage(
-                        url = url,
-                        title = title,
-                        lastVisited = System.currentTimeMillis(),
-                        faviconCacheKey = faviconCacheKey,
-                        visitCount = 1,
-                    )
-                }
+                val newPage =
+                    if (existingIndex >= 0) {
+                        // Update existing entry
+                        val existing = currentPages.removeAt(existingIndex)
+                        existing.copy(
+                            title = title,
+                            lastVisited = System.currentTimeMillis(),
+                            faviconCacheKey = faviconCacheKey ?: existing.faviconCacheKey,
+                            visitCount = existing.visitCount + 1,
+                        )
+                    } else {
+                        // Create new entry
+                        RecentBrowserPage(
+                            url = url,
+                            title = title,
+                            lastVisited = System.currentTimeMillis(),
+                            faviconCacheKey = faviconCacheKey,
+                            visitCount = 1,
+                        )
+                    }
 
-            // Add to front (most recent)
-            currentPages.add(0, newPage)
-
-            // Trim to max size
-            _recentPages.value = currentPages.take(MAX_PAGES)
+                // Add to front (most recent), trimmed to max size
+                currentPages.add(0, newPage)
+                currentPages.take(MAX_PAGES)
+            }
             scheduleSave()
         }
     }
@@ -356,8 +380,57 @@ object RecentBrowserPagesManager {
      */
     fun removePage(url: String) {
         scope.launch {
-            _recentPages.value = _recentPages.value.filter { it.url != url }
+            _recentPages.update { pages -> pages.filter { it.url != url } }
             scheduleSave()
+        }
+    }
+
+    /**
+     * Remove every page that points at the same place as [url].
+     *
+     * Matching is by [canonicalUrlKey] rather than string equality, so a page recorded
+     * under the URL the user typed is still found when the browser reports the URL it
+     * actually tried to load. Used to retire entries for addresses that turn out not to
+     * exist.
+     *
+     * @param recordedWithinMs when set, only removes pages visited that recently — the
+     *   race where a title callback recorded a visit just before the browser reported the
+     *   navigation as failed. Older entries are real history and are left alone. Null
+     *   removes regardless of age.
+     */
+    fun removeMatchingPages(
+        url: String,
+        recordedWithinMs: Long? = null,
+    ) {
+        val key = canonicalUrlKey(url)
+        if (key.isEmpty()) return
+
+        scope.launch {
+            val cutoff = recordedWithinMs?.let { System.currentTimeMillis() - it }
+            var removed = 0
+            _recentPages.update { pages ->
+                val remaining =
+                    pages.filterNot { page ->
+                        shouldRetireVisit(page.url, page.lastVisited, page.visitCount, key, cutoff)
+                    }
+                removed = pages.size - remaining.size
+                remaining
+            }
+            if (removed > 0) {
+                logger.info(
+                    LogCategory.BROWSER,
+                    "Removed recent pages for an address that failed to load",
+                    mapOf(
+                        "url" to LogSanitizer.maskUriParams(url),
+                        "removed" to removed.toString(),
+                    ),
+                )
+                // Immediately, not on the 5s debounce the additive path uses: the whole
+                // scenario here is mistype, see the error page, close the app — which
+                // lands inside that window and would leave the typo in the file to come
+                // back as a dashboard recent on the next launch.
+                saveImmediately()
+            }
         }
     }
 
