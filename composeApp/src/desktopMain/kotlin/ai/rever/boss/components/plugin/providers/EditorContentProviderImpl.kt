@@ -2,6 +2,7 @@ package ai.rever.boss.components.plugin.providers
 
 import ai.rever.boss.components.events.FileEventBus
 import ai.rever.boss.components.events.RunEventBus
+import ai.rever.boss.components.plugin.language.EditorLanguages
 import ai.rever.boss.components.plugin.tab_types.CodeEditorUI
 import ai.rever.boss.components.plugin.tab_types.readFileContentSafe
 import ai.rever.boss.components.plugin.tab_types.writeFileContent
@@ -83,36 +84,14 @@ class EditorContentProviderImpl : EditorContentProvider {
         content: String,
     ): Boolean = writeFileContent(filePath, content)
 
-    override fun detectLanguage(filePath: String): String {
-        val extension = filePath.substringAfterLast('.', "").lowercase()
-        return when (extension) {
-            "kt", "kts" -> "kotlin"
-            "java" -> "java"
-            "js", "jsx" -> "javascript"
-            "ts", "tsx" -> "typescript"
-            "py" -> "python"
-            "json" -> "json"
-            "xml" -> "xml"
-            "html", "htm" -> "html"
-            "css" -> "css"
-            "md" -> "markdown"
-            "toml" -> "toml"
-            "gradle" -> "groovy"
-            "swift" -> "swift"
-            "c", "h" -> "c"
-            "cpp", "cc", "cxx", "hpp" -> "cpp"
-            "rs" -> "rust"
-            "go" -> "go"
-            "rb" -> "ruby"
-            "php" -> "php"
-            "sh", "bash" -> "bash"
-            "yml", "yaml" -> "yaml"
-            "sql" -> "sql"
-            "r" -> "r"
-            "scala" -> "scala"
-            else -> "text"
-        }
-    }
+    /**
+     * Language id for [filePath], as reported to plugins and to the
+     * `editor_detect_language` MCP tool.
+     *
+     * Delegates to [EditorLanguages] so this and the built-in editor tab cannot
+     * give different answers for the same file.
+     */
+    override fun detectLanguage(filePath: String): String = EditorLanguages.detect(filePath)
 
     // ============ PSI Navigation APIs ============
 
