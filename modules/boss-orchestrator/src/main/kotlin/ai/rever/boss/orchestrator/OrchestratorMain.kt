@@ -84,6 +84,11 @@ fun main() {
                 analyzer = analyzer,
                 snapshotManager = snapshotManager,
                 aiClient = aiClient,
+                // Stated rather than defaulted: this process has no project directory to
+                // offer — its working directory is whatever the kernel spawned it with —
+                // and manifest source files go to a third-party model, so nothing is read
+                // until a host names a directory it is willing to send.
+                projectRoot = null,
                 onRequestRestart = { processId, _ ->
                     kernelStub.requestShutdown(
                         ShutdownRequest
@@ -102,32 +107,16 @@ fun main() {
             OrchestratorServiceImpl(
                 repairEngine = repairEngine,
                 processRegistry = null, // orchestrator doesn't have a local registry (C2 fix)
-                onRepairApproved = { action ->
-                    logger.info("Executing approved repair: {}", action.repairId)
-                    // Re-run the repair strategy that was approved
-                    when (action.strategyValue) {
-                        RepairStrategy.REPAIR_STRATEGY_RESTART_VALUE,
-                        RepairStrategy.REPAIR_STRATEGY_RESTART_TUNED_VALUE,
-                        -> {
-                            val processId =
-                                when {
-                                    action.hasRestart() -> action.restart.let { action.repairId }
-                                    action.hasResetState() -> action.repairId
-                                    else -> action.repairId
-                                }
-                            kernelStub.requestShutdown(
-                                ShutdownRequest
-                                    .newBuilder()
-                                    .setProcessId(processId)
-                                    .setForce(false)
-                                    .setReason("APPROVED_REPAIR")
-                                    .build(),
-                            )
-                        }
-
-                        else -> {
-                            logger.warn("Approved repair strategy {} not auto-executable", action.strategy)
-                        }
+                onRepairApproved = { processId, action ->
+                    applyApprovedRepair(processId, action) { target ->
+                        kernelStub.requestShutdown(
+                            ShutdownRequest
+                                .newBuilder()
+                                .setProcessId(target)
+                                .setForce(false)
+                                .setReason("APPROVED_REPAIR")
+                                .build(),
+                        )
                     }
                 },
             )
@@ -138,3 +127,39 @@ fun main() {
         connection.awaitTermination()
     }
 }
+
+/**
+ * Carries out a repair the operator approved, and says what happened to it.
+ *
+ * [processId] is the process the parked repair was reported for, which
+ * [OrchestratorServiceImpl] keeps alongside the action: `RepairAction` has a `repair_id` and
+ * no `process_id`, and a repair id is not something the kernel can act on.
+ *
+ * A restart is asked of the kernel through [requestShutdown], whose auto-respawn brings the
+ * process back — the same single path an automatic restart takes. Every other strategy is
+ * refused here rather than reported as done: applying a source patch, a config patch or a
+ * rollback means writing to the machine, which this process does not do.
+ *
+ * Only PATCH_SOURCE sets `requires_user_approval` today, so in practice the refusal is the
+ * branch that runs and the restart branch is there for a strategy that starts being parked.
+ */
+internal suspend fun applyApprovedRepair(
+    processId: String,
+    action: RepairAction,
+    requestShutdown: suspend (processId: String) -> Unit,
+): ApprovalResult =
+    when (action.strategy) {
+        RepairStrategy.REPAIR_STRATEGY_RESTART,
+        RepairStrategy.REPAIR_STRATEGY_RESTART_TUNED,
+        -> {
+            requestShutdown(processId)
+            ApprovalResult.Applied("Restart requested from the kernel for process $processId")
+        }
+
+        else -> {
+            ApprovalResult.Refused(
+                "Approved repair strategy ${action.strategy} is not something this process " +
+                    "applies, so the repair for process $processId was recorded and not applied",
+            )
+        }
+    }

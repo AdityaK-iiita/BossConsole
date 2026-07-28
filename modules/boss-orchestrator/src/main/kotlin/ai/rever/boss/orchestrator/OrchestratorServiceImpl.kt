@@ -2,6 +2,7 @@ package ai.rever.boss.orchestrator
 
 import ai.rever.boss.ipc.proto.*
 import ai.rever.boss.process.ProcessRegistry
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -19,13 +20,19 @@ class OrchestratorServiceImpl(
     private val repairEngine: RepairEngine,
     /** Optional registry — null when orchestrator runs out-of-process (C2 fix). */
     private val processRegistry: ProcessRegistry? = null,
-    /** Called after a user-approved repair action (C3 fix). */
-    private val onRepairApproved: suspend (RepairAction) -> Unit = {},
+    /**
+     * Applies a repair the operator approved, and answers what happened to it.
+     *
+     * A host that installs nothing here gets the default, which refuses: an approval that
+     * nothing acted on must not be reported to the caller as applied.
+     */
+    private val onRepairApproved: suspend (processId: String, action: RepairAction) -> ApprovalResult =
+        { processId, action -> ApprovalResult.Refused(noApprovalSinkReason(processId, action)) },
 ) : OrchestratorServiceGrpcKt.OrchestratorServiceCoroutineImplBase() {
     private val logger = LoggerFactory.getLogger(OrchestratorServiceImpl::class.java)
 
     private val repairHistory = ConcurrentHashMap<String, RepairHistoryEntry>()
-    private val pendingRepairs = ConcurrentHashMap<String, RepairAction>()
+    private val pendingRepairs = ConcurrentHashMap<String, PendingRepair>()
     private val _healthEvents = MutableSharedFlow<HealthEvent>(extraBufferCapacity = 64)
 
     override suspend fun reportFailure(request: ProcessFailureReport): RepairAction {
@@ -48,7 +55,9 @@ class OrchestratorServiceImpl(
                 .build()
 
         if (action.requiresUserApproval) {
-            pendingRepairs[repairId] = action
+            // Parked with the process it is about: RepairAction has no process_id field, so a
+            // repair id alone is not enough to act on later.
+            pendingRepairs[repairId] = PendingRepair(request.processId, action)
         }
 
         _healthEvents.tryEmit(
@@ -123,17 +132,40 @@ class OrchestratorServiceImpl(
                     .build()
 
         return if (request.approved) {
-            logger.info("Repair {} approved by user", request.repairId)
-            try {
-                onRepairApproved(pending)
-            } catch (e: Exception) {
-                logger.error("Failed to execute approved repair {}: {}", request.repairId, e.message)
+            logger.info("Repair {} for process {} approved by user", request.repairId, pending.processId)
+            // The response says what happened to the repair, not that it was approved: a
+            // caller cannot tell an applied repair from a dropped one otherwise.
+            val result =
+                try {
+                    onRepairApproved(pending.processId, pending.action)
+                } catch (e: CancellationException) {
+                    // Before the Exception arm: CancellationException *is* an Exception, so
+                    // catching it here would report a refusal when the caller hung up — the
+                    // same dishonest reporting this method was rewritten to remove — and
+                    // swallow the cancellation the coroutine machinery needs to see.
+                    throw e
+                } catch (e: Exception) {
+                    logger.error("Failed to execute approved repair {}: {}", request.repairId, e.message)
+                    ApprovalResult.Refused("Repair execution failed: ${e.message}")
+                }
+            when (result) {
+                is ApprovalResult.Applied -> {
+                    RepairApprovalResponse
+                        .newBuilder()
+                        .setApplied(true)
+                        .setResultMessage(result.message)
+                        .build()
+                }
+
+                is ApprovalResult.Refused -> {
+                    logger.warn("Approved repair {} was not applied: {}", request.repairId, result.reason)
+                    RepairApprovalResponse
+                        .newBuilder()
+                        .setApplied(false)
+                        .setResultMessage(result.reason)
+                        .build()
+                }
             }
-            RepairApprovalResponse
-                .newBuilder()
-                .setApplied(true)
-                .setResultMessage("Repair approved and execution initiated")
-                .build()
         } else {
             logger.info("Repair {} rejected by user: {}", request.repairId, request.userNotes)
             RepairApprovalResponse
@@ -178,7 +210,13 @@ class OrchestratorServiceImpl(
             is RepairOutcome.StateReset -> {
                 builder
                     .setDescription("Process ${outcome.processId} state reset")
-                    .setResetState(ResetStateAction.getDefaultInstance())
+                    .setResetState(
+                        ResetStateAction
+                            .newBuilder()
+                            .setRestoreSnapshot(outcome.restoredSnapshotId != null)
+                            .setSnapshotId(outcome.restoredSnapshotId ?: "")
+                            .build(),
+                    )
             }
 
             is RepairOutcome.ConfigPatched -> {
@@ -240,3 +278,36 @@ class OrchestratorServiceImpl(
         return builder.build()
     }
 }
+
+/**
+ * What became of a repair the operator approved.
+ *
+ * The approval RPC answers with `applied`, so whatever applies a repair has to be able to say
+ * that it did not: a source patch or a rollback is not something this process can carry out on
+ * its own, and a host that has wired nothing to carry it out must not look like a host that
+ * did.
+ */
+sealed class ApprovalResult {
+    /** The repair reached something that acted on it. [message] is returned to the caller. */
+    data class Applied(
+        val message: String,
+    ) : ApprovalResult()
+
+    /** Nothing acted on the repair. [reason] is returned to the caller. */
+    data class Refused(
+        val reason: String,
+    ) : ApprovalResult()
+}
+
+/** A repair parked for approval, together with the process it is about. */
+private data class PendingRepair(
+    val processId: String,
+    val action: RepairAction,
+)
+
+private fun noApprovalSinkReason(
+    processId: String,
+    action: RepairAction,
+): String =
+    "The approval was recorded but nothing applied it: this process has nothing wired to apply " +
+        "a ${action.strategy} repair, so the proposal for process $processId is a proposal only"
