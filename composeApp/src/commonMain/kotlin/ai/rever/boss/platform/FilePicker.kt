@@ -11,10 +11,17 @@ interface DirectoryPicker {
 }
 
 // Platform-specific file picker for selecting files
+
+/**
+ * @param onFileSelected receives the chosen path and its content, or nulls when
+ *   the user cancelled. [tooLarge] distinguishes "refused to read it" from
+ *   "cancelled", which would otherwise look identical to the caller.
+ */
 @Composable
 expect fun rememberFilePicker(
-    onFileSelected: (path: String?, content: String?) -> Unit,
+    onFileSelected: (path: String?, content: String?, tooLarge: Boolean) -> Unit,
     fileExtensions: List<String> = listOf("json"),
+    title: String = "Select File",
 ): FilePicker
 
 interface FilePicker {

@@ -44,6 +44,9 @@ jxbrowser = "9.3.0"
 jxbrowser-gradle-plugin = "2.1.0"
 maven-publish = "0.37.0"
 jna = "5.19.1"
+# Reads the SQLite databases browsers keep their bookmarks and logins in
+# (Chromium "Login Data", Firefox places.sqlite / key4.db). Desktop-only.
+sqlite-jdbc = "3.50.3.0"
 # gRPC + Protobuf for IPC
 grpc = "1.82.2"
 grpc-kotlin = "1.5.0"
@@ -57,7 +60,7 @@ intellij-platform = "243.21565.199"
 # bump it when consuming a new SDK release. Distribution is store/GitHub-
 # releases ONLY: plugin-platform/plugin-api-core downloads this release's jar and
 # filters the api package locally (no Maven registry involved).
-boss-plugin-api = "1.0.68"
+boss-plugin-api = "1.0.69"
 
 [libraries]
 kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
@@ -103,6 +106,7 @@ supabase-auth = { module = "io.github.jan-tennert.supabase:auth-kt", version.ref
 supabase-realtime = { module = "io.github.jan-tennert.supabase:realtime-kt", version.ref = "supabase" }
 supabase-storage = { module = "io.github.jan-tennert.supabase:storage-kt", version.ref = "supabase" }
 supabase-functions = { module = "io.github.jan-tennert.supabase:functions-kt", version.ref = "supabase" }
+sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlite-jdbc" }
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 zxing-javase = { module = "com.google.zxing:javase", version.ref = "zxing" }
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }

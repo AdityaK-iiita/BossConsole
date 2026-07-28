@@ -752,6 +752,9 @@ kotlin {
             implementation(libs.slf4j.api)
             implementation(libs.slf4j.simple)
 
+            // Reads browser bookmark/login databases during import
+            implementation(libs.sqlite.jdbc)
+
             // QR Code generation
             implementation(libs.zxing.core)
             implementation(libs.zxing.javase)

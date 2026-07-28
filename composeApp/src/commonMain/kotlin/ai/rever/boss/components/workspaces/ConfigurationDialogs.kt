@@ -66,7 +66,7 @@ fun OpenWorkspaceDialog(
 ) {
     val filePicker =
         rememberFilePicker(
-            onFileSelected = { path, content ->
+            onFileSelected = { _, content, _ ->
                 if (content != null) {
                     onOpen(content)
                 }

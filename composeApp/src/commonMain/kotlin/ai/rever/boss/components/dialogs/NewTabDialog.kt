@@ -259,7 +259,7 @@ fun NewTabDialog(
     // File picker for browsing files
     val filePicker =
         rememberFilePicker(
-            onFileSelected = { path, _ ->
+            onFileSelected = { path, _, _ ->
                 path?.let {
                     fileText = it
                     inputText = it

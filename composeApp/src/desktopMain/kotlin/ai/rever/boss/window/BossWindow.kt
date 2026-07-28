@@ -2,6 +2,7 @@ package ai.rever.boss.window
 
 import ai.rever.boss.BossAppWithAuth
 import ai.rever.boss.components.dialogs.CLIInstallationDialog
+import ai.rever.boss.components.dialogs.ImportDataDialog
 import ai.rever.boss.components.window_panel.components.main_window_panels.createBossAppContext
 import ai.rever.boss.focusmode.FocusModeSettingsManager
 import ai.rever.boss.keymap.KeymapSettingsManager
@@ -290,6 +291,9 @@ fun ApplicationScope.BossWindow(
 
         // State for Welcome Wizard dialog
         var showWelcomeWizard by remember { mutableStateOf(false) }
+
+        // State for the password/bookmark import dialog
+        var showImportDialog by remember { mutableStateOf(false) }
 
         // Sync isMaximized state with actual window state (handles OS maximize controls)
         DisposableEffect(window) {
@@ -837,6 +841,15 @@ fun ApplicationScope.BossWindow(
                 Separator()
 
                 Item(
+                    "Import Passwords & Bookmarks...",
+                    onClick = {
+                        showImportDialog = true
+                    },
+                )
+
+                Separator()
+
+                Item(
                     "Check for Updates...",
                     onClick = {
                         // Manual check: bypass per-version dismissal. Goes through the
@@ -918,6 +931,11 @@ fun ApplicationScope.BossWindow(
                     isCliInstalled = CLIInstaller.isInstalled()
                 },
             )
+        }
+
+        // Password / bookmark import dialog
+        if (showImportDialog) {
+            ImportDataDialog(onDismiss = { showImportDialog = false })
         }
 
         // Reset Browser Confirmation Dialog
