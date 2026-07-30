@@ -32,6 +32,8 @@ import com.teamdev.jxbrowser.engine.Engine
 import com.teamdev.jxbrowser.event.Subscription
 import com.teamdev.jxbrowser.frame.Frame
 import com.teamdev.jxbrowser.js.JsObject
+import com.teamdev.jxbrowser.media.MediaType
+import com.teamdev.jxbrowser.menu.ContextMenuContentType
 import com.teamdev.jxbrowser.navigation.LoadUrlParams
 import com.teamdev.jxbrowser.navigation.event.LoadFinished
 import com.teamdev.jxbrowser.navigation.event.LoadStarted
@@ -60,11 +62,14 @@ import com.teamdev.jxbrowser.view.compose.BrowserViewState
 import com.teamdev.jxbrowser.zoom.ZoomLevel
 import com.teamdev.jxbrowser.zoom.ZoomMode
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -83,10 +88,89 @@ import java.awt.datatransfer.StringSelection
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import javax.swing.JFrame
 import javax.swing.SwingUtilities
+
+/**
+ * Longest inline (`data:`) image source worth carrying into a menu. No menu action needs
+ * the encoded bytes, and this is the first path that hands a source URL to plugins.
+ */
+internal const val MAX_INLINE_IMAGE_URL_LENGTH = 2048
+
+private val contextMenuLogger = BossLogger.forComponent("ContextMenuTarget")
+
+/** What Chromium reports about the element a right-click landed on. */
+internal data class ContextMenuTarget(
+    val contentTypes: List<ContextMenuContentType> = emptyList(),
+    val mediaType: MediaType = MediaType.NONE,
+    val srcUrl: String = "",
+    val linkUrl: String = "",
+    val selectedText: String = "",
+    val isMainFrame: Boolean = true,
+)
+
+/**
+ * Map what Chromium reports about a right-click *target* onto the plugin-facing
+ * [BrowserContextMenuInfo].
+ *
+ * Split out of the callback so the truth table is unit-testable without a live
+ * `ShowContextMenuCallback.Params`. Scoped to the target only — the caller fills in the
+ * page identity, which is carried through untouched.
+ *
+ * Two deliberate narrowings:
+ * - [BrowserContextMenuInfo.hasImage] is only reported together with a resolvable
+ *   [BrowserContextMenuInfo.imageUrl]. Chromium reports MEDIA_IMAGE for targets that have
+ *   no source URL (`<canvas>`, CSS backgrounds, some inline SVG), and every image action a
+ *   menu can offer needs the URL — so "image with no address" is not worth advertising.
+ *   An inline image's source is a `data:` URL of the whole encoded image, which this is
+ *   the first path to hand to plugins; past [MAX_INLINE_IMAGE_URL_LENGTH] it counts as no
+ *   address rather than shipping megabytes of base64 into every menu.
+ * - Editable is reported for the main frame only. Every action it unlocks —
+ *   `cut`/`copySelection`/`paste`/`selectAll` and `fillCredentials` — runs against
+ *   `browser.mainFrame()` and `document.activeElement`. Offering them for a field inside an
+ *   iframe would act on the wrong frame, and in the credential case could write a password
+ *   into whatever main-frame input happens to be focused. Frame-accurate detection has to
+ *   wait for a frame-accurate fill path.
+ */
+internal fun ContextMenuTarget.toContextMenuInfo(
+    pageUrl: String,
+    pageTitle: String,
+): BrowserContextMenuInfo {
+    // The cap applies to data: only. A signed CDN address can carry a long policy and
+    // signature and still be a perfectly usable URL; capping those would silently drop the
+    // image actions for them, which is invisible to the user and hard to report.
+    val oversizedInline = srcUrl.startsWith("data:") && srcUrl.length > MAX_INLINE_IMAGE_URL_LENGTH
+    if (oversizedInline) {
+        // A 3KB inline PNG is ordinary, so this drop is reachable in normal browsing and
+        // costs the user their image actions with no other trace — the same invisibility
+        // the comment above refuses for http URLs. One line makes it reportable.
+        contextMenuLogger.debug(
+            LogCategory.BROWSER,
+            "Inline image source too large for a context menu — reporting no image",
+            mapOf("length" to srcUrl.length.toString(), "cap" to MAX_INLINE_IMAGE_URL_LENGTH.toString()),
+        )
+    }
+    val source = srcUrl.takeIf { it.isNotBlank() && !oversizedInline }
+    val isImage =
+        (mediaType == MediaType.IMAGE || contentTypes.contains(ContextMenuContentType.MEDIA_IMAGE)) &&
+            source != null
+    val isVideo =
+        mediaType == MediaType.VIDEO ||
+            contentTypes.contains(ContextMenuContentType.MEDIA_VIDEO)
+    return BrowserContextMenuInfo(
+        linkUrl = linkUrl.takeIf { it.isNotBlank() },
+        selectedText = selectedText.takeIf { it.isNotBlank() },
+        isEditable = isMainFrame && contentTypes.contains(ContextMenuContentType.EDITABLE),
+        hasVideo = isVideo,
+        hasImage = isImage,
+        imageUrl = source.takeIf { isImage },
+        pageUrl = pageUrl,
+        pageTitle = pageTitle,
+    )
+}
 
 /**
  * Desktop implementation of [BrowserHandle] that wraps a JxBrowser [Browser] instance.
@@ -117,8 +201,14 @@ internal class BrowserHandleImpl(
     // Track loading state
     private var _isLoading = false
 
-    // Context menu callback
-    private var contextMenuCallback: ContextMenuCallback? = null
+    // Context menu callback. Volatile because it is set from the UI thread and read from a
+    // JxBrowser callback thread; a stale null read there means no menu at all.
+    @Volatile private var contextMenuCallback: ContextMenuCallback? = null
+
+    // Last title Chromium reported, kept so building a context menu never has to call into
+    // the live Browser. browser.title() can be slow as well as throw, and the menu path is
+    // where that costs the user something visible.
+    @Volatile private var lastKnownTitle: String = ""
 
     // Callback for opening links in new tabs (cmd+click, target="_blank", window.open)
     private var openInNewTabCallback: ((String) -> Unit)? = null
@@ -179,6 +269,35 @@ internal class BrowserHandleImpl(
 
     // Main-thread scope for injection/teardown (rrweb inject + executeJavaScript run on Main).
     private val coBrowseScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    // Off-thread executor for context-menu detail lookups. The form-field inspection is a
+    // blocking JS round-trip, and it must not run on the JxBrowser callback thread (which
+    // is answering the menu request) nor on the UI thread.
+    //
+    // The blocking call gets its own single thread rather than Dispatchers.IO: it cannot be
+    // cancelled (nothing interrupts it), so against a wedged renderer each right-click would
+    // park a shared-pool worker indefinitely. Confined here, the cost is one parked thread
+    // and later lookups queue behind it.
+    private val contextMenuExecutor =
+        Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "boss-context-menu-$id").apply { isDaemon = true }
+        }
+    private val contextMenuLookupDispatcher = contextMenuExecutor.asCoroutineDispatcher()
+
+    // The coroutine that *waits* on that lookup must NOT share its thread. Both on one
+    // thread, the timeout cannot fire: resuming the awaiting continuation needs a dispatch
+    // onto the thread the blocking lookup is holding, so the wait lasts as long as the
+    // renderer takes and the bound is no bound at all.
+    private val contextMenuScope =
+        CoroutineScope(
+            SupervisorJob() +
+                Dispatchers.Default +
+                CoroutineExceptionHandler { _, error ->
+                    // Otherwise an escaping failure lands on the default handler and prints
+                    // to stderr, bypassing BossLogger.
+                    logger.warn(LogCategory.BROWSER, "Context-menu lookup failed", error = error)
+                },
+        )
 
     // Lock for thread-safe browser operations
     private val browserLock = ReentrantReadWriteLock()
@@ -272,12 +391,9 @@ internal class BrowserHandleImpl(
                     }
 
                     // Skip injection for about:blank pages (used for dashboard display)
-                    // Only inject context menu trackers for actual web pages
+                    // Only inject into actual web pages
                     if (url.isNotEmpty() && url != "about:blank") {
-                        // Inject context menu trackers (video click and link click tracking)
-                        // These set window._rightClickedOnVideo and window._rightClickedLinkUrl
-                        // which are read by setupContextMenuHandler when building the menu
-                        injectContextMenuTrackers()
+                        injectPageHelpers()
                     }
                 }
             }
@@ -286,6 +402,7 @@ internal class BrowserHandleImpl(
         subscriptions +=
             browser.on(TitleChanged::class.java) { event ->
                 val title = event.title()
+                lastKnownTitle = title
                 titleListeners.forEach { listener ->
                     try {
                         listener(title)
@@ -461,97 +578,158 @@ internal class BrowserHandleImpl(
         setupContextMenuHandler()
     }
 
+    /**
+     * Hand a built menu to the plugin.
+     *
+     * The callback is plugin code, reached from a JxBrowser thread on one path and this
+     * handle's own thread on the other; letting it throw there would take out the caller
+     * rather than the plugin. Bounded so a misbehaving plugin loses only its own menu.
+     */
+    private fun deliverContextMenu(
+        callback: ContextMenuCallback,
+        info: BrowserContextMenuInfo,
+    ) {
+        try {
+            callback(info)
+        } catch (e: LinkageError) {
+            // Named ahead of the general branch: a plugin compiled against a different
+            // boss-plugin-api than the one loaded fails exactly this way, and it is the
+            // most likely thing to go wrong here.
+            logger.warn(LogCategory.BROWSER, "Context menu callback failed to link", error = e)
+        } catch (e: AssertionError) {
+            // Named for the same reason: a plugin's failed `assert`/`error()` is an Error,
+            // not an Exception, and the promise here is that a misbehaving plugin loses only
+            // its own menu. Listed individually rather than catching Throwable because
+            // detekt keeps TooGenericExceptionCaught active on purpose — and a genuinely
+            // fatal Error (OOM, StackOverflow) is not this boundary's to swallow.
+            logger.warn(LogCategory.BROWSER, "Context menu callback failed an assertion", error = e)
+        } catch (e: Exception) {
+            logger.warn(LogCategory.BROWSER, "Context menu callback threw", error = e)
+        }
+    }
+
     private fun setupContextMenuHandler() {
         browser.set(
             ShowContextMenuCallback::class.java,
             ShowContextMenuCallback { params, tell ->
                 val callback = contextMenuCallback
-                if (callback != null) {
-                    // Get page URL from params
-                    val pageUrl =
-                        try {
-                            params.browser().url()
-                        } catch (e: Exception) {
-                            logger.debug(
-                                LogCategory.BROWSER,
-                                "Could not read page URL for context menu - using empty",
-                                mapOf("error" to e.toString()),
-                            )
-                            ""
-                        }
+                if (callback == null) {
+                    // Nobody is going to draw a menu, so hand the request back rather than
+                    // leaving it unanswered — an un-responded async callback shows nothing
+                    // at all, and Chromium keeps waiting on it.
+                    tell.close()
+                    return@ShowContextMenuCallback
+                }
 
-                    // Use JavaScript to get link URL, selected text, video status, and editable state
-                    // This is more reliable than the native PointInspection API
-                    var linkUrl: String? = null
-                    var selectedText: String? = null
-                    var hasVideo = false
-                    var isEditable = false
-                    var formFieldInfo: FormFieldInfo? = null
-
+                // Everything about the click target comes from params: it is resolved by
+                // Chromium against the frame that was actually right-clicked. Reading it
+                // back out of the page (the old approach) answered for the MAIN frame and
+                // for document.activeElement, so a click inside an iframe reported the
+                // previous click's link, and a click anywhere after focusing an input
+                // reported "editable".
+                // Answering is in a finally for the same reason it moved to the front:
+                // nothing between the right-click and tell.close() may lose the menu, and
+                // these reads can throw when teardown races the callback. Every params read
+                // lives in here, including the frame — they are all part of the target.
+                //
+                // The title comes from lastKnownTitle rather than browser.title(): that was
+                // the last call on this path reaching the live Browser, where being slow
+                // hurts as much as throwing and a try/catch only covers the latter.
+                val read =
                     try {
-                        browser.mainFrame().ifPresent { frame ->
-                            // Get link URL at click position
-                            linkUrl = frame.executeJavaScript<String?>(BrowserJavaScripts.getRightClickedLinkUrl)
-
-                            // Get selected text
-                            val selection = frame.executeJavaScript<String?>(BrowserJavaScripts.getSelectedText)
-                            selectedText = if (!selection.isNullOrBlank()) selection else null
-
-                            // Check if right-clicked on a video element (not just if page has videos)
-                            hasVideo = frame.executeJavaScript<Boolean>(BrowserJavaScripts.isClickedOnVideo) ?: false
-
-                            // Check if focused element is editable
-                            isEditable = frame.executeJavaScript<Boolean>(
-                                """
-                                (function() {
-                                    var el = document.activeElement;
-                                    if (!el) return false;
-                                    var tag = el.tagName.toLowerCase();
-                                    if (tag === 'input' || tag === 'textarea') return true;
-                                    if (el.isContentEditable) return true;
-                                    return false;
-                                })()
-                                """.trimIndent(),
-                            ) ?: false
-
-                            // If editable, get form field info for secret auto-fill
-                            if (isEditable) {
-                                formFieldInfo = getFormFieldInfoFromJS(frame)
-                            }
-                        }
+                        val target =
+                            ContextMenuTarget(
+                                contentTypes = params.contentTypes(),
+                                mediaType = params.mediaType(),
+                                srcUrl = params.srcUrl(),
+                                linkUrl = params.linkUrl(),
+                                selectedText = params.selectedText(),
+                                isMainFrame = params.isMainFrame(),
+                            ).toContextMenuInfo(
+                                pageUrl = params.pageUrl(),
+                                pageTitle = lastKnownTitle,
+                            )
+                        target to params.frame().orElse(null)
                     } catch (e: Exception) {
-                        // JavaScript execution failed - proceed with defaults
                         logger.debug(
                             LogCategory.BROWSER,
-                            "Context-menu JS inspection failed - proceeding with defaults",
+                            "Could not read the context-menu target",
                             mapOf("error" to e.toString()),
                         )
+                        null
+                    } finally {
+                        // Suppresses JxBrowser's native menu and releases the request.
+                        tell.close()
                     }
 
-                    val info =
-                        BrowserContextMenuInfo(
-                            linkUrl = linkUrl,
-                            selectedText = selectedText,
-                            isEditable = isEditable,
-                            hasVideo = hasVideo,
-                            pageUrl = pageUrl,
-                            pageTitle = browser.title(),
-                            formFieldInfo = formFieldInfo,
-                        )
+                if (read == null) return@ShowContextMenuCallback
+                val (info, frame) = read
 
-                    // Suppress JxBrowser's native context menu
-                    tell.close()
-
-                    // Invoke callback (runs on JxBrowser thread, caller should dispatch to main thread if needed)
-                    callback(info)
+                if (!info.isEditable) {
+                    // Runs on a JxBrowser thread; deliverContextMenu bounds a throwing plugin.
+                    deliverContextMenu(callback, info)
+                    return@ShowContextMenuCallback
                 }
-                // If no custom callback, don't call tell.close() - default context menu will appear
+
+                // Secret auto-fill needs details Chromium does not report (field name, id,
+                // autocomplete). That means a JS round-trip, so it happens off this thread —
+                // against the main frame, which isEditable is gated to.
+                contextMenuScope.launch {
+                    // Raced rather than wrapped: executeJavaScript blocks, so a cancelled
+                    // withTimeoutOrNull would have no suspension point to land on and could
+                    // not interrupt it. Awaiting a separate job does bound the wait — worst
+                    // case the menu opens without the autofill entries instead of never
+                    // opening, which is the failure the rest of this handler exists to avoid.
+                    //
+                    // On timeout the lookup is NOT cancelled — nothing can interrupt it —
+                    // so it keeps its thread until the renderer answers. That is the
+                    // dedicated single thread rather than a shared pool worker, so a wedged
+                    // page costs one parked thread in total; later lookups queue behind it
+                    // and time out on schedule, opening without autofill. The wait itself
+                    // runs on Dispatchers.Default so the timeout can actually fire.
+                    //
+                    // (If dispose() lands between the launch and this dispatch, the executor
+                    // rejects it and kotlinx reroutes to Dispatchers.IO — the coroutine is
+                    // already cancelled by then, so the blocking body never runs and the
+                    // "never a shared-pool thread" property still holds.)
+                    // runCatching inside the child, not around the await: the child is a
+                    // sibling of the timeout rather than inside it (that is what lets the
+                    // timeout fire), so a failure would reach the parent job the moment it
+                    // happened and cancel this launch before the menu is delivered. Losing
+                    // the autofill detail is acceptable; losing the menu is the thing this
+                    // handler exists to prevent.
+                    val lookup =
+                        async(contextMenuLookupDispatcher) {
+                            runCatching { frame?.let { getFormFieldInfoFromJS(it) } }.getOrNull()
+                        }
+                    val formFieldInfo = withTimeoutOrNull(FORM_FIELD_LOOKUP_TIMEOUT_MS) { lookup.await() }
+                    // The plugin may have deregistered while we waited — a tab switch or an
+                    // unload — and `disposed` only covers this handle being torn down.
+                    val current = contextMenuCallback ?: return@launch
+                    // The lookup can outlive dispose(): cancelling contextMenuScope cannot
+                    // interrupt the blocking call either, so check before delivering rather
+                    // than pushing a menu at a tab that is gone.
+                    if (disposed.get()) return@launch
+                    deliverContextMenu(current, info.copy(formFieldInfo = formFieldInfo))
+                }
             },
         )
     }
 
     /**
      * Get form field info from JavaScript for secret auto-fill.
+     *
+     * Reads `document.activeElement`, i.e. it assumes the right-click focused the field it
+     * landed on. Chromium does that on mousedown, so the common case holds — but a page
+     * that calls `preventDefault()` on mousedown (custom form widgets do) leaves focus
+     * where it was, and this then describes the *previously* focused field while
+     * [BrowserContextMenuInfo.isEditable], which comes from the click target, correctly
+     * describes the clicked one. The fill path (`fillCredentials`, `FormFieldInjector`)
+     * targets `activeElement` too, so the two agree with each other and can jointly be
+     * wrong about which field the user meant.
+     *
+     * Resolving from `params.location()` via `elementFromPoint`, or deferring resolution
+     * until a fill action is actually chosen, would remove the assumption.
      */
     private fun getFormFieldInfoFromJS(frame: com.teamdev.jxbrowser.frame.Frame): FormFieldInfo? {
         return try {
@@ -643,35 +821,26 @@ internal class BrowserHandleImpl(
     }
 
     /**
-     * Injects JavaScript trackers for context menu and navigation functionality.
+     * Injects the page-side helpers that outlive a navigation:
+     * 1. Cmd+Click (Mac) / Ctrl+Click (Win/Linux) on links → `window.open()` in a new tab
+     * 2. Form field detection for secret auto-fill
      *
-     * This injects event listeners for:
-     * 1. Video click tracker - sets window._rightClickedOnVideo for PiP functionality
-     * 2. Link click tracker - sets window._rightClickedLinkUrl for link context menu options
-     * 3. Cmd+Click handler - intercepts Cmd+Click (Mac) / Ctrl+Click (Win/Linux) on links
-     *    to open them in new tabs via window.open()
-     *
-     * These must be injected after navigation finishes so the context menu handler
-     * can read the values when building the menu.
+     * The context menu no longer needs anything injected — Chromium reports the click
+     * target natively (see [setupContextMenuHandler]), and the trackers this used to
+     * install could only ever answer for the main frame.
      */
-    private fun injectContextMenuTrackers() {
+    private fun injectPageHelpers() {
         browser.mainFrame().ifPresent { frame ->
             try {
-                // Inject video click tracker
-                frame.executeJavaScript<Unit>(BrowserJavaScripts.injectVideoClickTracker)
-
-                // Inject link click tracker
-                frame.executeJavaScript<Unit>(BrowserJavaScripts.injectLinkClickTracker)
-
                 // Inject Cmd+Click / Ctrl+Click handler for opening links in new tabs
                 frame.executeJavaScript<Unit>(BrowserJavaScripts.injectCmdClickHandler)
 
                 // Inject form field detection script for secret auto-fill
                 FormFieldDetector.injectFormDetectionScript(createLockedBrowser())
 
-                logger.debug(LogCategory.BROWSER, "Context menu and navigation trackers injected", mapOf("handleId" to id))
+                logger.debug(LogCategory.BROWSER, "Page helpers injected", mapOf("handleId" to id))
             } catch (e: Exception) {
-                logger.warn(LogCategory.BROWSER, "Failed to inject context menu trackers", error = e)
+                logger.warn(LogCategory.BROWSER, "Failed to inject page helpers", error = e)
             }
         }
     }
@@ -1698,6 +1867,13 @@ internal class BrowserHandleImpl(
         coBrowseSink = null
         coBrowseBridge.onEvent = null
         coBrowseScope.cancel()
+        // Stops queued menu lookups from starting. A lookup already blocked inside
+        // executeJavaScript cannot be interrupted by cancellation — the delivery site
+        // checks `disposed` before handing anything back. shutdown() (not shutdownNow())
+        // for the same reason: the thread is daemon, so a wedged lookup cannot hold up
+        // exit, and interrupting it would buy nothing.
+        contextMenuScope.cancel()
+        contextMenuExecutor.shutdown()
         if (coBrowseInjectRegistered) {
             try {
                 browser.remove(InjectJsCallback::class.java)
@@ -1763,6 +1939,12 @@ internal class BrowserHandleImpl(
 
         /** Best-effort cap on [loadUrlAndWait]; returns (no throw) if a load runs long. */
         private const val LOAD_TIMEOUT_MS = 30_000L
+
+        /**
+         * How long a context menu waits for the form-field detail behind secret auto-fill
+         * before opening without it. Bounds a blocking JS round-trip against a busy page.
+         */
+        private const val FORM_FIELD_LOOKUP_TIMEOUT_MS = 500L
 
         /**
          * How far back a failure retracts visits recorded by a callback that raced ahead

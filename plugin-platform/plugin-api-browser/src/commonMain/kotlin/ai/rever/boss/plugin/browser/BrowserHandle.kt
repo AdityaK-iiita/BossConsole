@@ -312,7 +312,14 @@ interface BrowserHandle {
      * The callback receives information about the click context (link URL, selected text, etc.)
      * and should display an appropriate context menu.
      *
-     * @param callback The callback to invoke on right-click, or null to use default behavior
+     * Invoked on a background thread — a browser-engine thread for most targets, and a
+     * host worker for editable ones, where the menu is delivered once the form-field
+     * detail behind auto-fill resolves (or shortly after, if it doesn't). Dispatch to the
+     * UI thread before touching UI state, and don't assume the pointer is still where the
+     * click happened.
+     *
+     * @param callback The callback to invoke on right-click. Passing null does not restore
+     *   a built-in menu — there isn't one: right-clicking then produces no menu at all.
      */
     fun setContextMenuCallback(callback: ContextMenuCallback?)
 
