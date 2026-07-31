@@ -1,5 +1,6 @@
 package ai.rever.boss.kernel
 
+import ai.rever.boss.config.SelfHealingSettingsManager
 import ai.rever.boss.ipc.BossIpcClient
 import ai.rever.boss.ipc.BossIpcServer
 import ai.rever.boss.ipc.IpcAddressResolver

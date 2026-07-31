@@ -1,4 +1,4 @@
-package ai.rever.boss.kernel
+package ai.rever.boss.config
 
 import kotlin.test.Test
 import kotlin.test.assertEquals

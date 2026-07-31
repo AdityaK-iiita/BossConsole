@@ -8,9 +8,9 @@ import ai.rever.boss.components.settings.shared.SettingsTextField
 import ai.rever.boss.components.settings.shared.SettingsTheme.AccentColor
 import ai.rever.boss.components.settings.shared.SettingsTheme.TextSecondary
 import ai.rever.boss.components.settings.shared.SettingsToggle
-import ai.rever.boss.kernel.SelfHealingProvider
-import ai.rever.boss.kernel.SelfHealingSettingsData
-import ai.rever.boss.kernel.SelfHealingSettingsManager
+import ai.rever.boss.config.SelfHealingProvider
+import ai.rever.boss.config.SelfHealingSettingsData
+import ai.rever.boss.config.SelfHealingSettingsManager
 import ai.rever.boss.plugin.ui.BossTheme
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer

@@ -1,4 +1,4 @@
-package ai.rever.boss.kernel
+package ai.rever.boss.config
 
 import java.io.File
 import java.nio.file.Files

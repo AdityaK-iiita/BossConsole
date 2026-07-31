@@ -1,4 +1,4 @@
-package ai.rever.boss.kernel
+package ai.rever.boss.config
 
 import ai.rever.boss.plugin.pathutils.BossDirectories
 import ai.rever.boss.utils.atomicWriteText

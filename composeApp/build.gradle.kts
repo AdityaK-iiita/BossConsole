@@ -825,7 +825,15 @@ kotlin {
         // RemoteWidgetRendererColorTest (it reads resolveBackgroundColor out of the
         // excluded renderer) unable to compile on that platform.
         if (isWindowsArm64Build) {
-            desktopTest.kotlin.exclude("**/kernel/**", "**/plugin/remote/**")
+            desktopTest.kotlin.exclude(
+                "**/kernel/**",
+                "**/plugin/remote/**",
+                // Not under either directory, but they assert on boss-ipc's IpcVersion, and
+                // that module is dropped from the dependency list above on this platform.
+                // Found by WindowsArm64SourceIsolationTest rather than by a build breaking.
+                "**/plugin/IpcCompatibilityTest.kt",
+                "**/plugin/PluginStoreSetupIpcGateTest.kt",
+            )
         }
     }
 }
