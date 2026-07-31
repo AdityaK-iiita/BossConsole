@@ -16,7 +16,7 @@ Bring your own agent — Claude Code, Codex, Gemini, or OpenCode — and give it
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue.svg)](https://github.com/risa-labs-inc/BossConsole-Releases/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-[**⬇ Download**](#downloads) · [📊 Compare](#how-boss-compares) · [🤖 Run an agent](#run-any-ai-coding-agent) · [🔐 Governance](#you-decide-what-your-agents-can-touch) · [🧰 Toolbox](#toolbox--an-app-store-inside-the-app) · [🖥️ BossTerm](#bossterm--a-terminal-you-can-share-to-any-device)
+[**⬇ Download**](#downloads) · [📊 Compare](#how-boss-compares) · [⚡ Browser benchmark](#browser-performance) · [🤖 Run an agent](#run-any-ai-coding-agent) · [🔐 Governance](#you-decide-what-your-agents-can-touch) · [🧰 Toolbox](#toolbox--an-app-store-inside-the-app) · [🖥️ BossTerm](#bossterm--a-terminal-you-can-share-to-any-device)
 
 </div>
 
@@ -52,11 +52,31 @@ It's also **native, not Electron.** BOSS runs on the JVM with true multithreadin
 
 <sub>✅ yes · △ partial/limited · ❌ no. &nbsp;¹ Only OpenAI's Codex **CLI** is open source (Apache-2.0); the Codex desktop app is proprietary. &nbsp;² Claude Desktop's "Computer Use" controls the whole screen rather than bundling a scriptable in-app browser. &nbsp;³ Enterprise-plan admin controls exist, but fine-grained per-tool RBAC isn't documented. &nbsp;⁴ Codex CLI is cross-platform; the desktop app is macOS/Windows. &nbsp;⁵ VS Code-fork IDEs reload extensions via a full window reload; none offers BOSS-style live plugin hot-reload + agent-driven tool evolution. &nbsp;⁶ Claude Desktop and the VS Code-fork IDEs run on Electron (Chromium + Node.js) — a single-threaded JavaScript event loop with worker/child-process offloading; BOSS runs natively on the JVM with true multithreading. &nbsp;Compiled from public sources, July 2026 — these products move fast, so corrections are welcome via issue or PR.</sub>
 
+### Browser performance
+
+We ran [Speedometer 3.1](https://browserbench.org/Speedometer3.1/) on the BOSS Fluck browser and five desktop browsers on the same M3 Max Mac. Each reported median below comes from three 10-iteration runs; higher is better.
+
+| Browser | Observed median |
+|---|---:|
+| **BOSS Fluck browser** | **47.9** |
+| Comet | **46.2** |
+| Google Chrome | **35.5** |
+| ChatGPT Atlas | **34.6** |
+| Safari | **29.9**¹ |
+| Firefox | **22.5**² |
+
+**Treat Fluck and Comet as tied within measurement precision.** A follow-up experiment alternated them back-to-back three times: Fluck led each pair, but its 3.4% median margin was within the browsers' own run-to-run spread and was not statistically significant (`p = 0.125`). The durable signal is that **Fluck and Comet both scored roughly 30% above Chrome and Atlas** in these conditions.
+
+Absolute scores were depressed by heavy co-tenancy — **800–1300% ambient CPU**, including roughly four cores from a running Docker Desktop VM — so compare browsers within this experiment, not against published scores from quiet machines. Read the [full benchmark report](benchmark.md) for the paired test, per-suite analysis, discarded runs, and caveats; the [reproducible harness, per-run JSON, and screenshot evidence](benchmarks/speedometer/) are committed alongside it.
+
+<sub>¹ Safari used a live profile with existing tabs and extensions, so it is not comparable to the fresh-profile runs. &nbsp;² Firefox varied by 40% across its three runs; its median is the least stable result.</sub>
+
 ---
 
 ## Contents
 
 - [How BOSS compares](#how-boss-compares)
+- [Browser performance](#browser-performance)
 - [Downloads](#downloads)
 - [Why BOSS](#why-boss)
 - [Run any AI coding agent](#run-any-ai-coding-agent)
@@ -151,6 +171,7 @@ BOSS speaks the **Model Context Protocol**. The `terminal-tab` plugin hosts a lo
 | Terminal | `run_command`, `run_in_sidebar`, `run_in_panel`, `list_tabs`, `read_scrollback`, `send_input` |
 | Code & Git | `codebase_read`, `codebase_write`, `codebase_tree`, `git_status`, `git_log`, `git_stage`, `git_checkout` |
 | Browser | `browser_navigate`, `browser_get_url`, `browser_run_js` |
+| Infrastructure | `docker_ps`, `docker_build`, `docker_compose_up`, `k8s_pods`, `k8s_logs`, `k8s_port_forward` |
 | Secrets | `secrets_list`, `secret_search`, `secret_get`, `secret_create` |
 | Automation | `flow_run`, `rpa_run`, `rpa_record_toggle`, `llmrpa_run`, `evolver_evolve` |
 | Productivity | `bookmarks_list`, `bookmark_add`, `downloads_list`, `plugins_list` |
@@ -179,6 +200,13 @@ Plugin authors add tools by implementing `McpToolProvider` (boss-plugin-api 1.0.
 | **[Git Status](https://github.com/risa-labs-inc/boss-plugin-git-status) / [Git Log](https://github.com/risa-labs-inc/boss-plugin-git-log)** | Working-tree status & staged changes; commit history with a graph |
 | **[Run Configurations](https://github.com/risa-labs-inc/boss-plugin-run-configurations)** | Auto-detect and run project run-configs (`run_config_*` MCP tools) |
 | **[Performance](https://github.com/risa-labs-inc/boss-plugin-performance)** | Live JVM metrics — CPU, memory, resource counts |
+
+### Infrastructure
+
+| Plugin | What it does |
+|--------|--------------|
+| **[Docker](https://github.com/risa-labs-inc/boss-plugin-docker)** | Manage project Dockerfiles and Compose stacks plus local containers, images, volumes, and networks; stream logs, inspect services, and preview them inline (`docker_*` MCP tools). Published ports bind to `127.0.0.1`, and destructive actions require confirmation. |
+| **[Kubernetes](https://github.com/risa-labs-inc/boss-plugin-kubernetes)** | Work across contexts and namespaces with workloads, pods, services, Helm releases, logs, supervised port-forwards, and inline previews (`k8s_*` MCP tools). It never changes your active kubeconfig context and redacts Kubernetes Secret values. |
 
 ### AI & automation
 | Plugin | What it does |
@@ -302,7 +330,7 @@ GITHUB_TOKEN=ghp_your_token_here
 
 ### Key Technologies
 - **Kotlin Multiplatform** + **Compose Multiplatform**
-- **Fluck** — BOSS's built-in browser (JxBrowser 9.x engine)
+- **Fluck** — BOSS's built-in, agent-operable browser
 - **Decompose** for navigation
 - **Supabase** + Edge Functions for backend and RBAC
 - **BossTerm** for terminal integration (also hosts the `boss` MCP server)
@@ -384,6 +412,7 @@ BOSS is developed in the open, end to end — the host app, the plugin platform,
 
 - **Tabs** — [terminal-tab](https://github.com/risa-labs-inc/boss-plugin-terminal-tab) · [editor-tab](https://github.com/risa-labs-inc/boss-plugin-editor-tab) · [fluck-browser](https://github.com/risa-labs-inc/boss-plugin-fluck-browser)
 - **Dev tools** — [codebase](https://github.com/risa-labs-inc/boss-plugin-codebase) · [console](https://github.com/risa-labs-inc/boss-plugin-console) · [git-status](https://github.com/risa-labs-inc/boss-plugin-git-status) · [git-log](https://github.com/risa-labs-inc/boss-plugin-git-log) · [run-configurations](https://github.com/risa-labs-inc/boss-plugin-run-configurations) · [performance](https://github.com/risa-labs-inc/boss-plugin-performance)
+- **Infrastructure** — [docker](https://github.com/risa-labs-inc/boss-plugin-docker) · [kubernetes](https://github.com/risa-labs-inc/boss-plugin-kubernetes)
 - **AI & automation** — [tool-creator](https://github.com/risa-labs-inc/boss-plugin-tool-creator) · [tool-evolver](https://github.com/risa-labs-inc/boss-plugin-tool-evolver) · [llmrpa](https://github.com/risa-labs-inc/boss-plugin-llmrpa) · [rpaengine](https://github.com/risa-labs-inc/boss-plugin-rpaengine) · [rparecorder](https://github.com/risa-labs-inc/boss-plugin-rparecorder)
 - **Security** — [secret-manager](https://github.com/risa-labs-inc/boss-plugin-secret-manager) · [user-secret-list](https://github.com/risa-labs-inc/boss-plugin-user-secret-list)
 - **Productivity** — [bookmarks](https://github.com/risa-labs-inc/boss-plugin-bookmarks) · [downloads](https://github.com/risa-labs-inc/boss-plugin-downloads) · [topofmind](https://github.com/risa-labs-inc/boss-plugin-topofmind)
