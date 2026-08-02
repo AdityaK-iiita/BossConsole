@@ -92,7 +92,24 @@ fun PluginExtensionBoundary(
         if (e != null) {
             fallback(e)
         } else {
-            content()
+            // The interceptor above only reaches composition crashes, where the
+            // plugin is on the stack. A status-bar item or settings page that
+            // throws while being measured or drawn leaves no plugin frame behind
+            // and would otherwise escape to the window handler and kill the app —
+            // see PluginRenderBoundary.
+            PluginRenderBoundary(
+                pluginId = pluginId,
+                // Writing snapshot state straight from a render pass would
+                // invalidate the composition currently being laid out;
+                // PluginRenderBoundary hands this callback to the EDT for exactly
+                // that reason, so these two writes are safe here.
+                onRenderCrash = { t ->
+                    error = t
+                    crashCount++
+                },
+            ) {
+                content()
+            }
         }
     }
 }

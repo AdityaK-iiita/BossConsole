@@ -64,6 +64,11 @@ kotlin {
                 implementation(kotlin("test-junit5"))
                 implementation(libs.junit.jupiter)
                 implementation(libs.kotlinx.coroutines.test)
+                // PluginRenderBoundary can only be exercised by actually laying out
+                // and drawing something — the phases it guards are not reachable
+                // without a Compose runtime. Used through runComposeUiTest, which
+                // needs no JUnit4 runner and so coexists with JUnit Platform.
+                implementation(compose.desktop.uiTestJUnit4)
             }
         }
     }

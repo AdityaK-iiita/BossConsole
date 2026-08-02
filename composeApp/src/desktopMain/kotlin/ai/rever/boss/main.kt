@@ -5,10 +5,14 @@ import ai.rever.boss.cli.CLICommandHandler
 import ai.rever.boss.cli.createBossCLI
 import ai.rever.boss.components.dialogs.ChromiumDownloadContent
 import ai.rever.boss.config.ChromiumAutoDownloader
+import ai.rever.boss.crash.WindowExceptionRoute
+import ai.rever.boss.crash.decideWindowExceptionRoute
 import ai.rever.boss.logging.GlobalLogCapture
 import ai.rever.boss.performance.PerformanceDataProviderImpl
 import ai.rever.boss.plugin.PluginStoreSetup
 import ai.rever.boss.plugin.pathutils.BossDirectories
+import ai.rever.boss.plugin.sandbox.ui.PluginCrashInterceptor
+import ai.rever.boss.plugin.sandbox.ui.PluginRenderRecovery
 import ai.rever.boss.plugin.ui.BossThemeController
 import ai.rever.boss.services.passkey.PasskeyPlatformInit
 import ai.rever.boss.utils.DeepLinkHandler
@@ -50,6 +54,33 @@ import javax.swing.JPopupMenu
 import kotlin.system.exitProcess
 
 private val logger = BossLogger.forComponent("Main")
+
+/**
+ * What to tell the user after an unattributed render exception.
+ *
+ * Named rather than inlined so the wording is reviewable in one place: the whole
+ * point of recovery is that the user finds out something happened, since the
+ * failure it handles previously left a silently broken window.
+ */
+private fun renderRecoveryMessage(outcome: PluginRenderRecovery.Outcome): String =
+    when (outcome) {
+        is PluginRenderRecovery.Outcome.Quarantined -> {
+            "Paused ${outcome.plugins.joinToString()} — it kept failing to render. " +
+                "Restart it from the panel menu."
+        }
+
+        is PluginRenderRecovery.Outcome.Rebuilt -> {
+            "A plugin panel failed to render and was reloaded."
+        }
+
+        PluginRenderRecovery.Outcome.Unexplained -> {
+            "A UI component keeps failing to render. No plugin accounts for it; the window is still usable."
+        }
+
+        PluginRenderRecovery.Outcome.NotPluginRelated -> {
+            "A UI component failed to render and was recovered."
+        }
+    }
 
 /**
  * Scope for fire-and-forget startup work (PSI warm-up, update-Realtime start).
@@ -496,6 +527,15 @@ fun main(args: Array<String>) {
         @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
         val defaultExceptionHandlerFactory = LocalWindowExceptionHandlerFactory.current
 
+        // Shared across windows on purpose: a corrupted scene tends to throw from
+        // whichever window repaints next, and the question being asked is "is this
+        // app still rendering?", not "is this window still rendering?".
+        val renderCrashPolicy =
+            remember {
+                ai.rever.boss.crash
+                    .RenderCrashPolicy()
+            }
+
         @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
         val pluginAwareExceptionHandlerFactory =
             remember(defaultExceptionHandlerFactory) {
@@ -504,24 +544,68 @@ fun main(args: Array<String>) {
                         val defaultHandler = defaultExceptionHandlerFactory.exceptionHandler(window)
                         return WindowExceptionHandler { throwable ->
                             val pluginId =
-                                ai.rever.boss.plugin.sandbox.ui.PluginCrashInterceptor
-                                    .attributeToPlugin(throwable)
-                            if (pluginId != null) {
-                                // Plugin crash — let the interceptor handle it (closes tab,
-                                // shows status message)
-                                logger.warn(
-                                    LogCategory.SYSTEM,
-                                    "Compose exception intercepted for plugin",
-                                    mapOf(
-                                        "pluginId" to pluginId,
-                                        "errorType" to throwable.javaClass.simpleName,
-                                    ),
-                                )
-                                ai.rever.boss.plugin.sandbox.ui.PluginCrashInterceptor
-                                    .tryHandle(pluginId, throwable)
-                            } else {
-                                // Not a plugin crash — delegate to default (shows error dialog)
-                                defaultHandler.onException(throwable)
+                                PluginCrashInterceptor.attributeToPlugin(throwable)
+                            when (decideWindowExceptionRoute(throwable, pluginId, renderCrashPolicy)) {
+                                WindowExceptionRoute.PluginHandled -> {
+                                    logger.warn(
+                                        LogCategory.SYSTEM,
+                                        "Compose exception intercepted for plugin",
+                                        mapOf(
+                                            "pluginId" to pluginId.orEmpty(),
+                                            "errorType" to throwable.javaClass.simpleName,
+                                        ),
+                                    )
+                                    PluginCrashInterceptor.tryHandle(pluginId.orEmpty(), throwable)
+                                }
+
+                                WindowExceptionRoute.Contain -> {
+                                    logger.error(
+                                        LogCategory.UI,
+                                        "Unattributed render exception — contained, window kept alive",
+                                        mapOf(
+                                            "errorType" to throwable.javaClass.simpleName,
+                                            "recentFailures" to renderCrashPolicy.recentFailureCount().toString(),
+                                        ),
+                                        throwable,
+                                    )
+                                    // Reported, but not through CrashHandler.handleCrash: that
+                                    // dialog is terminal on every exit — dismiss, submit and
+                                    // Escape all reach terminateAfterCrash(), and
+                                    // clean-and-restart deletes ~/.boss first. A recovered
+                                    // fault must not end the session on Escape. recordContained
+                                    // keeps the report and drops the dialog, so a host-side
+                                    // render bug is still visible instead of costing one log
+                                    // line and a toast.
+                                    ai.rever.boss.crash.CrashHandler
+                                        .recordContained(throwable)
+                                    // Keeping the window alive is not enough on its own: a
+                                    // repaint over a subtree that still reproduces the fault
+                                    // leaves a broken window and no explanation. Recovery
+                                    // rebuilds the plugin panels, then narrows to one suspect.
+                                    val outcome =
+                                        PluginRenderRecovery.onUnattributedRenderException(throwable)
+                                    ai.rever.boss.components.bars.horizontal.StatusMessageManager
+                                        .showMessage(
+                                            renderRecoveryMessage(outcome),
+                                            durationMs = 8000,
+                                        )
+                                    java.awt.Window
+                                        .getWindows()
+                                        .forEach { it.repaint() }
+                                }
+
+                                WindowExceptionRoute.Escalate -> {
+                                    logger.error(
+                                        LogCategory.UI,
+                                        "Render exception is not containable — escalating to the default handler",
+                                        mapOf(
+                                            "errorType" to throwable.javaClass.simpleName,
+                                            "recentFailures" to renderCrashPolicy.recentFailureCount().toString(),
+                                        ),
+                                        throwable,
+                                    )
+                                    defaultHandler.onException(throwable)
+                                }
                             }
                         }
                     }

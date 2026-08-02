@@ -110,7 +110,45 @@ object CrashHandler {
     }
 
     /**
+     * Record a crash report for something already contained and recovered from,
+     * without the dialog.
+     *
+     * The window exception handler cannot use [handleCrash]: that shows a dialog
+     * whose every exit terminates — dismiss, submit and Escape all reach
+     * [terminateAfterCrash], and clean-and-restart deletes the data directory
+     * first — so a recovered fault would end the session on Escape.
+     *
+     * It cannot skip reporting either. That handler sees *all* unattributed
+     * Compose exceptions, not just plugin ones, so a host-side layout or
+     * composition bug used to produce a full crash report and now would produce
+     * one log line and a toast. That is telemetry quietly disappearing: the bugs
+     * stop being reported, which reads as the bugs stopping.
+     *
+     * So: build and publish the report, skip the dialog, do not terminate.
+     */
+    fun recordContained(throwable: Throwable) {
+        if (isIgnorable(throwable)) return
+        try {
+            _pendingCrashReport.value = createCrashReport(throwable)
+        } catch (e: Exception) {
+            // Reporting a contained fault must never itself become a fault.
+            logger.warn(
+                LogCategory.SYSTEM,
+                "Failed to record a contained crash report",
+                mapOf("errorType" to throwable.javaClass.simpleName),
+                e,
+            )
+        }
+    }
+
+    /**
      * Handle an uncaught exception.
+     *
+     * Terminal by design, even though this function does not call
+     * [terminateAfterCrash] itself: every exit from the dialog it shows does —
+     * dismiss, submit, and Escape all end the process, and clean-and-restart
+     * deletes the data directory first. Anything that has already been contained
+     * and recovered from must go to [recordContained] instead.
      */
     private fun handleCrash(
         thread: Thread,

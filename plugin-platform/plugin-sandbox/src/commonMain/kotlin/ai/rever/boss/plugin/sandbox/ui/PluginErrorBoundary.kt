@@ -11,6 +11,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -163,6 +164,34 @@ object PluginCrashRegistry {
                     .getWindows()
                     .forEach { it.repaint() }
             }
+        }
+    }
+
+    /**
+     * Record a crash *without* closing anything.
+     *
+     * [recordCrash] closes the plugin's tab when one is registered, which is right
+     * for a crash known to belong to that plugin. It is badly wrong for a render
+     * fault attributed only by "this panel happened to be on screen": quarantining
+     * suspects that way closed the user's terminal and browser tabs — destroying
+     * live sessions — because an unrelated plugin had a duplicate LazyColumn key.
+     *
+     * This flips the observable crash state only, so the panel swaps to its error
+     * fallback and stops rendering plugin content, which is what actually stops
+     * the exception recurring, while the tab and its contents stay put.
+     */
+    fun recordRenderFault(
+        pluginId: String,
+        error: Throwable,
+    ) {
+        _crashedPluginsMap[pluginId] =
+            CrashInfo(
+                error = error,
+                isBinaryIncompatibility = PluginErrorClassifier.isBinaryIncompatibility(error),
+            )
+        javax.swing.SwingUtilities.invokeLater {
+            _crashedPluginsState.value = _crashedPluginsMap.toMap()
+            onCrashNotify?.invoke(pluginId, error)
         }
     }
 
@@ -372,7 +401,57 @@ fun PluginErrorBoundary(
             },
             LocalPluginSandbox provides sandbox,
         ) {
-            content()
+            // Tells PluginRenderRecovery this plugin is on screen. When a render
+            // exception arrives that nobody can attribute from the stack — a
+            // direct remeasure of a node inside this subtree, which bypasses the
+            // boundary below — "which plugin panels are mounted" is the only
+            // attribution left.
+            DisposableEffect(pluginId) {
+                val unregister = PluginRenderRecovery.registerMounted(pluginId)
+                onDispose { unregister() }
+            }
+
+            // Rebuilt when recovery bumps the generation: a subcomposition left
+            // inconsistent by a half-finished measure has to be discarded, not
+            // recomposed in place — the same reason SidePanel keys on crash state.
+            key(PluginRenderRecovery.generation) {
+                // Composition crashes are caught by PluginCrashInterceptor, which
+                // can find the plugin on the stack. Measure, placement and draw run
+                // after the plugin's composables have returned, so nothing of the
+                // plugin is on the stack there and attribution fails — the window
+                // handler then treats it as a host crash and disposes the window,
+                // taking the app with it. PluginRenderBoundary makes those phases
+                // attributable by position, for the passes that flow through it.
+                PluginRenderBoundary(
+                    pluginId = pluginId,
+                    onRenderCrash = { e ->
+                        // FIRST, deliberately. report() wraps this callback in a
+                        // try/catch that only logs, and `reported` is already
+                        // latched — so if anything below threw, `error` would never
+                        // be set and the panel would stay blank forever with nothing
+                        // further logged. That is the exact failure this line exists
+                        // to prevent, so it cannot run last.
+                        error = e
+                        sandbox.recordError(e)
+                        // The same recovery a composition crash gets: close the tab,
+                        // notify, flip the observable crash state.
+                        PluginCrashRegistry.recordCrash(pluginId, e)
+                        // Set locally as well, and not redundantly. recordCrash has
+                        // two branches: with a tab registered it closes the tab and
+                        // *removes* the registry entry again, so registryCrash reads
+                        // back null and this boundary would never render its
+                        // fallback. If closeAction then fails, the panel is left
+                        // blank with nothing shown and nothing logged — the boundary
+                        // reports only once. Local state guarantees the user sees an
+                        // error rather than an empty panel. Safe to write here
+                        // because PluginRenderBoundary hands this callback to the
+                        // EDT rather than calling it mid-render.
+                        error = e
+                    },
+                ) {
+                    content()
+                }
+            }
         }
     }
 }

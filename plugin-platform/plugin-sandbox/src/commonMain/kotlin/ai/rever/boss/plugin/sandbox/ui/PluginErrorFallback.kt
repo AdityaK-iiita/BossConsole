@@ -1,6 +1,8 @@
 package ai.rever.boss.plugin.sandbox.ui
 
+import ai.rever.boss.plugin.ui.BossThemeColors
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -58,7 +60,7 @@ fun PluginErrorFallback(
         modifier =
             Modifier
                 .fillMaxSize()
-                .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.1f))
+                .background(BossThemeColors.BackgroundColor)
                 .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
@@ -76,7 +78,7 @@ fun PluginErrorFallback(
                     Icon(
                         imageVector = Icons.Outlined.Close,
                         contentDescription = "Dismiss",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = BossThemeColors.TextSecondary,
                     )
                 }
             }
@@ -89,7 +91,7 @@ fun PluginErrorFallback(
             imageVector = if (isIncompatible) Icons.Outlined.SystemUpdate else Icons.Outlined.Warning,
             contentDescription = if (isIncompatible) "Update Required" else "Error",
             modifier = Modifier.size(48.dp),
-            tint = if (isIncompatible) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+            tint = if (isIncompatible) BossThemeColors.AccentColor else BossThemeColors.ErrorColor,
         )
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -98,7 +100,7 @@ fun PluginErrorFallback(
         Text(
             text = if (isIncompatible) "Plugin Update Required" else "Plugin Error",
             style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = BossThemeColors.TextPrimary,
         )
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -107,7 +109,7 @@ fun PluginErrorFallback(
         Text(
             text = pluginId,
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = BossThemeColors.TextSecondary,
         )
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -118,13 +120,14 @@ fun PluginErrorFallback(
                 Modifier
                     .fillMaxWidth(0.9f)
                     .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    .background(BossThemeColors.SurfaceColor)
+                    .border(1.dp, BossThemeColors.BorderColor, RoundedCornerShape(8.dp))
                     .padding(12.dp),
         ) {
             Text(
                 text = error.javaClass.simpleName,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.error,
+                color = BossThemeColors.ErrorColor,
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
@@ -135,7 +138,7 @@ fun PluginErrorFallback(
                         error.message ?: "Unknown error"
                     },
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = BossThemeColors.TextSecondary,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -154,7 +157,8 @@ fun PluginErrorFallback(
                 onClick = onRestart,
                 colors =
                     ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
+                        containerColor = BossThemeColors.AccentColor,
+                        contentColor = BossThemeColors.BackgroundColor,
                     ),
             ) {
                 Icon(
@@ -178,7 +182,7 @@ fun PluginErrorFallback(
                     "If this problem persists, try restarting the application."
                 },
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            color = BossThemeColors.TextMuted,
             textAlign = TextAlign.Center,
         )
     }
