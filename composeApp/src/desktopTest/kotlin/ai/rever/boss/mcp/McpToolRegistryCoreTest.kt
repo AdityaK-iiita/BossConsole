@@ -121,6 +121,38 @@ class McpToolRegistryCoreTest {
         assertTrue(core.tools.value.any { it.definition.name == "admin_tool" })
     }
 
+    /**
+     * Admin bypasses every *permission* check, so for an admin operator the
+     * kill-switch is the only access control left — the README's security section
+     * says so explicitly. The two filters in `applyExposed` are independent
+     * conjuncts today; folding them together (an early `if (isAdmin) return true`
+     * over the whole filter) would keep every other test in this file green while
+     * silently making a disabled tool reachable again for admins.
+     *
+     * Asserts both the listing and the call path: `invoke` resolves against the
+     * exposed set, so a stale tool list on the agent's side must not get a call
+     * through either.
+     */
+    @Test
+    fun `admin does not bypass the disabled set`() =
+        runBlocking {
+            val core = McpToolRegistryCore(disabledFile = null)
+            core.registerProvider(provider("p1", echoTool("toggle_me")))
+            core.updateAccess(isAdmin = true, permissions = emptySet())
+            assertTrue(core.tools.value.any { it.definition.name == "toggle_me" })
+
+            core.setToolEnabled("toggle_me", enabled = false)
+
+            assertFalse(
+                core.tools.value.any { it.definition.name == "toggle_me" },
+                "a disabled tool must stay hidden for an admin",
+            )
+            assertTrue(
+                core.invoke("toggle_me", "{}").isError,
+                "a disabled tool must not be invocable by an admin",
+            )
+        }
+
     @Test
     fun `non-admin with requiresAdmin is hidden even holding the listed permissions`() {
         val core = McpToolRegistryCore(disabledFile = null)
@@ -280,6 +312,51 @@ class McpToolRegistryCoreTest {
 
         val core = McpToolRegistryCore(disabledFile = file)
         assertEquals(emptySet(), core.disabledToolNames.value)
+    }
+
+    /**
+     * The write side fails open too, and the README documents it: `saveDisabled`
+     * logs and swallows, while `setToolEnabled` has already updated `_disabled` and
+     * goes on to call `applyExposed()`. So a toggle survives the session but is
+     * never persisted, and the tool returns on the next launch with no signal that
+     * the decision did not stick.
+     *
+     * Pinned because the disabled set is the only control that holds for an admin
+     * user, so both halves of "fails open on both sides" deserve a test. This
+     * asserts today's behaviour, not desired behaviour — BossConsole#85 tracks the
+     * fix, and landing it should flip the final assertion here.
+     */
+    @Test
+    fun `unwritable disabled-tools file still toggles in memory but does not persist`() {
+        // A regular file used as a parent directory: the write cannot succeed.
+        val blocker = tempDisabledFile()
+        blocker.parentFile.mkdirs()
+        blocker.writeText("not a directory")
+        val unwritable = File(blocker, "mcp-disabled-tools.json")
+
+        val core = McpToolRegistryCore(disabledFile = unwritable)
+        core.registerProvider(provider("p1", echoTool("doomed_toggle")))
+
+        // Must not throw, even though persisting is impossible.
+        core.setToolEnabled("doomed_toggle", enabled = false)
+
+        assertEquals(
+            setOf("doomed_toggle"),
+            core.disabledToolNames.value,
+            "the in-memory toggle must still apply for this session",
+        )
+        assertFalse(
+            core.tools.value.any { it.definition.name == "doomed_toggle" },
+            "the tool must be hidden for this session",
+        )
+        // Assert the write genuinely failed rather than landing somewhere else --
+        // otherwise the reload assertion below could pass for the wrong reason.
+        assertFalse(unwritable.exists(), "the unwritable path must not have been created")
+        assertEquals(
+            emptySet(),
+            McpToolRegistryCore(disabledFile = unwritable).disabledToolNames.value,
+            "current behaviour: the toggle is lost on the next launch (see BossConsole#85)",
+        )
     }
 
     @Test

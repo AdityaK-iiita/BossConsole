@@ -154,11 +154,13 @@ An agent with tools is only as safe as the controls around it. BOSS is a **gover
 
 - **Server-enforced RBAC.** Roles and permissions live in Postgres and are enforced server-side via row-level security (Supabase). Plugins declare the permissions they need; a plugin — and its tools — only appear for users whose role grants them. See the [RBAC Guide](docs/RBAC_GUIDE.md).
 - **A kill-switch for every tool.** Every `mcp__boss__*` tool an agent can call is listed in **Toolbox → MCP**, and you can toggle any of them off. The exposed set is `all tools − your disabled set − permission-denied`, persisted to `~/.boss/mcp-disabled-tools.json` and enforced on the live server. Disable a plugin and its tools vanish from every agent instantly.
-- **User-scoped secrets.** The [Secret Manager](#security--secrets) stores encrypted credentials that are row-level-scoped to you. Its **browser auto-fill** injects a username/password straight into a web page's form fields — the value goes to the page, never to the model. (A secret is handed to an agent only if you explicitly call the permission-gated `secret_get` tool, which you can also toggle off.)
+- **User-scoped secrets.** The [Secret Manager](#security--secrets) stores encrypted credentials that are row-level-scoped to you. Its **browser auto-fill** injects a username/password straight into a web page's form fields — the value goes to the page, never to the model. (A secret is handed to an agent only if you explicitly call the permission-gated `secret_get` tool, which you can also toggle off — and see the admin-bypass note below, since "permission-gated" means nothing for an admin user.)
 - **Signed plugins.** Plugins installed from the BOSS Plugin Store carry a store signature binding `pluginId | version | sha256`; a **tampered or invalid signature fails closed** at download and load time — a re-signed or swapped JAR won't load.
 - **Fault isolation.** Each plugin runs in a supervised scope with a watchdog and auto-restart, so a crashing or hung plugin can't take down the host.
 
 > **Honest scope:** the `boss` MCP server is loopback-only and single-user (local machine), and plugins run in-process (crash-isolated, not OS-sandboxed). BOSS's guarantees are about **governance** — RBAC, per-tool toggles, secret scoping, and signed plugins — giving you fine-grained say over what an agent can do, rather than OS-level process sandboxing.
+>
+> Two specifics worth knowing before you rely on RBAC: **an admin user bypasses every permission check** (`McpToolRegistryCore.permitted()` returns early on `isAdmin`), so on a single-user desktop the per-tool kill-switch — which admin does *not* bypass — is the control that actually holds; and **permission coverage is per-tool, not blanket**, so some mutating tools declare no permission at all. [**Guardrails for the infrastructure plugins**](#guardrails-for-the-infrastructure-plugins) works this through for Docker and Kubernetes, with the exhaustive list.
 
 ---
 
@@ -171,7 +173,7 @@ BOSS speaks the **Model Context Protocol**. The `terminal-tab` plugin hosts a lo
 | Terminal | `run_command`, `run_in_sidebar`, `run_in_panel`, `list_tabs`, `read_scrollback`, `send_input` |
 | Code & Git | `codebase_read`, `codebase_write`, `codebase_tree`, `git_status`, `git_log`, `git_stage`, `git_checkout` |
 | Browser | `browser_navigate`, `browser_get_url`, `browser_run_js` |
-| Infrastructure | `docker_ps`, `docker_build`, `docker_compose_up`, `k8s_pods`, `k8s_logs`, `k8s_port_forward` |
+| Infrastructure | `docker_ps`, `docker_build`, `docker_compose_up`, `k8s_pods`, `k8s_logs`, `k8s_port_forward`, `helm_releases`, `helm_upgrade` |
 | Secrets | `secrets_list`, `secret_search`, `secret_get`, `secret_create` |
 | Automation | `flow_run`, `rpa_run`, `rpa_record_toggle`, `llmrpa_run`, `evolver_evolve` |
 | Productivity | `bookmarks_list`, `bookmark_add`, `downloads_list`, `plugins_list` |
@@ -205,8 +207,37 @@ Plugin authors add tools by implementing `McpToolProvider` (boss-plugin-api 1.0.
 
 | Plugin | What it does |
 |--------|--------------|
-| **[Docker](https://github.com/risa-labs-inc/boss-plugin-docker)** | Manage project Dockerfiles and Compose stacks plus local containers, images, volumes, and networks; stream logs, inspect services, and preview them inline (`docker_*` MCP tools). Published ports bind to `127.0.0.1`, and destructive actions require confirmation. |
-| **[Kubernetes](https://github.com/risa-labs-inc/boss-plugin-kubernetes)** | Work across contexts and namespaces with workloads, pods, services, Helm releases, logs, supervised port-forwards, and inline previews (`k8s_*` MCP tools). It never changes your active kubeconfig context and redacts Kubernetes Secret values. |
+| **[Docker](https://github.com/risa-labs-inc/boss-plugin-docker)** | Manage project Dockerfiles and Compose stacks plus local containers, images, volumes, and networks; stream logs, inspect services, and preview them inline (`docker_*` MCP tools). See [Guardrails](#guardrails-for-the-infrastructure-plugins). |
+| **[Kubernetes](https://github.com/risa-labs-inc/boss-plugin-kubernetes)** | Work across contexts and namespaces with workloads, pods, services, logs, supervised port-forwards, and inline previews — plus full Helm release management: install, upgrade, rollback, history, values, and repos (`k8s_*` and `helm_*` MCP tools). See [Guardrails](#guardrails-for-the-infrastructure-plugins). |
+
+### Guardrails for the infrastructure plugins
+
+Scoped deliberately: this covers the **Docker and Kubernetes plugins only**, because they reach real infrastructure and because their gating was audited against source. It is not a statement about BOSS's whole tool surface — other tools have their own posture, and nothing here should be read as a claim about them.
+
+> ⚠️ **Read this first: if your user is an admin, RBAC permissions stop nothing.** `McpToolRegistryCore.permitted()` short-circuits on `isAdmin` before checking any permission. This is **by design, not an oversight** — it mirrors the host-wide rule in `pluginAccessAllowed` ("Admins implicitly hold every permission"), so it is an RBAC semantic to plan around rather than a fix to wait for. For an admin operator — the common case on a single-user desktop — every tool in the "permission-gated" list below is exactly as reachable as the ungated ones. The **[per-tool kill-switch](#you-decide-what-your-agents-can-touch) is not bypassed by admin** (enforced at call time, not just when listing tools) and is therefore the only boundary that holds for an admin user. Treat permissions as meaningful for non-admin roles, and the kill-switch as the control that always applies.
+>
+> Being equally honest about that kill-switch: it **fails open on both sides**. Toggles you make in the app apply live, but the set is persisted to `~/.boss/mcp-disabled-tools.json` and re-read only at startup — so a hand-edit of that file takes effect on the next launch, and:
+>
+> - **Read side:** if the file is corrupt or unreadable the loader logs a warning and returns an empty set, silently re-enabling every tool.
+> - **Write side:** if persisting fails, the failure is logged and swallowed while the in-memory toggle stands — so a tool you switched off stays off for the session and quietly comes back on the next launch, with no signal that the decision didn't stick.
+>
+> The file is also plaintext, and an agent holding `run_command` or `codebase_write` can truncate it. This is the strongest control available here, not a sandbox. Both fail-open paths are tracked in [#85](https://github.com/risa-labs-inc/BossConsole/issues/85).
+
+**Confirmation dialogs never apply to agents.** Destructive actions taken by hand in the sidebar raise a confirm dialog, but that lives in the panel UI — an agent calling an MCP tool never sees it.
+
+**Permission-gated for non-admin roles:** `docker_rm`, `docker_stop`, `docker_compose_down` (`docker.manage`); `k8s_delete`, `k8s_scale`, `k8s_rollout_restart` (`kubernetes.manage`); `helm_install`, `helm_upgrade`, `helm_rollback`, `helm_uninstall`, `helm_test` (`kubernetes.manage`); `helm_push` (`helm.publish`).
+
+**Not permission-gated at all** — exhaustive for *mutating* tools as of writing, and split by how much reach they actually have. Read-only tools (`docker_ps`, `k8s_pods`, `k8s_logs`, the `helm_get_*` family) are also ungated and are not listed; note `k8s_logs` can surface secret material regardless of the redaction below.
+
+- **Real reach — disable unless needed:** `k8s_exec`, `k8s_apply`, `k8s_port_forward`, `docker_compose_up`, `docker_build`, `docker_start`, `docker_restart`, `helm_repo_add`, `helm_repo_update`, `helm_repo_remove`, `helm_package`, `helm_dependency_update`
+- **`k8s_use_context` — also real reach, for a less obvious reason.** It only flips an in-memory selection, but that selection decides which cluster *every* subsequent `k8s_*` / `helm_*` call targets. Switching to a prod context and then calling ungated `k8s_apply` or `k8s_exec` is not local by any useful definition.
+- **Local-only — open a tab, or stop something BOSS started:** `docker_open_service`, `k8s_open_resource`, `k8s_port_forward_stop`, `helm_open_release`
+
+> ⚠️ **`k8s_exec` and `k8s_apply` are the two to disable first.** `k8s_exec` is arbitrary in-cluster command execution — it opens a pod shell an agent can then drive — so it **bypasses the Secret protections below** entirely (read a mounted Secret or the service-account token directly). `k8s_apply` is the same class: apply a pod that mounts the Secret.
+
+**Scope of the other claims.** Ports BOSS publishes itself bind to `127.0.0.1`; ports declared in your own `docker-compose.yml` bind as written, since the plugin runs your file unmodified — both a `"8080:8080"` mapping and `network_mode: host` bypass the loopback binding. The Kubernetes plugin never modifies your kubeconfig — context selection is local to BOSS, so your shells' `kubectl` default is untouched — though `helm repo` commands do write your local Helm config (`~/.config/helm/repositories.yaml`). Secret values are redacted two specific ways: `k8s_yaml` is refused for Secrets, and rendered Helm manifests have `data:`/`stringData:` blocks stripped — subject to the `k8s_exec` caveat above.
+
+<sub>Audited 2026-07-31 against **boss-plugin-docker 1.0.2** and **boss-plugin-kubernetes 1.0.3**; compare against your installed versions, since the plugins release independently of BOSS and nothing in CI relates this list to them. Plugin source is authoritative. Closing the ungated gaps is tracked in [boss-plugin-docker#3](https://github.com/risa-labs-inc/boss-plugin-docker/issues/3) and [boss-plugin-kubernetes#3](https://github.com/risa-labs-inc/boss-plugin-kubernetes/issues/3).</sub>
 
 ### AI & automation
 | Plugin | What it does |
