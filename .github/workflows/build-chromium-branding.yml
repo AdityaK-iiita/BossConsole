@@ -1,19 +1,49 @@
 name: Build BOSS-Branded Chromium
 
+run-name: BOSS Chromium for JxBrowser ${{ inputs.jxbrowser_version }}
+
 on:
   workflow_dispatch:
     inputs:
       jxbrowser_version:
-        description: 'JxBrowser version (e.g., 9.3.0)'
+        description: 'JxBrowser version (e.g., 9.4.0)'
         required: true
-        default: '9.3.0'
+      force_rebuild:
+        description: 'Replace an already-complete release for this version'
+        type: boolean
+        default: false
+
+concurrency:
+  group: jxbrowser-branding-${{ inputs.jxbrowser_version }}
+  cancel-in-progress: false
 
 env:
-  JXBROWSER_VERSION: ${{ github.event.inputs.jxbrowser_version || '9.3.0' }}
+  JXBROWSER_VERSION: ${{ inputs.jxbrowser_version }}
 
 jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.release.outputs.should_build }}
+      release_mode: ${{ steps.release.outputs.release_mode }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Check for a complete published release
+        id: release
+        env:
+          CHECK_MODE: preflight
+          FORCE_REBUILD: ${{ inputs.force_rebuild }}
+          RELEASES_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TARGET_VERSION: ${{ inputs.jxbrowser_version }}
+        run: bash .github/scripts/check-jxbrowser-release.sh
+
   # Build the Chromium branding tool first
   build-branding-tool:
+    needs: preflight
+    if: needs.preflight.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Chromium-Branding Tool
@@ -87,6 +117,7 @@ jobs:
   build-macos-arm64:
     needs: build-branding-tool
     runs-on: macos-14
+    timeout-minutes: 50
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -383,6 +414,7 @@ jobs:
   build-macos-x64:
     needs: build-branding-tool
     runs-on: macos-15-large
+    timeout-minutes: 50
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -885,6 +917,7 @@ jobs:
   build-linux-x64:
     needs: build-branding-tool
     runs-on: ubuntu-latest
+    timeout-minutes: 50
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -980,7 +1013,7 @@ jobs:
   build-linux-arm64:
     needs: build-branding-tool
     runs-on: ubuntu-24.04-arm
-    continue-on-error: true  # Graceful failure if ARM runners unavailable
+    timeout-minutes: 50
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1085,13 +1118,13 @@ jobs:
 
   # Upload to BossConsole-Releases
   upload-to-releases:
-    needs: [build-macos-arm64, build-macos-x64, build-windows-x64, build-windows-arm64, build-linux-x64, build-linux-arm64]
-    # Require every MANDATORY platform to succeed. This job deletes + recreates the
-    # release from the artifacts present, so an OR-of-any here silently publishes an
-    # INCOMPLETE release when a platform fails — which is how chromium-v9.1.2 lost
-    # windows-x64. windows-arm64 is intentionally excluded: it's continue-on-error
-    # (the windows_arm64 runner may be unavailable), so it stays OPTIONAL — its zip is
-    # uploaded when present, but its absence must not block the release.
+    needs: [preflight, build-macos-arm64, build-macos-x64, build-windows-x64, build-windows-arm64, build-linux-x64, build-linux-arm64]
+    # Require every MANDATORY platform to succeed. An OR-of-any here silently
+    # publishes an INCOMPLETE release when a platform fails — which is how
+    # chromium-v9.1.2 lost windows-x64. windows-arm64 is intentionally excluded:
+    # it's continue-on-error (the windows_arm64 runner may be unavailable), so it
+    # stays OPTIONAL — its zip is uploaded when present, but its absence must not
+    # block the release.
     if: ${{ needs.build-macos-arm64.result == 'success' && needs.build-macos-x64.result == 'success' && needs.build-windows-x64.result == 'success' && needs.build-linux-x64.result == 'success' && needs.build-linux-arm64.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
@@ -1105,27 +1138,73 @@ jobs:
         with:
           path: artifacts
 
-      - name: List artifacts
+      - name: Validate release artifacts
         run: |
+          set -euo pipefail
           echo "Downloaded artifacts:"
           find artifacts -type f -name "*.zip" -exec ls -la {} \;
 
-      - name: Upload to BossConsole-Releases
+          source .github/scripts/chromium-release-utils.sh
+          load_chromium_required_assets .github/chromium-required-assets.txt
+          required=("${CHROMIUM_REQUIRED_ASSETS[@]}")
+          for asset in "${required[@]}"; do
+            if [[ -z "$(find artifacts -type f -name "$asset" -print -quit)" ]]; then
+              echo "::error::Required Chromium archive is missing: $asset"
+              exit 1
+            fi
+          done
+
+      # New releases are staged as drafts until Supabase succeeds. Public repair
+      # uploads are deliberately delayed until after the mirror succeeds.
+      - name: Stage draft GitHub release
         env:
           GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          RELEASE_MODE: ${{ needs.preflight.outputs.release_mode }}
         run: |
-          TAG="chromium-v${{ env.JXBROWSER_VERSION }}"
+          set -euo pipefail
+          TAG="chromium-v$JXBROWSER_VERSION"
 
-          # Delete existing release if present
-          gh release delete "$TAG" \
-            --repo risa-labs-inc/BossConsole-Releases \
-            --yes 2>/dev/null || true
+          # A "re-run failed jobs" keeps preflight's cached release_mode. Clean
+          # every matching draft by release ID so create remains idempotent even
+          # when the cached mode says "new". Never delete a public release.
+          release_pages="$(gh api \
+            --paginate \
+            --slurp \
+            'repos/risa-labs-inc/BossConsole-Releases/releases?per_page=100')"
+          public_id="$(jq -r --arg tag "$TAG" \
+            'first(.[][] | select(.tag_name == $tag and .draft == false) | .id) // empty' \
+            <<< "$release_pages")"
+          draft_ids="$(jq -r --arg tag "$TAG" \
+            '.[][] | select(.tag_name == $tag and .draft == true) | .id' \
+            <<< "$release_pages")"
+          while IFS= read -r release_id || [[ -n "$release_id" ]]; do
+            if [[ -n "$release_id" ]]; then
+              echo "Deleting stale draft release ID $release_id"
+              gh api \
+                --method DELETE \
+                "repos/risa-labs-inc/BossConsole-Releases/releases/$release_id"
+            fi
+          done <<< "$draft_ids"
 
-          # Create new release
+          if [[ "$RELEASE_MODE" == "repair_public" ]]; then
+            if [[ -z "$public_id" ]]; then
+              echo "::error::$TAG disappeared after preflight; refusing to update Supabase without a repair target"
+              exit 1
+            fi
+            echo "Public release repair will run after the Supabase mirror succeeds."
+            exit 0
+          fi
+
+          if [[ -n "$public_id" ]]; then
+            echo "::error::$TAG became public after preflight; refusing to create a duplicate draft"
+            exit 1
+          fi
+
           gh release create "$TAG" \
             --repo risa-labs-inc/BossConsole-Releases \
-            --title "BOSS Chromium v${{ env.JXBROWSER_VERSION }}" \
-            --notes "BOSS-branded Chromium binaries for JxBrowser ${{ env.JXBROWSER_VERSION }}
+            --draft \
+            --title "BOSS Chromium v$JXBROWSER_VERSION" \
+            --notes "BOSS-branded Chromium binaries for JxBrowser $JXBROWSER_VERSION
 
           ## Downloads
           - \`boss-chromium-macos-arm64.zip\` - macOS Apple Silicon
@@ -1144,30 +1223,35 @@ jobs:
           These binaries are automatically bundled with BOSS releases.
           The \`executable.name\` file must be preserved for JxBrowser."
 
-          # Upload all artifacts
           for zip in artifacts/*/boss-chromium-*.zip; do
             if [ -f "$zip" ]; then
               echo "Uploading: $zip"
               gh release upload "$TAG" "$zip" \
                 --repo risa-labs-inc/BossConsole-Releases \
-                --clobber || echo "Failed to upload $zip"
+                --clobber
             fi
           done
 
-          echo "Release URL: https://github.com/risa-labs-inc/BossConsole-Releases/releases/tag/$TAG"
+          source .github/scripts/chromium-release-utils.sh
+          load_chromium_required_assets .github/chromium-required-assets.txt
+          uploaded="$(gh release view "$TAG" \
+            --repo risa-labs-inc/BossConsole-Releases \
+            --json assets --jq '.assets[].name')"
+          verify_chromium_release_assets "$uploaded" "Draft GitHub release"
 
       # Mirror the engine archives to Supabase (app id "boss-chromium" in the shared
       # app_releases table/bucket) so clients download from Supabase first with the
-      # GitHub release above as backup. Large zips go via TUS chunks inside the script
+      # GitHub release as backup. Large zips go via TUS chunks inside the script
       # (Cloudflare caps single requests at ~100 MB).
       - name: Publish to Supabase
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
+          set -euo pipefail
           if [[ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]]; then
-            echo "ℹ️  SUPABASE_SERVICE_ROLE_KEY not set; skipping Supabase publish."
-            exit 0
+            echo "::error::SUPABASE_SERVICE_ROLE_KEY is required for Chromium releases"
+            exit 1
           fi
           export SUPABASE_URL="${SUPABASE_URL:-https://api.risaboss.com}"
 
@@ -1177,3 +1261,40 @@ jobs:
 
           bash scripts/publish-supabase-release.sh \
             boss-chromium "$JXBROWSER_VERSION" stable chromium-assets app-releases
+
+      - name: Repair or publish GitHub release
+        # force_rebuild also uses repair_public. Version-pinned clients keep
+        # working, though GitHub may briefly serve mixed old/new assets while
+        # each clobber completes; Supabase is already updated at this point.
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          RELEASE_MODE: ${{ needs.preflight.outputs.release_mode }}
+        run: |
+          set -euo pipefail
+          TAG="chromium-v$JXBROWSER_VERSION"
+          if [[ "$RELEASE_MODE" == "repair_public" ]]; then
+            for zip in artifacts/*/boss-chromium-*.zip; do
+              if [[ -f "$zip" ]]; then
+                echo "Uploading repair asset: $zip"
+                gh release upload "$TAG" "$zip" \
+                  --repo risa-labs-inc/BossConsole-Releases \
+                  --clobber
+              fi
+            done
+
+            source .github/scripts/chromium-release-utils.sh
+            load_chromium_required_assets .github/chromium-required-assets.txt
+            uploaded="$(gh release view "$TAG" \
+              --repo risa-labs-inc/BossConsole-Releases \
+              --json assets --jq '.assets[].name')"
+            verify_chromium_release_assets "$uploaded" "Repaired GitHub release"
+            gh release edit "$TAG" \
+              --repo risa-labs-inc/BossConsole-Releases \
+              --latest=false
+          else
+            gh release edit "$TAG" \
+              --repo risa-labs-inc/BossConsole-Releases \
+              --draft=false \
+              --latest=false
+          fi
+          echo "Release URL: https://github.com/risa-labs-inc/BossConsole-Releases/releases/tag/$TAG"

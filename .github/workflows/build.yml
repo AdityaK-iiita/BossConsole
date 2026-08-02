@@ -37,6 +37,11 @@ jobs:
         # Apple is stubbed, so this runs on ubuntu with no credentials.
         run: bash scripts/test/test-notarize-dmg.sh
 
+      - name: 🧪 JxBrowser auto-release detector tests
+        # GitHub and Artifact Registry are stubbed so every decision path is
+        # deterministic and does not consume credentials.
+        run: bash scripts/test/test-jxbrowser-autorelease.sh
+
   version-check:
     runs-on: ubuntu-latest
     outputs:
