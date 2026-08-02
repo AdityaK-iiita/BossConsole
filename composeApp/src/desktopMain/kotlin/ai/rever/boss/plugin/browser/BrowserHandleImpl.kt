@@ -1,6 +1,7 @@
 package ai.rever.boss.plugin.browser
 
 import ai.rever.boss.cache.FaviconCache
+import ai.rever.boss.config.JxBrowserConfig
 import ai.rever.boss.dashboard.RecentBrowserPagesManager
 import ai.rever.boss.plugin.window.LocalWindowId
 import ai.rever.boss.tabfullscreen.FullscreenBrowserWindow
@@ -9,6 +10,7 @@ import ai.rever.boss.utils.WindowFocusManager
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -20,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
+import androidx.compose.ui.unit.dp
 import com.teamdev.jxbrowser.browser.Browser
 import com.teamdev.jxbrowser.browser.callback.CreatePopupCallback
 import com.teamdev.jxbrowser.browser.callback.InjectJsCallback
@@ -219,6 +222,12 @@ internal class BrowserHandleImpl(
 
     // BrowserViewState for Compose rendering - managed per Content() call
     private var currentViewState: BrowserViewState? = null
+
+    /**
+     * Which window [currentViewState] was built against, so a retained surface is only reused
+     * while the tab is still in that window. Null when no surface exists.
+     */
+    private var currentViewStateWindowId: String? = null
 
     // True while the pointer hovers this handle's rendered BrowserView. Gates the
     // window-wide macOS pinch listener so a pinch only zooms the browser under the
@@ -570,6 +579,9 @@ internal class BrowserHandleImpl(
 
         // Setup keyboard interceptor for menu shortcuts
         FluckEngine.setupKeyboardInterceptor(browser, ownerWindowId)
+
+        // Let a click in the page close any Swing popup menu open over it
+        FluckEngine.setupSwingPopupDismissOnPageClick(browser)
 
         // Setup screen capture handler
         FluckEngine.setupCaptureSessionHandler(browser)
@@ -1727,18 +1739,46 @@ internal class BrowserHandleImpl(
         }
 
         // Create BrowserViewState on first composition
-        var viewState by remember { mutableStateOf<BrowserViewState?>(null) }
+        // Retain the browser surface across tab switches in HARDWARE_ACCELERATED mode.
+        //
+        // The default lifecycle closes the surface whenever this composable leaves composition
+        // (switching to another tab) and rebuilds it on return. For an off-screen bitmap that is
+        // cheap; for a heavyweight GPU surface it tears down and re-initialises native resources,
+        // and the tab paints BLANK on the way back (A->B->A). BossConsoleLite hit this on its
+        // Windows fleet and calls it the "fast-switch blank".
+        //
+        // Retaining is gated on the rendering mode, NOT applied unconditionally as Lite does:
+        // Lite defaults HARDWARE everywhere so the two are the same thing there, but here
+        // OFF_SCREEN is still the macOS/Linux default and they must keep the exact lifecycle they
+        // have today. Safe because the surface is still closed for real in dispose(), which runs
+        // when the tab is actually closed rather than merely hidden.
+        val retainSurfaceAcrossTabSwitches = shouldRetainSurface(JxBrowserConfig.renderingMode)
+
+        // The window actually hosting this composition, resolved through the app's window
+        // registry. In a multi-window setup the "first showing window" fallback can resolve a
+        // different window than the one this view renders in, which would bind the view state and
+        // the pinch gesture listener where the browser isn't (gesture events are delivered per
+        // window). Keying the effect on the id also rebinds both when a tab moves across windows.
+        //
+        // Read HERE, above the seed, and not only inside the effect: the seed needs the same
+        // window-identity guard, or the first frame renders a surface bound to the window the tab
+        // came from and the effect then closes that very object while it is composed.
+        val hostWindowId = LocalWindowId.current
+
+        // Seeded from the retained surface so re-entry paints immediately instead of blank - but
+        // only when it belongs to THIS window, matching the reuse condition in the effect below.
+        var viewState by remember {
+            mutableStateOf(
+                currentViewState?.takeIf {
+                    retainSurfaceAcrossTabSwitches &&
+                        hostWindowId != null &&
+                        currentViewStateWindowId == hostWindowId
+                },
+            )
+        }
 
         // Track last navigation time for debouncing mouse button navigation
         var lastNavigationTime by remember { mutableStateOf(0L) }
-
-        // The window actually hosting this composition, resolved through the app's
-        // window registry. In a multi-window setup the "first showing window"
-        // fallback can resolve a different window than the one this view renders
-        // in, which would bind the view state and the pinch gesture listener where
-        // the browser isn't (gesture events are delivered per window). Keying the
-        // effect on the id also rebinds both when a tab moves across windows.
-        val hostWindowId = LocalWindowId.current
 
         DisposableEffect(browser, hostWindowId) {
             // Find a valid window to associate with the BrowserView
@@ -1758,11 +1798,45 @@ internal class BrowserHandleImpl(
                         }
                     }
 
-            if (awtWindow != null) {
+            // Reuse a retained surface ONLY while it still belongs to this window. This effect is
+            // keyed on hostWindowId precisely so a tab moved to another window rebinds (see the
+            // comment above); reusing unconditionally would short-circuit that rebind and leave
+            // the surface — and the pinch-gesture listener — attached to the window the tab came
+            // from. Retention is meant to survive hiding, not relocation.
+            // hostWindowId != null is load-bearing, not defensive: with a null id the equality
+            // check below is `null == null` for every window, so a surface would be reused after
+            // the "first showing window" fallback had resolved a DIFFERENT window than it was
+            // built against — exactly the case the hostWindowId key exists to catch. Without an
+            // id we cannot prove the window is the same, so we rebuild rather than assume.
+            val retained =
+                currentViewState?.takeIf {
+                    retainSurfaceAcrossTabSwitches &&
+                        hostWindowId != null &&
+                        currentViewStateWindowId == hostWindowId
+                }
+            if (retained != null) {
+                // Coming back to a tab whose surface was kept alive - reuse it rather than
+                // building a second one, which is the whole point of retaining.
+                viewState = retained
+            } else if (awtWindow != null) {
+                // A retained surface bound to a different window must be closed, not orphaned:
+                // nothing else will, since onDispose no longer closes while retaining.
+                currentViewState?.let { stale ->
+                    runCatching { stale.close() }
+                        .onFailure {
+                            logger.debug(
+                                LogCategory.BROWSER,
+                                "Closing a browser surface bound to a previous window failed",
+                                mapOf("error" to it.toString()),
+                            )
+                        }
+                    currentViewState = null
+                }
                 try {
                     val newState = BrowserViewState(browser, MainScope(), awtWindow)
                     viewState = newState
                     currentViewState = newState
+                    currentViewStateWindowId = hostWindowId
                 } catch (e: Exception) {
                     logger.warn(LogCategory.BROWSER, "Failed to create BrowserViewState", error = e)
                 }
@@ -1808,11 +1882,50 @@ internal class BrowserHandleImpl(
                 if (pane != null && token != null) {
                     MacOSGestureHandler.removeMagnificationListener(pane, token)
                 }
-                viewState?.close()
-                viewState = null
-                currentViewState = null
+                // When retaining, leaving composition means "this tab was hidden", not "this tab
+                // was closed" - so the surface stays alive and dispose() owns closing it. Compose
+                // still detaches the heavyweight AWT component, so a hidden tab's surface is not
+                // visible and cannot bleed through.
+                if (!retainSurfaceAcrossTabSwitches) {
+                    viewState?.close()
+                    viewState = null
+                    currentViewState = null
+                    currentViewStateWindowId = null
+                }
             }
         }
+
+        // HARDWARE_ACCELERATED browser-surface vertical correction, tunable per install.
+        //
+        // In HARDWARE mode the heavyweight GPU surface can land higher than its Compose slot,
+        // overlapping the chrome above it (the URL bar in a browser tab, the header in a plugin
+        // panel) and leaving a matching gap at the bottom. offset(y) shifts the surface DOWN
+        // without shrinking it — BossConsoleLite tried padding first and it shrank the surface,
+        // leaving the bottom gap. This composable is the single chokepoint for every
+        // BrowserHandle surface, so correcting it here fixes the browser tab and every
+        // browser-hosting plugin at once.
+        //
+        // DEFAULT IS 0, deliberately different from Lite's 24. The misalignment is not universal:
+        // measured on BossConsole on Windows 11 / 150% scaling (2026-07-31) with a marker page,
+        // the surface is correctly flush under the URL bar at 0, and 24 introduces a visible gap
+        // and pushes the page's bottom edge off-screen. Lite's fleet needed 24 — it is a
+        // browser-only build with different chrome heights — so the amount belongs to the install,
+        // not to the platform. Set BOSS_BROWSER_TOP_INSET_DP if a given machine shows the overlap.
+        // OFF_SCREEN composites correctly and is always 0, so macOS and Linux are untouched.
+        val hardwareTopInsetDp =
+            remember {
+                if (JxBrowserConfig.renderingMode == com.teamdev.jxbrowser.engine.RenderingMode.HARDWARE_ACCELERATED) {
+                    // ConfigLoader, not getenv: this is the per-INSTALL tuning knob (the amount
+                    // depends on the machine's chrome heights and scaling), so it belongs in
+                    // local.properties as much as in the environment.
+                    parseTopInsetDp(
+                        ai.rever.boss.config.ConfigLoader
+                            .getConfig("BOSS_BROWSER_TOP_INSET_DP"),
+                    )
+                } else {
+                    0
+                }
+            }
 
         // Render the browser view if available with mouse button handling
         viewState?.let { state ->
@@ -1821,6 +1934,7 @@ internal class BrowserHandleImpl(
                 modifier =
                     Modifier
                         .fillMaxSize()
+                        .offset(y = hardwareTopInsetDp.dp)
                         // Hover tracking that gates the window-wide pinch gesture
                         // listener to this view (see the DisposableEffect above)
                         .onPointerEvent(PointerEventType.Enter) { pointerOverBrowserView = true }
@@ -1896,6 +2010,7 @@ internal class BrowserHandleImpl(
         // Close browser view state
         currentViewState?.close()
         currentViewState = null
+        currentViewStateWindowId = null
 
         // Clean up find bar resources before closing browser
         FluckEngine.disposeBrowserFindBar(browser)
@@ -2015,3 +2130,33 @@ internal class BrowserHandleImpl(
         }
     }
 }
+
+/**
+ * Whether a browser surface should survive its composable leaving composition.
+ *
+ * Only under HARDWARE_ACCELERATED. There, leaving composition means "this tab was hidden", and
+ * closing the heavyweight GPU surface would make the tab paint blank when the user comes back
+ * (A->B->A). Under OFF_SCREEN the surface is a cheap CPU bitmap and the original close-on-hide
+ * lifecycle is kept, so macOS and Linux behave exactly as they did.
+ *
+ * Split out as a pure function so the platform decision is pinned by a test rather than by
+ * reading an inline expression buried in a composable.
+ */
+internal fun shouldRetainSurface(mode: com.teamdev.jxbrowser.engine.RenderingMode): Boolean =
+    mode == com.teamdev.jxbrowser.engine.RenderingMode.HARDWARE_ACCELERATED
+
+/**
+ * Parse BOSS_BROWSER_TOP_INSET_DP into a usable vertical correction for the browser surface.
+ *
+ * Clamped to 0..200 rather than taken at face value. This offset moves a heavyweight native
+ * surface inside its slot with no visible error reporting, so a stray negative would shift the page
+ * up under the toolbar and a stray large value would push it off the bottom — in both cases looking
+ * like a rendering bug rather than a mistyped setting. 200dp is far beyond any real chrome height,
+ * so the ceiling only ever catches nonsense.
+ *
+ * Unparseable or unset means 0, which is the correct default on the machine this was measured on
+ * (see benchmarks/speedometer/win/WINDOWS.md — Lite's 24 over-corrects here).
+ *
+ * Restart-scoped: read once per browser view, not live-tunable.
+ */
+internal fun parseTopInsetDp(raw: String?): Int = raw?.trim()?.toIntOrNull()?.coerceIn(0, 200) ?: 0

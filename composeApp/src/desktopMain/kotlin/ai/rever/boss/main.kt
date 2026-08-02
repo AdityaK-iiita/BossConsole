@@ -68,6 +68,35 @@ fun main(args: Array<String>) {
     // Set up proper temp directories for native libraries
     setupNativeLibraryPaths()
 
+    // Opt-in override for the Compose UI's own rendering backend (Skiko) - separate from the
+    // BROWSER's rendering mode in JxBrowserConfig. Lets a backend be A/B'd on a real machine
+    // without a rebuild: pin DIRECT3D, or confirm the GPU-less Windows RDP/VM cohort that falls
+    // back to software. UNSET by default so Skiko keeps its own auto-detection - forcing a
+    // backend that cannot initialize would break exactly the machines a pin is meant to help.
+    // Must run before any AWT/Skiko init, hence its position here.
+    //   BOSS_SKIKO_RENDER_API = DIRECT3D | OPENGL | METAL | SOFTWARE_FAST | SOFTWARE
+    // Validated against an allowlist, not forwarded raw: this runs before AWT/Skiko init, so an
+    // unrecognised value surfaces as a startup crash with no BOSS log line to explain it - on
+    // exactly the GPU-less RDP/VM machines the pin exists to help. Unknown values are ignored with
+    // a warning, matching how the other tunables added alongside this behave.
+    ai.rever.boss.config.ConfigLoader
+        .getConfig("BOSS_SKIKO_RENDER_API")
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?.let { requested ->
+            val known = setOf("DIRECT3D", "OPENGL", "METAL", "SOFTWARE_FAST", "SOFTWARE")
+            val normalized = requested.uppercase()
+            if (normalized in known) {
+                System.setProperty("skiko.renderApi", normalized)
+            } else {
+                logger.warn(
+                    LogCategory.SYSTEM,
+                    "Ignoring unrecognized BOSS_SKIKO_RENDER_API - letting Skiko auto-detect",
+                    mapOf("value" to requested, "known" to known.joinToString("|")),
+                )
+            }
+        }
+
     // Disable lightweight popups for HARDWARE_ACCELERATED rendering mode (#258)
     // This ensures Swing popup menus (context menus) appear above the browser view
     JPopupMenu.setDefaultLightWeightPopupEnabled(false)
@@ -293,6 +322,33 @@ fun main(args: Array<String>) {
     )
 
     logger.info(LogCategory.SYSTEM, "Successfully acquired single-instance lock")
+
+    // Route app overlays (context menus, dropdowns, tooltips) through heavyweight windows when the
+    // browser is GPU-composited. In HARDWARE_ACCELERATED mode the JxBrowser view is a heavyweight
+    // native surface that paints above lightweight Compose, so an ordinary Compose Popup renders
+    // BEHIND the page. Dormant - a no-op - wherever OFF_SCREEN is the mode (macOS, Linux), so the
+    // unchanged platforms cannot regress. See JxBrowserConfig.renderingMode and
+    // benchmarks/speedometer/win/WINDOWS.md.
+    ai.rever.boss.components.overlays.OverlayConfig.heavyweightPopup =
+        { onDismiss, popupOffset, focusable, popupContent ->
+            ai.rever.boss.components.overlays
+                .HeavyweightPopup(onDismiss, popupOffset, focusable, popupContent)
+        }
+    ai.rever.boss.components.overlays.OverlayConfig.heavyweightModal = { onDismiss, modalContent ->
+        ai.rever.boss.components.overlays
+            .HeavyweightModal(onDismiss, modalContent)
+    }
+    ai.rever.boss.components.overlays.OverlayConfig.heavyweightTooltip = { text ->
+        ai.rever.boss.components.overlays.SwingTooltip
+            .show(text)
+    }
+    ai.rever.boss.components.overlays.OverlayConfig.hideHeavyweightTooltip = {
+        ai.rever.boss.components.overlays.SwingTooltip
+            .hide()
+    }
+    ai.rever.boss.components.overlays.OverlayConfig.useHeavyweightPopups =
+        ai.rever.boss.config.JxBrowserConfig.renderingMode ==
+        com.teamdev.jxbrowser.engine.RenderingMode.HARDWARE_ACCELERATED
 
     // Proactively clean up stale JxBrowser lock files from previous sessions
     // This is especially important for debug mode where shutdown hooks may not run

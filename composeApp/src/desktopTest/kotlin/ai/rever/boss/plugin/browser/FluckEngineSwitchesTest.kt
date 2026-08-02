@@ -74,9 +74,54 @@ class FluckEngineSwitchesTest {
         extras: List<String> = emptyList(),
     ) = FluckEngine.performanceSwitchesFor(os, arch, graphiteOptIn, inContainer, extras)
 
+    /**
+     * Switches that are not platform-specific, so a per-platform assertion can say what that
+     * platform adds ON TOP of the common set without restating it. Kept as a helper rather than
+     * inlined so adding another universal switch updates every test at once.
+     */
+    private val universalSwitches = setOf("--no-pings", "--disable-domain-reliability")
+
+    private fun platformSpecific(switches: List<String>) = switches - universalSwitches
+
     @Test
     fun `windows disables the native-window occlusion tracker`() {
-        assertEquals(listOf("--disable-features=CalculateNativeWinOcclusion"), switchesFor("windows 11"))
+        assertTrue("--disable-features=CalculateNativeWinOcclusion" in switchesFor("windows 11"))
+    }
+
+    @Test
+    fun `background network chatter is trimmed on every platform`() {
+        // Hyperlink-auditing pings and Chrome's Domain Reliability uploads are dead weight for an
+        // embedded browser. Asserted per-platform because it is easy to accidentally nest these
+        // inside one branch of the platform `when`.
+        for (os in listOf("windows 11", "mac os x", "linux", "freebsd")) {
+            val switches = switchesFor(os)
+            assertTrue("--no-pings" in switches, "expected --no-pings on '$os'")
+            assertTrue("--disable-domain-reliability" in switches, "expected --disable-domain-reliability on '$os'")
+        }
+    }
+
+    @Test
+    fun `renderer process cap is opt-in and rejects meaningless values`() {
+        assertEquals("--renderer-process-limit=4", FluckEngine.renderCapSwitch("4"))
+        assertEquals("--renderer-process-limit=1", FluckEngine.renderCapSwitch(" 1 "))
+        // Unset is the normal case. 0 and negatives are not caps, and must not be passed
+        // through as if they were.
+        for (raw in listOf(null, "", "   ", "0", "-1", "many", "4.5")) {
+            assertEquals(null, FluckEngine.renderCapSwitch(raw), "expected no cap for '$raw'")
+        }
+    }
+
+    @Test
+    fun `the renderer cap never leaks into the platform switch decision`() {
+        // The cap is resolved by the CALLER and handed in as an extra, never read inside
+        // performanceSwitchesFor. If it were read inside, every assertion in this class would
+        // depend on whether the developer happens to have BOSS_RENDERER_PROCESS_LIMIT set - it
+        // would pass locally and fail in CI, or the reverse.
+        assertTrue(switchesFor("windows 11").none { it.startsWith("--renderer-process-limit") })
+        // And when the caller does pass it, it still lands before the operator's own extras.
+        val withCap = switchesFor("windows 11", extras = listOf("--renderer-process-limit=3", "--custom"))
+        assertEquals("--custom", withCap.last())
+        assertTrue("--renderer-process-limit=3" in withCap)
     }
 
     @Test
@@ -84,19 +129,22 @@ class FluckEngineSwitchesTest {
         // Verified live 2026-07-13: Graphite-on produced blank browser content on
         // Apple Silicon (frames never reached the Compose surface); Graphite-off
         // rendered normally. Default must therefore be OFF.
-        assertEquals(emptyList(), switchesFor("mac os x", arch = "aarch64"))
+        assertEquals(emptyList(), platformSpecific(switchesFor("mac os x", arch = "aarch64")))
         assertEquals(
             listOf("--enable-features=SkiaGraphite"),
-            switchesFor("mac os x", arch = "aarch64", graphiteOptIn = true),
+            platformSpecific(switchesFor("mac os x", arch = "aarch64", graphiteOptIn = true)),
         )
         // Intel macs never get Graphite, even opted in.
-        assertEquals(emptyList(), switchesFor("mac os x", arch = "x86_64", graphiteOptIn = true))
+        assertEquals(emptyList(), platformSpecific(switchesFor("mac os x", arch = "x86_64", graphiteOptIn = true)))
     }
 
     @Test
     fun `linux enables VA-API and adds container-only switches inside containers`() {
         val desktop = switchesFor("linux")
-        assertEquals(listOf("--enable-features=VaapiVideoDecoder,VaapiVideoDecodeLinuxGL,VaapiVideoEncoder"), desktop)
+        assertEquals(
+            listOf("--enable-features=VaapiVideoDecoder,VaapiVideoDecodeLinuxGL,VaapiVideoEncoder"),
+            platformSpecific(desktop),
+        )
         assertFalse("--no-sandbox" in desktop)
         val container = switchesFor("linux", inContainer = true)
         assertTrue("--disable-dev-shm-usage" in container)
@@ -123,8 +171,8 @@ class FluckEngineSwitchesTest {
 
     @Test
     fun `unknown platforms get no platform-specific switches`() {
-        assertEquals(emptyList(), switchesFor("freebsd"))
-        assertEquals(emptyList(), switchesFor("sunos", inContainer = true))
+        assertEquals(emptyList(), platformSpecific(switchesFor("freebsd")))
+        assertEquals(emptyList(), platformSpecific(switchesFor("sunos", inContainer = true)))
     }
 
     @Test
@@ -137,6 +185,25 @@ class FluckEngineSwitchesTest {
         // ALSO show (documented limitation; BOSS_IN_CONTAINER covers that case).
         assertFalse(FluckEngine.cgroupIndicatesContainer("0::/"))
         assertFalse(FluckEngine.cgroupIndicatesContainer("12:pids:/user.slice/user-501.slice"))
+    }
+
+    // --- BOSS_BROWSER_REMOTE_DEBUGGING_PORT ---
+
+    @Test
+    fun `remote debugging port accepts only unprivileged ports`() {
+        assertEquals(9222, FluckEngine.parseRemoteDebuggingPort("9222"))
+        assertEquals(1024, FluckEngine.parseRemoteDebuggingPort(" 1024 "))
+        assertEquals(65535, FluckEngine.parseRemoteDebuggingPort("65535"))
+    }
+
+    @Test
+    fun `remote debugging port rejects anything that is not a usable port`() {
+        // "0" matters most: Chromium reads port 0 as "pick any free port", which
+        // would open a DevTools endpoint — full control of the browser profile —
+        // on a port nobody knows about. A typo must never land there.
+        for (raw in listOf(null, "", "  ", "0", "80", "1023", "65536", "-1", "9222x", "nine")) {
+            assertEquals(null, FluckEngine.parseRemoteDebuggingPort(raw), "expected rejection of '$raw'")
+        }
     }
 
     @Test

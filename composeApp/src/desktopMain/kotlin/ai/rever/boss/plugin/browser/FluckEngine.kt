@@ -134,12 +134,17 @@ object FluckEngine {
         }
 
         fun show() {
-            visible = true
+            // `visible` is committed only once a window is resolved. Setting it first left the bar
+            // marked visible while show() bailed out, so the NEXT Ctrl+F called hide() and the
+            // shortcut degraded into a dead every-other-press toggle. That is reachable now that
+            // Ctrl+F is served on the no-focused-window path, which is exactly the state where
+            // AWT's focusedWindow is most likely to be null too.
             val window =
                 java.awt.KeyboardFocusManager
                     .getCurrentKeyboardFocusManager()
                     .focusedWindow
                     ?: return
+            visible = true
             ownerWindow = window
             javax.swing.SwingUtilities.invokeLater {
                 if (dialog == null) {
@@ -1547,13 +1552,30 @@ object FluckEngine {
             )
         }
 
-        performanceSwitchesFor(
-            os = System.getProperty("os.name").lowercase(),
-            arch = System.getProperty("os.arch").lowercase(),
-            graphiteOptIn = envIsTrue("BOSS_ENABLE_SKIA_GRAPHITE"),
-            inContainer = inContainer,
-            extraSwitches = extras,
-        ).forEach { builder.addSwitch(it) }
+        // Opt-in RAM cap for many-tab sessions, OFF by default. Bounding the renderer process
+        // count trades cross-tab isolation and stability for memory, which is not a trade to make
+        // for everyone — Lite exposes it as a tunable for exactly that reason, pending real-world
+        // tab-count data. Values <= 0 are ignored rather than passed through, since
+        // --renderer-process-limit=0 is not a meaningful cap.
+        //
+        // Resolved HERE rather than inside performanceSwitchesFor so that function stays pure and
+        // its tests stay independent of the developer's environment. Inserted BEFORE the operator's
+        // extras so the documented "extras are appended last, so operator flags win ties" holds.
+        val rendererCap =
+            renderCapSwitch(
+                ai.rever.boss.config.ConfigLoader
+                    .getConfig("BOSS_RENDERER_PROCESS_LIMIT"),
+            )
+
+        val platformSwitches =
+            performanceSwitchesFor(
+                os = System.getProperty("os.name").lowercase(),
+                arch = System.getProperty("os.arch").lowercase(),
+                graphiteOptIn = envIsTrue("BOSS_ENABLE_SKIA_GRAPHITE"),
+                inContainer = inContainer,
+                extraSwitches = listOfNotNull(rendererCap) + extras,
+            )
+        platformSwitches.forEach { builder.addSwitch(it) }
     }
 
     /**
@@ -1588,6 +1610,13 @@ object FluckEngine {
     /**
      * The per-platform switch decision as a pure function so the flag audit is
      * unit-testable without an [EngineOptions.Builder].
+     *
+     * Genuinely pure: every input is a parameter. Notably the opt-in renderer cap is NOT read
+     * here — it is resolved by the caller and appended around this result (see
+     * [applyPerformanceSwitches]). Reading config inside would hide an input from a function whose
+     * whole point is an auditable decision, and would make these tests depend on the developer's
+     * own environment: anyone with BOSS_RENDERER_PROCESS_LIMIT set would get a different switch
+     * set than CI.
      */
     internal fun performanceSwitchesFor(
         os: String,
@@ -1597,6 +1626,16 @@ object FluckEngine {
         extraSwitches: List<String> = emptyList(),
     ): List<String> {
         val switches = mutableListOf<String>()
+
+        // Background network chatter an embedded browser has no use for, on every platform.
+        // --no-pings drops hyperlink-auditing pings; --disable-domain-reliability stops
+        // Chrome's Domain Reliability error-reporting uploads to Google. Neither is load-bearing
+        // for anything BOSS does, so this is pure reduction. Ported from BossConsoleLite, which
+        // deliberately stopped short of --disable-background-networking and the component
+        // updater pending proof they don't break the update/DRM paths — that caution is kept.
+        switches += "--no-pings"
+        switches += "--disable-domain-reliability"
+
         when {
             os.contains("win") -> {
                 // Chromium's native-window occlusion tracker can conclude the
@@ -1646,6 +1685,61 @@ object FluckEngine {
         return switches
     }
 
+    /** Pure part of the renderer-process cap, split out so the guard is unit-testable. */
+    internal fun renderCapSwitch(raw: String?): String? =
+        raw
+            ?.trim()
+            ?.toIntOrNull()
+            ?.takeIf { it > 0 }
+            ?.let { "--renderer-process-limit=$it" }
+
+    /**
+     * Opt-in DevTools endpoint on the embedded engine, for measuring the fluck
+     * browser with the same CDP harness that drives Chrome/Edge — otherwise the
+     * one browser we most want to profile is the one that can only be read off a
+     * screenshot (see benchmarks/speedometer/win/SpeedometerCdp.java).
+     *
+     * OFF unless BOSS_BROWSER_REMOTE_DEBUGGING_PORT names a valid port, because
+     * an open DevTools port is full control of the browser profile: any local
+     * process can read cookies and session tokens and drive navigation through
+     * it, with no prompt. That is why this is an env var and not a setting — it
+     * should be a deliberate act for one session, not something that can be left
+     * on. Chromium binds the endpoint to loopback only, which bounds the exposure
+     * to this machine but not to this app.
+     *
+     * [parseRemoteDebuggingPort] rejects anything outside the unprivileged range
+     * so a typo cannot silently mean "port 0" — which Chromium reads as
+     * "pick any free port", i.e. a debugging endpoint nobody knows is open.
+     *
+     * Read with getenv rather than ConfigLoader ON PURPOSE, unlike the other tunables here: a
+     * value in local.properties persists across every future run of that checkout, and this one
+     * should not be possible to leave on by accident. It also applies to the SHARED engine, so
+     * without BOSS_DEV_MODE it exposes the operator's real profile and cookies — hence the
+     * per-session env var and the warning below.
+     */
+    private fun applyRemoteDebuggingPort(builder: EngineOptions.Builder) {
+        val raw = System.getenv("BOSS_BROWSER_REMOTE_DEBUGGING_PORT") ?: return
+        val port = parseRemoteDebuggingPort(raw)
+        if (port == null) {
+            logger.warn(
+                LogCategory.BROWSER,
+                "Ignoring BOSS_BROWSER_REMOTE_DEBUGGING_PORT - not a port in 1024..65535",
+                mapOf("value" to raw),
+            )
+            return
+        }
+        builder.remoteDebuggingPort(port)
+        logger.warn(
+            LogCategory.BROWSER,
+            "DevTools remote debugging ENABLED on this engine - any local process can drive the browser " +
+                "and read its cookies. Unset BOSS_BROWSER_REMOTE_DEBUGGING_PORT when you are done.",
+            mapOf("port" to port),
+        )
+    }
+
+    /** Pure part of [applyRemoteDebuggingPort], split out so the guard is unit-testable. */
+    internal fun parseRemoteDebuggingPort(raw: String?): Int? = raw?.trim()?.toIntOrNull()?.takeIf { it in 1024..65535 }
+
     private fun createEngineInstance(
         chromiumDir: java.nio.file.Path,
         profileDirPath: java.nio.file.Path,
@@ -1673,7 +1767,7 @@ object FluckEngine {
                 // container boundary provides the isolation instead.
                 .apply {
                     if (envIsTrue("BOSS_CHROMIUM_DISABLE_SANDBOX") || inContainer) disableSandbox()
-                }
+                }.apply { applyRemoteDebuggingPort(this) }
 
         // Add user agent if configured
         BrowserSettings.userAgent?.let { ua ->
@@ -1922,6 +2016,61 @@ object FluckEngine {
         }
 
     /**
+     * Dismiss any open Swing popup menu when the user clicks inside the web page.
+     *
+     * A heavyweight [javax.swing.JPopupMenu] normally closes itself on a click elsewhere: Swing's
+     * [javax.swing.MenuSelectionManager] watches the AWT event queue and clears the selection when
+     * a press lands outside the menu. A click on the browser never reaches that queue — Chromium
+     * owns a native child window and consumes the event itself — so the menu stays on screen.
+     * Observed on Windows with the fluck browser's right-click menu: clicking BOSS's own chrome
+     * (tab bar, sidebar) dismissed it, clicking the page did not, and right-clicking again merely
+     * relocated the same popup.
+     *
+     * This closes the loop by turning an in-page press into the clearSelectedPath() call Swing
+     * would have made itself. Deliberately placed in the host rather than in the browser plugin:
+     * the plugin owns the menu but has no mouse-press signal (BrowserHandle exposes only
+     * executeJavaScript and a context-menu callback), whereas the host already holds the
+     * JxBrowser Browser and installs input callbacks on it. Fixing it here needs no plugin
+     * release and no plugin-api change, and covers every Swing popup any plugin opens over a page.
+     *
+     * Always proceeds — the click must still reach the page. Registered for every browser on
+     * every platform: an unnecessary clearSelectedPath() when no menu is open is a no-op, which is
+     * cheaper than reasoning about which rendering mode can strand a popup.
+     *
+     * NOTE for future input work: JxBrowser allows ONE callback per type, so this owns the
+     * browser's only `PressMouseCallback` slot. Anything else that needs mouse presses (an RPA
+     * recorder, a gesture feature) must extend this callback rather than call `browser.set(...)`
+     * again — a second registration replaces this one silently, with no compile error.
+     */
+    fun setupSwingPopupDismissOnPageClick(browser: com.teamdev.jxbrowser.browser.Browser) {
+        try {
+            browser.set(
+                com.teamdev.jxbrowser.browser.callback.input.PressMouseCallback::class.java,
+                com.teamdev.jxbrowser.browser.callback.input.PressMouseCallback {
+                    // The callback arrives on a JxBrowser thread; MenuSelectionManager is
+                    // Swing state and must only be touched on the EDT.
+                    javax.swing.SwingUtilities.invokeLater {
+                        val manager = javax.swing.MenuSelectionManager.defaultManager()
+                        if (manager.selectedPath.isNotEmpty()) {
+                            manager.clearSelectedPath()
+                        }
+                    }
+                    com.teamdev.jxbrowser.browser.callback.input.PressMouseCallback.Response
+                        .proceed()
+                },
+            )
+        } catch (e: Exception) {
+            // A browser that rejects the callback still works; it just keeps the old
+            // stuck-menu behaviour, which is not worth failing browser setup over.
+            logger.debug(
+                LogCategory.BROWSER,
+                "Could not install page-click popup dismissal",
+                mapOf("error" to e.toString()),
+            )
+        }
+    }
+
+    /**
      * Sets up keyboard interceptor for a browser to forward menu shortcuts to the native menu bar.
      * This intercepts Cmd+R, Cmd+N, Cmd+T, Cmd+W, etc. (on macOS) or Ctrl+R, Ctrl+N, etc. (on Windows/Linux)
      * before JxBrowser consumes them, and manually triggers the corresponding MenuActionsHandler methods.
@@ -1983,15 +2132,27 @@ object FluckEngine {
 
                 // Intercept main modifier + key shortcuts
                 if (isMainModifierDown && !modifiers.isShiftDown && !modifiers.isAltDown) {
+                    // Reload is BROWSER-scoped and this callback already fires for the browser that
+                    // received the key, so reload it directly instead of routing through the
+                    // focused WINDOW. MenuActionsHandler.triggerReloadBrowser only emits an event
+                    // that ends in the same reload, so nothing host-side is skipped — this is the
+                    // same action, aimed at the browser we already have rather than at whichever
+                    // window is focused.
+                    //
+                    // Deliberately NOT justified by "HARDWARE has no focused window": an owned
+                    // browser whose window is not focused is suppressed by the acceptsInput gate
+                    // above, well before this point, so that claim cannot be what makes this
+                    // necessary. Applies on every platform and both rendering modes.
+                    //
+                    // isClosed-guarded like every other browser call in this file: this runs on a
+                    // JxBrowser callback thread and can race a tab close.
+                    if (keyCode == com.teamdev.jxbrowser.ui.KeyCode.KEY_CODE_R) {
+                        if (!browser.isClosed) browser.navigation().reload()
+                        return@PressKeyCallback com.teamdev.jxbrowser.browser.callback.input.PressKeyCallback.Response
+                            .suppress()
+                    }
                     if (shortcutWindowId != null) {
                         when (keyCode) {
-                            com.teamdev.jxbrowser.ui.KeyCode.KEY_CODE_R -> {
-                                ai.rever.boss.window.MenuActionsHandler
-                                    .triggerReloadBrowser(shortcutWindowId)
-                                return@PressKeyCallback com.teamdev.jxbrowser.browser.callback.input.PressKeyCallback.Response
-                                    .suppress()
-                            }
-
                             com.teamdev.jxbrowser.ui.KeyCode.KEY_CODE_N -> {
                                 ai.rever.boss.window.MenuActionsHandler
                                     .triggerNewTab(shortcutWindowId)
@@ -2026,14 +2187,24 @@ object FluckEngine {
                             }
                         }
                     } else {
-                        // Log only for shortcuts we handle to avoid spam
+                        // No window to route through. For a WINDOW-OWNED browser this is
+                        // unreachable — an unfocused owner is suppressed by the acceptsInput gate
+                        // above — so this is the legacy unowned path (BrowserFunctions.createBrowser
+                        // passes no ownerWindowId). This callback is browser-scoped either way, so
+                        // anything needing only the browser is served directly rather than dropped.
                         when (keyCode) {
-                            com.teamdev.jxbrowser.ui.KeyCode.KEY_CODE_R,
+                            com.teamdev.jxbrowser.ui.KeyCode.KEY_CODE_F -> {
+                                val findBar = activeFindBars.getOrPut(browser) { BrowserFindBar(browser) }
+                                findBar.toggle()
+                                return@PressKeyCallback com.teamdev.jxbrowser.browser.callback.input.PressKeyCallback.Response
+                                    .suppress()
+                            }
+
                             com.teamdev.jxbrowser.ui.KeyCode.KEY_CODE_N,
                             com.teamdev.jxbrowser.ui.KeyCode.KEY_CODE_T,
                             com.teamdev.jxbrowser.ui.KeyCode.KEY_CODE_W,
-                            com.teamdev.jxbrowser.ui.KeyCode.KEY_CODE_F,
                             -> {
+                                // New/close tab need a window we cannot resolve from here.
                                 logger.debug(
                                     LogCategory.BROWSER,
                                     "No window focused, cannot dispatch shortcut",
