@@ -75,11 +75,25 @@ object PluginRenderRecovery {
     const val REBUILD_GRACE_MILLIS = 4_000L
 
     /**
-     * Plugins whose panels are currently rendering content, most recently mounted
-     * last. Insertion-ordered because the panel a user just opened or interacted
-     * with is the better first suspect, and a wrong guess only costs one cycle.
+     * How many live boundaries each plugin currently has, and in what order they
+     * first appeared.
+     *
+     * Reference-counted, not a set. PluginErrorBoundary is instantiated per
+     * surface — per tab and per side panel, across windows — so one plugin
+     * routinely has several live boundaries at once. With a plain set, closing one
+     * of two terminal tabs removed the terminal plugin from the mounted list while
+     * it was still rendering, after which it could never be suspected: the real
+     * culprit would be ruled out by omission and the incident would end
+     * Unexplained, leaving a permanently broken window — the exact outcome this
+     * class exists to prevent.
+     *
+     * A LinkedHashMap for recency: every mount moves the plugin to the end — see
+     * [registerMounted], which removes and re-puts rather than incrementing in
+     * place, because neither `LinkedHashMap.put` nor `LinkedHashSet.add` reorders
+     * a key that is already present. Guarded by its own monitor since it is both
+     * mutated and iterated.
      */
-    private val mounted = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
+    private val mountCounts = LinkedHashMap<String, Int>()
 
     /** The single plugin currently held responsible, if any. */
     @Volatile
@@ -102,18 +116,47 @@ object PluginRenderRecovery {
      * function that clears it when the panel goes away.
      */
     fun registerMounted(pluginId: String): () -> Unit {
-        mounted.add(pluginId)
-        return { mounted.remove(pluginId) }
+        synchronized(mountCounts) {
+            // Removed and re-put, not incremented in place. LinkedHashMap is
+            // insertion-ordered and does NOT reorder a key that is already
+            // present, so a plain increment left "most recently mounted last"
+            // false for exactly the case ref-counting was added for — opening a
+            // second terminal tab would not make terminal the freshest suspect.
+            val next = (mountCounts.remove(pluginId) ?: 0) + 1
+            mountCounts[pluginId] = next
+        }
+        // One unregister per register; the plugin stays mounted while any other
+        // boundary still holds a count.
+        var released = false
+        return {
+            synchronized(mountCounts) {
+                if (!released) {
+                    released = true
+                    val remaining = (mountCounts[pluginId] ?: 1) - 1
+                    if (remaining <= 0) mountCounts.remove(pluginId) else mountCounts[pluginId] = remaining
+                }
+            }
+        }
     }
 
-    /** Candidates, most recently mounted first, skipping any already ruled out. */
+    /**
+     * Candidates, most recently mounted first, skipping any already ruled out.
+     *
+     * A plugin that already has a crash recorded is skipped too. It is showing its
+     * error fallback rather than plugin content, so it cannot be producing the
+     * fault — and quarantining it would be actively harmful: [releaseSuspect]
+     * clears the registry entry on release, so ruling out an already-broken plugin
+     * would wipe its *genuine* crash state and put a known-broken plugin back on
+     * screen. Mount registration lives in the branch that renders content, so this
+     * only ever catches the window before that recomposition lands.
+     */
     private fun nextSuspect(): String? =
-        synchronized(mounted) { mounted.toList() }
+        mountedPlugins()
             .asReversed()
-            .firstOrNull { it !in cleared && it != suspect }
+            .firstOrNull { it !in cleared && it != suspect && !PluginCrashRegistry.hasCrashed(it) }
 
-    /** Plugins currently rendering content. Exposed for logging and tests. */
-    fun mountedPlugins(): Set<String> = mounted.toSet()
+    /** Plugins currently rendering content, first-appearance order. */
+    fun mountedPlugins(): List<String> = synchronized(mountCounts) { mountCounts.keys.toList() }
 
     /**
      * Handle a render exception nobody could attribute.
@@ -124,9 +167,9 @@ object PluginRenderRecovery {
      */
     fun onUnattributedRenderException(
         error: Throwable,
-        now: Long = System.currentTimeMillis(),
+        now: Long = System.nanoTime() / 1_000_000,
     ): Outcome {
-        val affected = mounted.toSet()
+        val affected = mountedPlugins().toSet()
         val recentlyRebuilt = lastRebuildAt != 0L && now - lastRebuildAt <= REBUILD_GRACE_MILLIS
         return when {
             affected.isEmpty() -> {
@@ -178,6 +221,25 @@ object PluginRenderRecovery {
         return Outcome.Rebuilt(affected)
     }
 
+    /**
+     * Rule out the plugin we were holding, because the fault outlived it.
+     *
+     * **Known limitation: there is no settle window.** A suspect is judged on the
+     * very next fault, and quarantine only takes effect once the panel recomposes
+     * and stops rendering plugin content. A fault thrown from a measure pass that
+     * was already in flight would therefore convict-then-release the *actual*
+     * culprit, after which narrowing exhausts the remaining plugins and ends
+     * [Outcome.Unexplained] — the broken-window outcome this class exists to
+     * avoid.
+     *
+     * Left as-is deliberately. The generation bump that accompanies a quarantine
+     * discards the offending subtree synchronously, so in the live repro the next
+     * fault was always a genuinely new one, and the cycle converged on the right
+     * plugin. Adding a delay here is not free either: faults inside the settle
+     * window would still reach the host's `RenderCrashPolicy` as unproductive and could
+     * escalate *sooner*. That interaction needs testing on its own rather than a
+     * timing constant tacked onto this change.
+     */
     private fun releaseSuspectAsInnocent() {
         suspect?.let { wronglyHeld ->
             logger.info(
@@ -222,7 +284,12 @@ object PluginRenderRecovery {
         suspect = next
         // recordRenderFault, not recordCrash: this is a guess, and a guess must
         // never close somebody's terminal tab.
-        PluginCrashRegistry.recordRenderFault(next, error)
+        //
+        // notify = false because the caller toasts this itself, with wording that
+        // names the plugin and says how to restart it. The registry's generic
+        // "Plugin X crashed" goes through invokeLater and so landed *after* the
+        // tailored message, overwriting it in a single-slot status bar.
+        PluginCrashRegistry.recordRenderFault(next, error, notify = false)
         lastRebuildAt = now
         _generation.value += 1
         return Outcome.Quarantined(setOf(next))
@@ -236,13 +303,28 @@ object PluginRenderRecovery {
         }
     }
 
-    /** Forget the retry window. For tests, and for a clean slate after recovery. */
-    fun resetForTest() {
+    /**
+     * Forget every incident: mounted counts, the current suspect, the ruled-out
+     * set and the retry window.
+     *
+     * Public and not named for tests, because it is a real operation — a caller
+     * that has torn down and rebuilt the plugin surfaces wants recovery to start
+     * from a clean slate rather than inherit a half-finished narrowing cycle.
+     * Tests use it for the same reason.
+     */
+    fun reset() {
+        // Through releaseSuspect, not `suspect = null`: setting the field alone
+        // left whoever was held still recorded in PluginCrashRegistry, so a
+        // "clean slate" kept rendering their error fallback. Both test classes
+        // were papering over that with manual clearCrash calls in teardown,
+        // which was the tell.
+        releaseSuspect()
         lastRebuildAt = 0L
-        mounted.clear()
+        synchronized(mountCounts) { mountCounts.clear() }
         cleared.clear()
-        suspect = null
-        _generation.value = 0
+        // Deliberately not resetting the generation. It only ever needs to
+        // *change* to force a rebuild, and winding it back while panels are still
+        // keyed on it would collide with a value they have already seen.
     }
 
     /** What [onUnattributedRenderException] decided. */

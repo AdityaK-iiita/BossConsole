@@ -179,10 +179,19 @@ object PluginCrashRegistry {
      * This flips the observable crash state only, so the panel swaps to its error
      * fallback and stops rendering plugin content, which is what actually stops
      * the exception recurring, while the tab and its contents stay put.
+     *
+     * @param notify whether to fire [onCrashNotify]. Pass false when the caller
+     *   shows its own message. [PluginRenderRecovery] does: its quarantine toast
+     *   names the plugin *and* says how to bring it back, and because this hop
+     *   goes through `invokeLater` while recovery messages on the EDT directly,
+     *   the generic "Plugin X crashed" landed second and overwrote it —
+     *   StatusMessageManager holds one message. The tailored wording was lost
+     *   exactly when it mattered.
      */
     fun recordRenderFault(
         pluginId: String,
         error: Throwable,
+        notify: Boolean = true,
     ) {
         _crashedPluginsMap[pluginId] =
             CrashInfo(
@@ -191,7 +200,7 @@ object PluginCrashRegistry {
             )
         javax.swing.SwingUtilities.invokeLater {
             _crashedPluginsState.value = _crashedPluginsMap.toMap()
-            onCrashNotify?.invoke(pluginId, error)
+            if (notify) onCrashNotify?.invoke(pluginId, error)
         }
     }
 
@@ -430,23 +439,32 @@ fun PluginErrorBoundary(
                         // latched — so if anything below threw, `error` would never
                         // be set and the panel would stay blank forever with nothing
                         // further logged. That is the exact failure this line exists
-                        // to prevent, so it cannot run last.
-                        error = e
-                        sandbox.recordError(e)
-                        // The same recovery a composition crash gets: close the tab,
-                        // notify, flip the observable crash state.
-                        PluginCrashRegistry.recordCrash(pluginId, e)
-                        // Set locally as well, and not redundantly. recordCrash has
-                        // two branches: with a tab registered it closes the tab and
-                        // *removes* the registry entry again, so registryCrash reads
-                        // back null and this boundary would never render its
-                        // fallback. If closeAction then fails, the panel is left
-                        // blank with nothing shown and nothing logged — the boundary
-                        // reports only once. Local state guarantees the user sees an
-                        // error rather than an empty panel. Safe to write here
+                        // to prevent, so it cannot run last. Safe to write here
                         // because PluginRenderBoundary hands this callback to the
                         // EDT rather than calling it mid-render.
                         error = e
+                        sandbox.recordError(e)
+                        // recordRenderFault, not recordCrash. recordCrash closes the
+                        // plugin's registered tab, and activeTabMappings is keyed by
+                        // plugin id alone — so a render fault in a plugin's *side
+                        // panel* would close that plugin's unrelated main tab and
+                        // whatever was live in it.
+                        //
+                        // The registry write is still needed and is not merely a
+                        // duplicate of `error = e` above: if the parent tears this
+                        // boundary down, the remembered local state goes with it and
+                        // only the registry survives to show the fallback on the
+                        // rebuild.
+                        //
+                        // Be clear about the blast radius, because it is wider than
+                        // this panel: registryCrash is keyed by plugin id, so every
+                        // surface of this plugin flips to the fallback, and unlike
+                        // recordCrash — which removed its own entry after closing the
+                        // tab — nothing clears this until the user hits Restart or
+                        // Dismiss. A transient fault in one surface therefore degrades
+                        // all of that plugin's surfaces for the session. That is the
+                        // deliberate trade against destroying a live tab.
+                        PluginCrashRegistry.recordRenderFault(pluginId, e)
                     },
                 ) {
                     content()

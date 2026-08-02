@@ -58,4 +58,27 @@ class RenderCrashPolicy(
     /** Failures currently inside the window. Exposed for logging and tests. */
     @Synchronized
     fun recentFailureCount(): Int = recentFailures.size
+
+    /**
+     * Un-count the fault just recorded, because recovery made progress on it.
+     *
+     * Narrowing needs room: faults from a repainting subtree arrive ~16ms apart,
+     * all inside one window, while the loop spends one fault to rebuild plus one
+     * per suspect. Counting those would escalate and dispose the window before
+     * the culprit was found.
+     *
+     * It removes exactly that one fault rather than clearing the deque, and the
+     * difference matters. Clearing made [Escalate][WindowExceptionRoute.Escalate]
+     * unreachable whenever two or more panels were mounted: the narrowing loop
+     * manufactures progress indefinitely — rebuild, suspect each plugin in turn,
+     * end Unexplained, which resets the incident and re-mounts the released
+     * panels so the next fault rebuilds again — so a full reset every cycle meant
+     * the count never reached the limit and a genuinely corrupt scene span
+     * forever. Removing one keeps the unproductive faults accumulating, so the
+     * loop gets its room and escalation stays reachable.
+     */
+    @Synchronized
+    fun noteRecoveryProgress() {
+        recentFailures.removeLastOrNull()
+    }
 }

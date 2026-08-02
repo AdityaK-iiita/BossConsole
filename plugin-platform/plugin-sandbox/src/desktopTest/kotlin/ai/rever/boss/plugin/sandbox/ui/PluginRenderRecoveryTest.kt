@@ -4,11 +4,17 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
  * Covers recovery from a render exception nobody could attribute from the stack.
+ *
+ * Note this mutates process-global state in [PluginRenderRecovery] and
+ * [PluginCrashRegistry], and relies on the resets below. That holds only while
+ * this module runs tests in one fork; a future `maxParallelForks > 1` would turn
+ * it into a mystery flake.
  *
  * This is the half [PluginRenderBoundary] cannot reach. A real crash arrived via
  * `MeasureAndLayoutDelegate.remeasureIfNeeded` — Compose re-measuring the
@@ -25,11 +31,11 @@ class PluginRenderRecoveryTest {
     private val error = IllegalArgumentException("""Key "coll-dup" was already used.""")
 
     @BeforeTest
-    fun setUp() = PluginRenderRecovery.resetForTest()
+    fun setUp() = PluginRenderRecovery.reset()
 
     @AfterTest
     fun tearDown() {
-        PluginRenderRecovery.resetForTest()
+        PluginRenderRecovery.reset()
         PluginCrashRegistry.clearCrash("plugin.a")
         PluginCrashRegistry.clearCrash("plugin.b")
     }
@@ -157,13 +163,129 @@ class PluginRenderRecoveryTest {
         PluginRenderRecovery.registerMounted("plugin.b")
         unregister()
 
-        assertEquals(setOf("plugin.b"), PluginRenderRecovery.mountedPlugins())
+        assertEquals(listOf("plugin.b"), PluginRenderRecovery.mountedPlugins())
 
         PluginRenderRecovery.onUnattributedRenderException(error, now = 1_000)
         val outcome = PluginRenderRecovery.onUnattributedRenderException(error, now = 2_000)
 
         assertIs<PluginRenderRecovery.Outcome.Quarantined>(outcome)
         assertEquals(setOf("plugin.b"), outcome.plugins, "a closed panel must not be quarantined")
+    }
+
+    @Test
+    fun `a plugin with two live boundaries stays mounted when one closes`() {
+        // PluginErrorBoundary is per surface — a tab and a side panel, or two
+        // tabs — so one plugin routinely has several. With a plain set, closing
+        // one dropped the plugin while it was still rendering, after which it
+        // could never be suspected: the culprit was ruled out by omission and the
+        // window stayed broken.
+        val closeFirst = PluginRenderRecovery.registerMounted("plugin.a")
+        PluginRenderRecovery.registerMounted("plugin.a")
+
+        closeFirst()
+
+        assertTrue(
+            PluginRenderRecovery.mountedPlugins().contains("plugin.a"),
+            "a plugin still rendering in another surface must remain a candidate",
+        )
+    }
+
+    @Test
+    fun `a plugin is unmounted once its last boundary closes`() {
+        val closeFirst = PluginRenderRecovery.registerMounted("plugin.a")
+        val closeSecond = PluginRenderRecovery.registerMounted("plugin.a")
+
+        closeFirst()
+        closeSecond()
+
+        assertFalse(PluginRenderRecovery.mountedPlugins().contains("plugin.a"))
+    }
+
+    @Test
+    fun `unregistering twice does not drop a plugin another surface still holds`() {
+        val close = PluginRenderRecovery.registerMounted("plugin.a")
+        PluginRenderRecovery.registerMounted("plugin.a")
+
+        close()
+        close() // a double dispose must not decrement someone else's count
+
+        assertTrue(
+            PluginRenderRecovery.mountedPlugins().contains("plugin.a"),
+            "one unregister must release exactly one count",
+        )
+    }
+
+    @Test
+    fun `quarantine does not close the plugin's tab`() {
+        // The whole reason recordRenderFault exists: quarantine is a positional
+        // guess, and a guess must never destroy a live session. Mass quarantine
+        // through recordCrash closed the user's terminal and browser tabs.
+        var tabClosed = false
+        PluginCrashRegistry.registerActiveTab("plugin.a", "tab-1") { tabClosed = true }
+        try {
+            PluginRenderRecovery.registerMounted("plugin.a")
+            PluginRenderRecovery.onUnattributedRenderException(error, now = 1_000)
+            val outcome = PluginRenderRecovery.onUnattributedRenderException(error, now = 2_000)
+
+            assertIs<PluginRenderRecovery.Outcome.Quarantined>(outcome)
+            // Drain the EDT first. recordCrash's destructive branch closes the tab
+            // from inside invokeLater, so without this the assertion below wins a
+            // race instead of checking a behaviour — it would pass against the old
+            // recordCrash too. Verified: with recordCrash restored, this goes red.
+            javax.swing.SwingUtilities.invokeAndWait { }
+            assertTrue(PluginCrashRegistry.hasCrashed("plugin.a"), "the fallback must still be shown")
+            assertTrue(!tabClosed, "quarantining a suspect must not close its tab")
+        } finally {
+            PluginCrashRegistry.unregisterActiveTab("plugin.a", "tab-1")
+        }
+    }
+
+    @Test
+    fun `quarantine does not fire the generic crash notification`() {
+        // The registry's "Plugin X crashed" goes out through invokeLater, while the
+        // caller's tailored "Paused X — restart it from the panel menu" is posted
+        // straight from the EDT. StatusMessageManager holds one message, so the
+        // generic one landed second and overwrote the useful one. Suppressing it
+        // here is what lets the tailored wording survive.
+        val notified = mutableListOf<String>()
+        val previous = PluginCrashRegistry.onCrashNotify
+        PluginCrashRegistry.onCrashNotify = { pluginId, _ -> notified += pluginId }
+        try {
+            PluginRenderRecovery.registerMounted("plugin.a")
+            PluginRenderRecovery.onUnattributedRenderException(error, now = 1_000)
+            val outcome = PluginRenderRecovery.onUnattributedRenderException(error, now = 2_000)
+            assertIs<PluginRenderRecovery.Outcome.Quarantined>(outcome)
+            javax.swing.SwingUtilities.invokeAndWait { }
+
+            assertTrue(
+                notified.isEmpty(),
+                "quarantine must leave the messaging to its caller, saw $notified",
+            )
+        } finally {
+            PluginCrashRegistry.onCrashNotify = previous
+        }
+    }
+
+    @Test
+    fun `a plugin already showing its own crash is never suspected`() {
+        // Releasing a suspect clears its registry entry, so quarantining a plugin
+        // that was already broken would wipe its genuine crash state and put a
+        // known-broken plugin back on screen. It also cannot be the culprit: it is
+        // rendering its fallback, not plugin content.
+        PluginRenderRecovery.registerMounted("plugin.a")
+        PluginRenderRecovery.registerMounted("plugin.b")
+        PluginCrashRegistry.recordRenderFault("plugin.b", RuntimeException("its own bug"), notify = false)
+        javax.swing.SwingUtilities.invokeAndWait { }
+
+        PluginRenderRecovery.onUnattributedRenderException(error, now = 1_000)
+        val outcome = PluginRenderRecovery.onUnattributedRenderException(error, now = 2_000)
+
+        assertIs<PluginRenderRecovery.Outcome.Quarantined>(outcome)
+        assertEquals(
+            setOf("plugin.a"),
+            outcome.plugins,
+            "the already-crashed plugin must be skipped as a suspect",
+        )
     }
 
     @Test
