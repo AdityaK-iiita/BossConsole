@@ -2,6 +2,7 @@ package ai.rever.boss.cache
 
 import ai.rever.boss.plugin.api.TabIcon
 import ai.rever.boss.plugin.pathutils.BossDirectories
+import ai.rever.boss.utils.atomicMoveFrom
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import androidx.compose.ui.graphics.ImageBitmap
@@ -39,52 +40,101 @@ object FaviconCache {
     }
 
     /**
-     * Saves a favicon to the cache.
+     * Saves a favicon to the cache, replacing any earlier icon for the same URL.
+     *
      * @param url The URL associated with this favicon (used to generate cache key)
      * @param imageBitmap The favicon ImageBitmap to cache
-     * @return The cache key if successful, null if the favicon exceeds size limit or on error
+     * @return The cache key, or null if the favicon exceeds the size limit and nothing usable is
+     *   already cached for [url]
      */
     fun saveFavicon(
         url: String,
         imageBitmap: ImageBitmap,
-    ): String? {
-        try {
-            val cacheKey = generateCacheKey(url)
-            val cacheFile = File(cacheDir, "$cacheKey.png")
+    ): String? = saveFavicon(url, imageBitmap, cacheDir)
 
-            // Convert to AWT BufferedImage
+    /**
+     * [saveFavicon] against an explicit directory, so the branch that decides whether a tab keeps
+     * its icon can be tested without writing to the developer's real `~/.boss` cache.
+     *
+     * **Must not throw.** Everything is inside the `try`, including the cache-key hash and the
+     * cache-file path: the caller is a JxBrowser event listener, and while it happens to be
+     * wrapped today, that is not this function's guarantee to spend.
+     */
+    internal fun saveFavicon(
+        url: String,
+        imageBitmap: ImageBitmap,
+        dir: File,
+    ): String? {
+        var cacheFile: File? = null
+        var tempFile: File? = null
+        return try {
+            val cacheKey = generateCacheKey(url)
+            cacheFile = File(dir, "$cacheKey.png")
             val bufferedImage = imageBitmap.toAwtImage()
 
-            // Check size before writing
-            val tempFile = File.createTempFile("favicon_", ".png", cacheDir)
+            // Written to a temp file first so the size limit is checked against the encoded PNG,
+            // and so a failure part-way through encoding cannot leave a torn icon in the cache.
+            tempFile = File.createTempFile("favicon_", ".png", dir)
             ImageIO.write(bufferedImage, "PNG", tempFile)
 
             if (tempFile.length() > MAX_FAVICON_SIZE_BYTES) {
-                tempFile.delete()
                 logger.debug(
                     LogCategory.BROWSER,
                     "Favicon too large, skipping cache",
                     mapOf(
                         "size" to tempFile.length(),
                         "maxSize" to MAX_FAVICON_SIZE_BYTES,
+                        "servedStaleCache" to cacheFile.exists(),
                     ),
                 )
-                return null
+                existingKeyOrNull(cacheKey, cacheFile)
+            } else {
+                // NOT File.renameTo: that does not overwrite an existing file on Windows, so every
+                // favicon after the first for a given URL failed there - and the cache outlives the
+                // process, so "the first" was usually some previous run. See File.atomicMoveFrom.
+                cacheFile.atomicMoveFrom(tempFile)
+                cacheKey
             }
-
-            // Move to final location
-            val renamed = tempFile.renameTo(cacheFile)
-            if (!renamed) {
-                tempFile.delete()
-                logger.warn(LogCategory.BROWSER, "Error saving favicon: rename failed")
-                return null
-            }
-            return cacheKey
         } catch (e: Exception) {
-            logger.warn(LogCategory.BROWSER, "Error saving favicon", error = e)
-            return null
+            // servedStaleCache separates "favicons are stale" from "favicons are gone" in a log,
+            // which is the distinction that made the Windows rename bug findable at all.
+            logger.warn(
+                LogCategory.BROWSER,
+                "Error saving favicon",
+                mapOf("servedStaleCache" to (cacheFile?.exists() ?: false)),
+                error = e,
+            )
+            cacheFile?.let { existingKeyOrNull(generateCacheKeyOrNull(url), it) }
+        } finally {
+            // No-op once the move took it away; cleans up every failure path.
+            tempFile?.delete()
         }
     }
+
+    /** [generateCacheKey] for the failure path, where hashing may be the thing that failed. */
+    private fun generateCacheKeyOrNull(url: String): String? =
+        try {
+            generateCacheKey(url)
+        } catch (e: Exception) {
+            logger.debug(LogCategory.BROWSER, "Could not hash favicon URL", mapOf("error" to e.toString()))
+            null
+        }
+
+    /**
+     * The key when something is already cached under it, else null.
+     *
+     * Returning null costs the tab its icon rather than merely leaving it stale: it reaches
+     * `updateFavicon(null)`, which resets the tab to the default globe. So a save that could not
+     * improve on the cache reports what the cache still holds.
+     *
+     * Note the stale icon is then pinned until something rewrites it — `cleanupStaleEntries` only
+     * ages files out after 30 days — so a site that switches to a >100 KB icon keeps showing the
+     * old one for a month. Accepted: an outdated favicon beats none.
+     */
+    private fun existingKeyOrNull(
+        cacheKey: String?,
+        cacheFile: File,
+    ): String? = cacheKey?.takeIf { cacheFile.exists() }
 
     /**
      * Loads a favicon from the cache.
