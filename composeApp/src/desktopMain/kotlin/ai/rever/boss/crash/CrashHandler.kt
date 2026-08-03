@@ -44,6 +44,33 @@ import javax.swing.WindowConstants
 object CrashHandler {
     private val logger = BossLogger.forComponent("CrashHandler")
 
+    /**
+     * Preferred size of the space [CrashReportDialog] is laid out in — the **content pane**, in
+     * AWT user-space units. Applied to the `ComposePanel`, so `pack()` derives the frame from it
+     * and the dialog gets these dimensions rather than these dimensions minus a title bar.
+     *
+     * Deliberately *not* used to derive the frame minimum below. Doing that needs decoration
+     * insets, which are not reliably known until the window manager has reparented the window —
+     * and reading them at any point in this method is a race on X11. Rather than chase that with
+     * deferred re-packs inside the one code path that runs when the app is already broken, the
+     * minimum stays in frame terms: a content pane a title bar short of [FRAME_MIN_HEIGHT] is
+     * something this dialog now handles by scrolling, which is the entire point of the layout.
+     */
+    internal const val CONTENT_PREFERRED_WIDTH = 550
+
+    /** Height companion to [CONTENT_PREFERRED_WIDTH]. */
+    internal const val CONTENT_PREFERRED_HEIGHT = 700
+
+    /**
+     * Smallest the crash **window** may be resized to, decorations included. The content pane is
+     * therefore this minus the decorations; `CrashReportDialogLayoutTest` derives a deliberately
+     * conservative content box from these rather than assuming the two are equal.
+     */
+    internal const val FRAME_MIN_WIDTH = 450
+
+    /** Height companion to [FRAME_MIN_WIDTH]. */
+    internal const val FRAME_MIN_HEIGHT = 500
+
     /** Where contained (non-fatal, recovered) reports are written, under the BOSS data dir. */
     private const val CONTAINED_REPORT_DIR = "crash-reports"
 
@@ -473,10 +500,11 @@ object CrashHandler {
         try {
             val frame = JFrame("BOSS - Crash Report")
             frame.defaultCloseOperation = WindowConstants.DISPOSE_ON_CLOSE
-            frame.preferredSize = Dimension(550, 700)
-            frame.minimumSize = Dimension(450, 500)
 
             val composePanel = ComposePanel()
+            // Sized here rather than on the frame so the dialog gets these dimensions exactly;
+            // pack() then derives the frame by adding the decoration insets.
+            composePanel.preferredSize = Dimension(CONTENT_PREFERRED_WIDTH, CONTENT_PREFERRED_HEIGHT)
             composePanel.setContent {
                 CrashReportDialog(
                     crashReport = report,
@@ -505,10 +533,15 @@ object CrashHandler {
                 )
             }
 
+            frame.minimumSize = Dimension(FRAME_MIN_WIDTH, FRAME_MIN_HEIGHT)
             frame.contentPane.add(composePanel)
             frame.pack()
             frame.setLocationRelativeTo(null) // Center on screen
             frame.isVisible = true
+
+            // Nothing sizing-related runs past this point on purpose: this is the path that runs
+            // when the app is already broken, and it shares a catch that terminates. Cosmetic
+            // sizing must never be able to take the crash report down with it.
 
             // Bring to front
             frame.toFront()
