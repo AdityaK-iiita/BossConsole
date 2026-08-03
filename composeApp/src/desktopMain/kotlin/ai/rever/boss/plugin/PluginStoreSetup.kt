@@ -2,10 +2,12 @@ package ai.rever.boss.plugin
 
 import ai.rever.boss.config.GitHubConfig
 import ai.rever.boss.config.SupabaseClientConfig
+import ai.rever.boss.plugin.loader.PluginSignatureSidecar
 import ai.rever.boss.plugin.pathutils.BossDirectories
 import ai.rever.boss.plugin.repository.LocalPluginRepository
 import ai.rever.boss.plugin.repository.PluginRepositoryManager
 import ai.rever.boss.plugin.repository.remote.PluginDownloadCache
+import ai.rever.boss.plugin.repository.remote.PluginStoreClient
 import ai.rever.boss.plugin.repository.remote.PluginStoreConfig
 import ai.rever.boss.plugin.repository.remote.PluginStoreRealtimeService
 import ai.rever.boss.plugin.repository.remote.RemotePluginRepository
@@ -15,6 +17,7 @@ import ai.rever.boss.services.supabase.SupabaseConfig
 import ai.rever.boss.utils.AppVersion
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
+import ai.rever.boss.utils.sha256Of
 import io.github.jan.supabase.auth.status.SessionStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -300,6 +303,15 @@ object PluginStoreSetup {
                         ),
                     )
                     PluginStoreConfig.accessToken = token
+
+                    // Signature backfill waits for this token: the store's
+                    // install-permission gate 403s an unauthenticated caller, so
+                    // running it earlier would fail forever for exactly the
+                    // plugins that need it. Once per process — see
+                    // drainSidecarBackfill.
+                    if (token != null && sidecarBackfillStarted.compareAndSet(false, true)) {
+                        scope.launch { drainSidecarBackfill() }
+                    }
                 }
             }
 
@@ -452,6 +464,9 @@ object PluginStoreSetup {
                             // classloader — replacing on the fly would break
                             // anything currently holding a class reference).
                             scheduleBackgroundUpdateCheck(systemPlugin, jarFile)
+                            // Reaches the installed base, which a download-only fix
+                            // never would — see backfillSidecarIfMissing.
+                            backfillSidecarIfMissing(systemPlugin.pluginId, jarFile)
                             logger.debug(
                                 LogCategory.SYSTEM,
                                 "System plugin already installed",
@@ -747,6 +762,229 @@ object PluginStoreSetup {
     }
 
     /**
+     * Bind the store's signature to a JAR fetched from GitHub releases, or clear
+     * any stale sidecar when it can't be bound.
+     *
+     * System plugins come straight from GitHub, not from the store, so the store's
+     * signature has to be fetched separately and matched to these exact bytes. The
+     * sha256 comparison is load-bearing, not defensive: the anchor is
+     * `pluginId|version|sha256` (see PluginStoreTrust.versionAnchor), and a
+     * present-but-invalid sidecar hard-fails at load time **regardless** of the
+     * enforcement flag. `POST /github` re-hosts JARs through Supabase Storage, so
+     * the store artifact and the GitHub asset are not guaranteed to be the same
+     * bytes — pairing the store's signature with GitHub's bytes would convert a
+     * working plugin into a permanent load failure. Writing no sidecar is strictly
+     * safer than writing a wrong one, so every failure path clears instead.
+     *
+     * Callers must ensure no sidecar is present when this runs: on a manifest read
+     * failure it returns without touching the filesystem rather than clearing, so
+     * a transient read error can't strip a valid signature off a signed JAR.
+     */
+    private suspend fun persistStoreSignatureSidecar(jarFile: File) {
+        // Key the lookup on the MANIFEST, not the GitHub tag. The store row's
+        // version is the manifest version (publish asserts they match verbatim)
+        // and DynamicPluginLoader re-derives the anchor from manifest.pluginId +
+        // manifest.version at load time — so the tag is the one string in this
+        // chain not guaranteed to agree. A repo tagging `release-1.2.3`, or the
+        // `tag_name` regex missing and falling back to "unknown", would 404 and
+        // leave the plugin permanently unsigned.
+        //
+        // Hashed once, up front, so the same digest both resolves the signature
+        // and proves afterwards that the bytes never moved underneath us.
+        val manifest = readPluginManifest(jarFile)
+        val resolvedAgainstSha = manifest?.let { runCatching { sha256Of(jarFile) }.getOrNull() }
+        if (manifest == null || resolvedAgainstSha == null) {
+            // Never clear here. Both callers guarantee no sidecar is present, so
+            // there is nothing to clean up — and clearing would let a transient
+            // read failure unsign an already-signed JAR.
+            logger.warn(
+                LogCategory.SYSTEM,
+                "System plugin left unsigned — could not read or hash the JAR",
+                mapOf("file" to jarFile.name),
+            )
+            return
+        }
+
+        val signature = fetchStoreSignature(manifest.pluginId, manifest.version, resolvedAgainstSha)
+        if (signature == null) return
+
+        // Bind only if the bytes are still the ones we resolved against. Resolving
+        // a signature involves a network round trip, and another path may replace
+        // the JAR at this exact filename meanwhile (a same-version re-download
+        // reuses the name). Writing then would pair an old signature with new
+        // bytes — present-but-invalid, a permanent load failure, and precisely the
+        // state this whole change exists to prevent. Re-hashing is cheap next to
+        // the round trip that preceded it.
+        if (!stillMatchesResolvedBytes(jarFile, resolvedAgainstSha)) {
+            logger.warn(
+                LogCategory.SYSTEM,
+                "System plugin left unsigned — JAR changed while its signature was being fetched",
+                mapOf("pluginId" to manifest.pluginId, "version" to manifest.version),
+            )
+        } else {
+            // The write is documented best-effort, but it throws on a full or
+            // read-only disk. Uncaught it would propagate to the download handler
+            // and be reported as a failed install — leaving the JAR on disk with
+            // persistence never updated.
+            runCatching { PluginSignatureSidecar.write(jarFile.absolutePath, signature) }
+                .onFailure {
+                    logger.warn(
+                        LogCategory.SYSTEM,
+                        "Could not write plugin signature sidecar",
+                        mapOf("file" to jarFile.name, "error" to it.toString()),
+                    )
+                }
+        }
+    }
+
+    /**
+     * Ask the store for the signature covering [localSha256], or null to leave the
+     * JAR unsigned. Never writes; the caller decides what to do with the answer.
+     */
+    private suspend fun fetchStoreSignature(
+        pluginId: String,
+        version: String,
+        localSha256: String,
+    ): String? =
+        try {
+            val info = PluginStoreClient.getDownloadUrl(pluginId, version)
+            resolveSidecarSignature(
+                storeSha256 = info.sha256,
+                storeSignature = info.signature,
+                localSha256 = localSha256,
+            ).also {
+                if (it == null && info.signature != null) {
+                    logger.warn(
+                        LogCategory.SYSTEM,
+                        "System plugin left unsigned — GitHub asset differs from the store artifact",
+                        mapOf(
+                            "pluginId" to pluginId,
+                            "version" to version,
+                            "storeSha256" to info.sha256,
+                            "localSha256" to localSha256,
+                        ),
+                    )
+                }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Structured concurrency: a cancelled startup scope must not be
+            // reported as "no signature available" and must not fall through into
+            // a sidecar write.
+            throw e
+        } catch (e: Exception) {
+            // Store unreachable, no row for this version, a version published before
+            // store signing, or a 403 from the install-permission gate. Unsigned is
+            // the pre-existing state and is still warn-and-allow; a wrong signature
+            // would not be. Logged at warn because this is the signal for whether
+            // the fleet is ready for the enforcement flip — it must not be invisible
+            // by default.
+            logger.warn(
+                LogCategory.SYSTEM,
+                "System plugin left unsigned — no store signature available",
+                mapOf("pluginId" to pluginId, "version" to version, "error" to e.toString()),
+            )
+            null
+        }
+
+    /**
+     * The policy: a store signature may be bound to a JAR **only** when the store
+     * agrees about those exact bytes.
+     *
+     * Extracted and internal so the rule is pinned by tests rather than living
+     * inside a network call. It encodes the non-obvious asymmetry that makes this
+     * whole path safe — a *missing* sidecar is warn-and-allow, a *present but
+     * invalid* one hard-fails at load regardless of the enforcement flag. So when
+     * in any doubt, return null: unsigned is recoverable, wrongly-signed is not.
+     */
+    internal fun resolveSidecarSignature(
+        storeSha256: String,
+        storeSignature: String?,
+        localSha256: String,
+    ): String? = if (storeSha256.equals(localSha256, ignoreCase = true)) storeSignature else null
+
+    /** True when [jarFile] still hashes to [expectedSha256]; false if it moved or is unreadable. */
+    private fun stillMatchesResolvedBytes(
+        jarFile: File,
+        expectedSha256: String,
+    ): Boolean = runCatching { sha256Of(jarFile).equals(expectedSha256, ignoreCase = true) }.getOrDefault(false)
+
+    /** JARs seen without a sidecar, drained once by [drainSidecarBackfill]. */
+    private val sidecarBackfillQueue = java.util.concurrent.ConcurrentLinkedQueue<Pair<String, File>>()
+
+    /** The drain runs at most once per process — see [drainSidecarBackfill]. */
+    private val sidecarBackfillStarted =
+        java.util.concurrent.atomic
+            .AtomicBoolean(false)
+
+    /**
+     * Note an already-installed system plugin whose sidecar is missing.
+     *
+     * Without this the fix only reaches plugins that happen to be re-downloaded:
+     * [ensureSystemPluginsInstalled] returns early once a JAR is on disk, and
+     * [scheduleBackgroundUpdateCheck] only downloads when a strictly newer release
+     * exists. A user already up to date would stay unsigned forever and lose every
+     * system plugin — Toolbox included — the moment enforcement flips.
+     *
+     * Only queues. The work is deferred to [drainSidecarBackfill] because doing it
+     * here would run unauthenticated (see that function) and would race the update
+     * check launched immediately before it.
+     */
+    private fun backfillSidecarIfMissing(
+        pluginId: String,
+        jarFile: File,
+    ) {
+        if (PluginSignatureSidecar.read(jarFile.absolutePath) != null) return
+        sidecarBackfillQueue.add(pluginId to jarFile)
+    }
+
+    /**
+     * Fetch signatures for queued JARs, once, after the store client is authenticated.
+     *
+     * Deferred rather than run at startup for three reasons, all of which made the
+     * naive version fail exactly where it mattered:
+     *
+     * - **Auth.** [PluginStoreConfig.accessToken] starts null and is only set when
+     *   `sessionStatus` emits, while `ensureSystemPluginsInstalled` runs from
+     *   `initialize()`. The download route 403s an unauthenticated caller for any
+     *   plugin with non-empty `requiredPermissions`, so backfilling at startup would
+     *   deterministically fail for precisely the plugins it targets — every launch,
+     *   forever, never producing a sidecar.
+     * - **Cost.** `getDownloadUrl` is not read-only; it books a row in
+     *   `plugin_downloads`, which feeds the store's default `sortBy = "downloads"`
+     *   ranking. Retrying every launch would fabricate a download per system plugin
+     *   per user forever. Running at most once per process bounds that. A
+     *   signature-only store route would remove it entirely — worth doing, but it's
+     *   an edge-function change and is tracked on BossConsole#102 rather than here.
+     * - **Races.** Draining serially, skipping any plugin whose update check is
+     *   still in flight, keeps this off the JARs [scheduleBackgroundUpdateCheck] is
+     *   replacing underneath it.
+     */
+    private suspend fun drainSidecarBackfill() {
+        withContext(Dispatchers.IO) {
+            generateSequence { sidecarBackfillQueue.poll() }
+                .filter { (pluginId, jarFile) -> stillNeedsSidecar(pluginId, jarFile) }
+                .forEach { (_, jarFile) -> persistStoreSignatureSidecar(jarFile) }
+        }
+    }
+
+    /**
+     * Whether a queued JAR should still be backfilled, re-evaluated at drain time
+     * rather than when it was queued.
+     *
+     * The update path signs whatever it installs, so a JAR it is currently
+     * replacing needs nothing from us — and touching one mid-replacement is
+     * exactly how an orphaned or mismatched sidecar gets created. The JAR may also
+     * have been removed, or signed by another path, since queueing.
+     */
+    private fun stillNeedsSidecar(
+        pluginId: String,
+        jarFile: File,
+    ): Boolean =
+        inFlightUpdateChecks[pluginId]?.get() != true &&
+            jarFile.exists() &&
+            PluginSignatureSidecar.read(jarFile.absolutePath) == null
+
+    /**
      * Download a system plugin from GitHub releases.
      *
      * @param plugin The system plugin info
@@ -939,6 +1177,14 @@ object PluginStoreSetup {
                 // place *before* deleting old versions and *before* updating
                 // persistence so there's never a window where persistence
                 // points to a JAR we've already unlinked.
+                // Clear any existing sidecar BEFORE the bytes change. Settling the
+                // signature afterwards needs a network round trip, and a crash or
+                // force-quit in that window would otherwise leave the old sidecar
+                // beside the new JAR — present-but-invalid, which hard-fails at
+                // load forever, flag or no flag. Clearing first makes the worst
+                // case unsigned, which is merely warn-and-allow.
+                runCatching { PluginSignatureSidecar.delete(destFile.absolutePath) }
+
                 try {
                     java.nio.file.Files.move(
                         tmpFile.toPath(),
@@ -975,6 +1221,23 @@ object PluginStoreSetup {
                     )
                 }
 
+                // Bind the store signature to these bytes. Every OTHER install path
+                // writes a `<jar>.sig` sidecar; this one never did, so system
+                // plugins — api, Toolbox, the microkernel runtime, terminal-tab,
+                // editor-tab, fluck-browser — all sit on disk unsigned. That is
+                // invisible only while PluginSignatureEnforcement defaults to
+                // warn-and-allow; the moment it flips (BossConsole#102) every one
+                // of them stops loading.
+                //
+                // Deliberately AFTER persistence, not before. This is a suspending
+                // network call, so putting it earlier would open the one window the
+                // comment above the move forbids — a JAR on disk that nothing knows
+                // is installed, if the scope is cancelled mid-fetch. There is no
+                // safety cost: the stale sidecar was already cleared before the
+                // move, so the intermediate state is *unsigned*, which is
+                // warn-and-allow by design.
+                persistStoreSignatureSidecar(destFile)
+
                 logger.info(
                     LogCategory.SYSTEM,
                     "Downloaded system plugin successfully",
@@ -1003,6 +1266,12 @@ object PluginStoreSetup {
                             readPluginManifest(it)?.pluginId == plugin.pluginId
                     }?.forEach { oldFile ->
                         val deleted = oldFile.delete()
+                        // Drop the sidecar with its JAR so it can't outlive it as an
+                        // orphan — but only when the JAR actually went. A delete
+                        // here fails when the JVM holds a lock (Windows, JAR still
+                        // loaded), and stripping the sidecar off a JAR that is
+                        // staying would turn a signed plugin into an unsigned one.
+                        if (deleted) runCatching { PluginSignatureSidecar.delete(oldFile.absolutePath) }
                         logger.debug(
                             LogCategory.SYSTEM,
                             "Removed old version",
@@ -1014,6 +1283,11 @@ object PluginStoreSetup {
                     }
 
                 true
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Cancellation is not a download failure. Swallowing it here would
+                // both mislabel the log and break structured concurrency, since the
+                // caller would see `false` and carry on as though the scope lived.
+                throw e
             } catch (e: Exception) {
                 logger.error(
                     LogCategory.SYSTEM,
@@ -1365,6 +1639,9 @@ object PluginStoreSetup {
                         ),
                     )
                     oldJar.delete()
+                    // A sidecar outlives the JAR it describes unless it's removed
+                    // with it, leaving orphaned `.sig` files in the plugin dir.
+                    runCatching { PluginSignatureSidecar.delete(oldJar.absolutePath) }
                 }
 
                 // Copy to plugin directory
@@ -1377,6 +1654,16 @@ object PluginStoreSetup {
                         "to" to destFile.absolutePath,
                     ),
                 )
+
+                // Clear BEFORE the bytes change, for the same reason the download
+                // path does. Bundled JARs ship inside the signed, notarized app
+                // image and carry no store signature, and this overwrites by
+                // filename — so a store-downloaded JAR of the same name may have
+                // left a sidecar behind. Clearing afterwards would leave a crash
+                // window pairing the old signature with new bytes, which is a hard
+                // load failure, unlike no sidecar at all. `copyTo` is not atomic
+                // either, so the window is real.
+                runCatching { PluginSignatureSidecar.delete(destFile.absolutePath) }
 
                 jarFile.copyTo(destFile, overwrite = true)
 
