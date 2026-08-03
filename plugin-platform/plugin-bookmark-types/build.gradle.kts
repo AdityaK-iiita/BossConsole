@@ -90,7 +90,7 @@ mavenPublishing {
             developer {
                 id.set("risa-labs")
                 name.set("Risa Labs")
-                email.set("dev@risaboss.com")
+                email.set("enterprise@risalabs.ai")
             }
         }
         scm {
