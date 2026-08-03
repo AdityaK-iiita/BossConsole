@@ -204,8 +204,8 @@ jobs:
           set -euo pipefail
 
           # Configure git
-          git config user.name "Shivang"
-          git config user.email "shivang.iitk@gmail.com"
+          git config user.name "Risa Labs"
+          git config user.email "enterprise@risalabs.ai"
 
           # Check if there are changes to commit
           if git diff --quiet version.properties; then

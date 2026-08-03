@@ -18,7 +18,7 @@ We take security vulnerabilities seriously. If you discover a security issue in 
 ### 📧 How to Report
 
 1. **DO NOT** create a public GitHub issue for security vulnerabilities
-2. **Email us directly**: [security@risa-labs.com](mailto:security@risa-labs.com)
+2. **Email us directly**: [security@risalabs.ai](mailto:security@risalabs.ai)
 3. **Include in your report**:
    - Description of the vulnerability
    - Steps to reproduce
@@ -136,9 +136,9 @@ If you're contributing to BOSS, please consider these security aspects:
 
 ## 📞 Contact Information
 
-- **Security Email**: [security@risa-labs.com](mailto:security@risa-labs.com)
-- **General Issues**: [GitHub Issues](https://github.com/risa-labs-inc/BOSS-Kotlin/issues)
-- **Website**: [https://risa-labs.com](https://risa-labs.com)
+- **Security Email**: [security@risalabs.ai](mailto:security@risalabs.ai)
+- **General Issues**: [GitHub Issues](https://github.com/risa-labs-inc/BossConsole/issues)
+- **Website**: [https://www.risalabs.ai](https://www.risalabs.ai)
 
 ---
 

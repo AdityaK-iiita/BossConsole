@@ -134,8 +134,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          git config user.name "Shivang"
-          git config user.email "shivang.iitk@gmail.com"
+          git config user.name "Risa Labs"
+          git config user.email "enterprise@risalabs.ai"
 
           if git diff --quiet version.properties; then
             echo "No version changes to commit"
