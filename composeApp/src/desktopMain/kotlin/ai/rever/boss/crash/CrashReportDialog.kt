@@ -98,11 +98,10 @@ internal fun CrashReportDialog(
     // the sentinel keeps that first frame honest; derivedStateOf keeps a settling `maxValue` from
     // recomposing the whole dialog when the answer hasn't actually flipped.
     //
-    // Note the one remaining feedback path: `bodyOverflows` adds the rule and its spacer to the
-    // footer, which takes ~17dp from the body, which can only make it *more* likely to overflow.
-    // Monotone, so it cannot oscillate — but it can latch, so content within ~17dp of fitting may
-    // keep its scrollbar after the details collapse again. That is why nothing gated on this may
-    // ever change the body's *width*: narrower is taller, and a second monotone path compounds it.
+    // Nothing gated on this may change the body's size, in either axis. Both the scrollbar and the
+    // boundary rule are overlays inside the body for that reason: a gated element that consumed
+    // layout space would feed back into the measurement deciding whether to show it — monotone, so
+    // never oscillating, but able to latch overflow on for content that sits near the boundary.
     val bodyOverflows by remember { derivedStateOf { bodyScrollState.isClipping() } }
     val traceOverflows by remember { derivedStateOf { stackTraceScrollState.isClipping() } }
 
@@ -283,7 +282,8 @@ internal fun CrashReportDialog(
                                             modifier =
                                                 Modifier
                                                     .fillMaxWidth()
-                                                    .heightIn(max = 200.dp)
+                                                    .heightIn(max = TRACE_PANE_MAX_HEIGHT)
+                                                    .testTag(TRACE_PANE_TAG)
                                                     .background(
                                                         BossTheme.colors.panel,
                                                         RoundedCornerShape(4.dp),
@@ -395,6 +395,15 @@ internal fun CrashReportDialog(
                 }
 
                 if (bodyOverflows) {
+                    // Marks the clipped edge. Overlaid rather than stacked below the body so it
+                    // costs no layout height — see the footer comment. Same *position* as the old
+                    // sibling rule (the body is at its cap, so the ~17dp freed from the footer goes
+                    // straight back to it), but body content now runs right up to the rule instead
+                    // of leaving a 16dp gap above it.
+                    Divider(
+                        color = BossTheme.colors.line,
+                        modifier = Modifier.align(Alignment.BottomStart).testTag(BOUNDARY_RULE_TAG),
+                    )
                     VerticalScrollbar(
                         modifier =
                             Modifier
@@ -408,18 +417,60 @@ internal fun CrashReportDialog(
             }
 
             // Pinned footer — the submit result and the action buttons stay visible regardless of
-            // how much the body above has grown or scrolled. The rule is only drawn when the body
-            // is actually clipping something, where it marks the scroll boundary; without it the
-            // footer would look like a stray divider floating in empty space.
-            if (bodyOverflows) {
-                Spacer(modifier = Modifier.height(16.dp))
-                Divider(color = BossTheme.colors.line)
-            }
-
+            // how much the body above has grown or scrolled. The rule marking the scroll boundary
+            // is drawn as an overlay at the bottom of the body above, not as a sibling here: as a
+            // sibling it took ~17dp from the body, and gating that on bodyOverflows fed back into
+            // the measurement deciding it. Same visual, no layout height, no feedback path.
             Spacer(modifier = Modifier.height(16.dp))
 
             // Submit result message
             submitResult?.let { result ->
+                // Keyed on the result, not recomputed per composition: userNotes is read in this
+                // same restartable scope, so every keystroke in the notes field recomposes the
+                // whole dialog — and this runs several regex passes over a string a TLS or proxy
+                // error can make arbitrarily long.
+                val resultMessage =
+                    remember(result) {
+                        when (result) {
+                            is CrashReportService.SubmitResult.Success -> {
+                                if (result.isNewIssue) {
+                                    "Issue created successfully!"
+                                } else {
+                                    "Added to existing issue."
+                                }
+                            }
+
+                            is CrashReportService.SubmitResult.Error -> {
+                                // The text most likely to end up pasted into a public issue, and it
+                                // interpolates a raw exception message.
+                                //
+                                // sanitizeExceptionMessage, not maskUriParams: the latter redacts
+                                // named params inside a `?`/`#` segment, and the case that
+                                // motivates sanitizing here has neither — "Request timeout has
+                                // expired [url=https://…, …]" passed through verbatim. This is also
+                                // what the rest of the window already gets: CrashHandler runs the
+                                // exception message and stack trace through the same function
+                                // before they reach CrashReport.
+                                //
+                                // Scope, measured rather than assumed: a host is removed when it
+                                // appears *inside a URL* — filePathPattern swallows everything after
+                                // the scheme colon, which covers ktor's `[url=…]` messages. A bare
+                                // host does not match any location pattern and renders verbatim:
+                                // UnknownHostException.getMessage() is just the hostname, so
+                                // "Failed to submit crash report: proxy.corp.internal" survives
+                                // intact. Harmless for our own public endpoint, not necessarily so
+                                // for a corporate proxy — see #109.
+                                //
+                                // Cost of what it does remove: the endpoint is no longer named
+                                // here, only in the log. The diagnostic half survives ("Request
+                                // timeout has expired", and request_timeout=… since neither
+                                // `request` nor `timeout` marks a secret), which keeps this
+                                // narrower than a blunt redaction. A blank message renders
+                                // "[no message]" where maskUriParams gave "[empty]".
+                                LogSanitizer.sanitizeExceptionMessage(result.message)
+                            }
+                        }
+                    }
                 Card(
                     backgroundColor =
                         when (result) {
@@ -435,24 +486,7 @@ internal fun CrashReportDialog(
                     // full exception (CrashReportService), which is where it survives.
                     SelectionContainer {
                         Text(
-                            text =
-                                when (result) {
-                                    is CrashReportService.SubmitResult.Success -> {
-                                        if (result.isNewIssue) {
-                                            "Issue created successfully!"
-                                        } else {
-                                            "Added to existing issue."
-                                        }
-                                    }
-
-                                    is CrashReportService.SubmitResult.Error -> {
-                                        // The text most likely to end up pasted into a public
-                                        // issue, and it interpolates a raw exception message —
-                                        // ktor's routinely carry the request URL. The unmasked
-                                        // form still reaches the log, which is where it belongs.
-                                        LogSanitizer.maskUriParams(result.message)
-                                    }
-                                },
+                            text = resultMessage,
                             fontSize = 13.sp,
                             color = BossTheme.colors.onSignal,
                             // This text is the one part of the footer whose length isn't ours: the
@@ -583,6 +617,24 @@ internal fun CrashReportDialog(
 
 /** Present only while the body is clipping content; see `isClipping`. */
 internal const val BODY_SCROLLBAR_TAG = "crash-dialog-body-scrollbar"
+
+/** The rule marking a clipped body edge. Overlaid, so it must never consume layout height. */
+internal const val BOUNDARY_RULE_TAG = "crash-dialog-boundary-rule"
+
+/** The bounded stack-trace viewport. Tagged so a test can measure the cap itself, not its inner content. */
+internal const val TRACE_PANE_TAG = "crash-dialog-trace-pane"
+
+/**
+ * Height cap on the stack-trace viewport. Bounded so a deep trace takes its own overflow instead of
+ * making the body an endless scroll. Shared with the test rather than duplicated, so moving the cap
+ * can't leave an assertion validating the old number.
+ *
+ * Do not remove it as cosmetic: this pane's `verticalScroll` sits inside the body's, which hands
+ * down an unbounded max height. The `heightIn` is what bounds it, and without it the dialog throws
+ * "Vertically scrollable component was measured with an infinity maximum height constraints"
+ * (confirmed by deleting it — eight tests fail on that, not on a size assertion).
+ */
+internal val TRACE_PANE_MAX_HEIGHT = 200.dp
 
 /** Present only while the stack trace pane is clipping content; see `isClipping`. */
 internal const val TRACE_SCROLLBAR_TAG = "crash-dialog-trace-scrollbar"

@@ -17,15 +17,18 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import org.junit.Rule
 import org.junit.Test
+import kotlin.math.abs
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
  * Layout guarantees for [CrashReportDialog] at the real crash window's sizes.
  *
- * The dialog is hosted in a JFrame (`CrashHandler.showCrashDialogWindow`) whose *content pane* is
- * 550x700 preferred and 450x500 minimum. Those constants describe the box the dialog is laid out
- * in, not the decorated frame around it, so the sizes below are what the dialog really gets.
+ * The dialog is hosted in a JFrame (`CrashHandler.showCrashDialogWindow`). Its *content pane* is
+ * 550x700 preferred — that size is applied to the ComposePanel, so the dialog gets it exactly — but
+ * the 450x500 minimum is a **frame** dimension, decorations included. The content pane at that
+ * minimum is therefore smaller by the title bar, which is why the sizes below subtract
+ * [WORST_CASE_DECORATION_HEIGHT] rather than using the minimum as-is.
  *
  * A crash report is a lot of content for that box, and expanding "Technical
  * Details" adds ~250dp more — so a body laid out without a scroll region pushes "Report Issue" and
@@ -56,6 +59,13 @@ class CrashReportDialogLayoutTest {
          */
         val WORST_CASE_DECORATION_HEIGHT = 40.dp
         val WORST_CASE_DECORATION_WIDTH = 16.dp
+
+        /**
+         * dp-to-px rounding slack. Both edges compared are anchored to the same Box — the rule by
+         * `Alignment.BottomStart`, the scrollbar by `fillMaxHeight()` — so they land on the same
+         * bottom edge exactly; the rule's 1dp thickness only moves its *top*.
+         */
+        val RULE_OVERLAY_TOLERANCE = 2.dp
     }
 
     @get:Rule
@@ -119,6 +129,27 @@ class CrashReportDialogLayoutTest {
             submitResult,
         )
 
+    /**
+     * Asserts each label is entirely within the window, not merely overlapping it.
+     *
+     * `assertIsDisplayed()` only requires a node's *clipped* bounds to be non-empty, so a button
+     * hanging most of the way off an edge satisfies it. Comparing clipped against unclipped bounds
+     * is what actually rules that out.
+     */
+    private fun assertWhollyOnScreen(
+        vararg labels: String,
+        because: String,
+    ) {
+        for (label in labels) {
+            val node = rule.onNodeWithText(label)
+            assertEquals(
+                node.getUnclippedBoundsInRoot(),
+                node.getBoundsInRoot(),
+                "\"$label\" is not wholly on screen: $because",
+            )
+        }
+    }
+
     @Test
     fun actionButtonsStayVisibleWhenTechnicalDetailsAreExpanded() {
         setDialogAtMinimumWindowSize()
@@ -141,18 +172,12 @@ class CrashReportDialogLayoutTest {
         rule.onNodeWithText("Technical Details").performClick()
         rule.waitForIdle()
 
-        // assertIsDisplayed() only requires a node's *clipped* bounds to be non-empty, so a button
-        // hanging most of the way off an edge still satisfies it. Comparing clipped against
-        // unclipped bounds is what actually rules that out — cheap, and it closes the one soft spot
-        // in the assertions above.
-        for (label in listOf("Clean Data & Restart", "Don't Send", "Report Issue")) {
-            val node = rule.onNodeWithText(label)
-            assertEquals(
-                node.getUnclippedBoundsInRoot(),
-                node.getBoundsInRoot(),
-                "\"$label\" is partially outside the window",
-            )
-        }
+        assertWhollyOnScreen(
+            "Clean Data & Restart",
+            "Don't Send",
+            "Report Issue",
+            because = "the expanded details must not push the footer past an edge",
+        )
     }
 
     @Test
@@ -219,11 +244,15 @@ class CrashReportDialogLayoutTest {
         // time waitForIdle() returns, measure has assigned maxValue and both forms agree. The
         // sentinel needs a paused clock; see theBodyScrollbarIsAbsentEvenOnTheFirstFrame.
         rule.onNodeWithTag(BODY_SCROLLBAR_TAG).assertDoesNotExist()
+        // The rule shares the gate, so it must be absent too — otherwise a stray line is drawn
+        // across a dialog with nothing clipped.
+        rule.onNodeWithTag(BOUNDARY_RULE_TAG).assertDoesNotExist()
 
         rule.onNodeWithText("Technical Details").performClick()
         rule.waitForIdle()
 
         rule.onNodeWithTag(BODY_SCROLLBAR_TAG).assertExists()
+        rule.onNodeWithTag(BOUNDARY_RULE_TAG).assertExists()
     }
 
     @Test
@@ -239,6 +268,8 @@ class CrashReportDialogLayoutTest {
         )
 
         rule.onNodeWithTag(BODY_SCROLLBAR_TAG).assertDoesNotExist()
+        // Shares the gate, so the sentinel would paint a stray rule on frame 1 too.
+        rule.onNodeWithTag(BOUNDARY_RULE_TAG).assertDoesNotExist()
     }
 
     @Test
@@ -253,14 +284,12 @@ class CrashReportDialogLayoutTest {
         rule.onNodeWithText("Technical Details").performClick()
         rule.waitForIdle()
 
-        for (label in listOf("Clean Data & Restart", "Don't Send", "Report Issue")) {
-            val node = rule.onNodeWithText(label)
-            assertEquals(
-                node.getUnclippedBoundsInRoot(),
-                node.getBoundsInRoot(),
-                "\"$label\" left the window once a long failure message filled the footer",
-            )
-        }
+        assertWhollyOnScreen(
+            "Clean Data & Restart",
+            "Don't Send",
+            "Report Issue",
+            because = "a long failure message filled the footer",
+        )
     }
 
     @Test
@@ -278,13 +307,120 @@ class CrashReportDialogLayoutTest {
         rule.onNodeWithText("Technical Details").performClick()
         rule.waitForIdle()
 
-        for (label in listOf("Clean Data & Restart", "Close")) {
-            val node = rule.onNodeWithText(label)
-            assertEquals(
-                node.getUnclippedBoundsInRoot(),
-                node.getBoundsInRoot(),
-                "\"$label\" left the window with the success footer's second row present",
-            )
-        }
+        assertWhollyOnScreen(
+            "Clean Data & Restart",
+            "Close",
+            because = "the success footer adds a second button row",
+        )
+    }
+
+    @Test
+    fun aSubmitFailureIsSanitizedBeforeItIsShown() {
+        // This card is selectable and the likeliest thing to be pasted into a public issue, and its
+        // text interpolates a raw exception message. maskUriParams — which this originally used —
+        // only redacts named params inside a `?`/`#` segment, so it returned a ktor timeout message
+        // carrying the request URL completely untouched.
+        setDialogAtMinimumWindowSize(
+            CrashReportService.SubmitResult.Error(
+                "Failed to submit crash report: Request timeout has expired " +
+                    "[url=https://api.risaboss.com/functions/v1/crash-report, request_timeout=15000 ms]",
+            ),
+        )
+
+        // The card must render — without this the two negative assertions below would also pass
+        // if the Error branch were dropped or initialSubmitResult stopped being wired through.
+        // This substring also documents what sanitizing is meant to *preserve*.
+        rule.onNodeWithText("Request timeout has expired", substring = true).assertExists()
+
+        rule.onNodeWithText("api.risaboss.com", substring = true).assertDoesNotExist()
+        // Hyphenated, so it matches only the URL path — the "Failed to submit crash report:" prose
+        // has a space. Not "crash-report]": the fixture has a comma there, so that literal appears
+        // nowhere in the input and the assertion could never fail.
+        rule.onNodeWithText("crash-report", substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun theStackTracePaneIsCappedAndScrollsWithinThatCap() {
+        setDialogAtMinimumWindowSize()
+        rule.onNodeWithText("Technical Details").performClick()
+        rule.waitForIdle()
+
+        // The other load-bearing behaviour of this layout: 60 frames don't turn the body into an
+        // endless scroll, because the pane is bounded and takes the overflow itself. Both halves
+        // are asserted — a thumb (it is clipping) and a height inside the 200dp cap. Deliberately
+        // not named "independently": a pane wired to bodyScrollState would still satisfy this, and
+        // the scroll states aren't observable from here.
+        rule.onNodeWithTag(TRACE_SCROLLBAR_TAG).assertExists()
+
+        // Measured on the pane itself, not the scrollbar inside it: the thumb fills the height
+        // *within* the pane's 8dp padding, so asserting on it would carry 16dp of slack.
+        //
+        // Bounded against the body viewport rather than against TRACE_PANE_MAX_HEIGHT. Asserting a
+        // shared constant against itself is tautological — it holds at any cap value, while the
+        // property it claims to protect does not. This bound is the property that actually matters
+        // and it does not move when the cap is tuned: the pane must leave room in the body for
+        // everything below it.
+        //
+        // Controlled at cap = 400dp, where it fires: "trace pane (400.0dp) fills the body viewport
+        // (268.0dp)". Note it is not what catches an *extreme* cap — at 2000dp the trace stops
+        // clipping inside the pane, so the thumb assertion above fires first. This bound owns the
+        // middle range, where the pane still clips but has eaten the body.
+        val paneBounds = rule.onNodeWithTag(TRACE_PANE_TAG).getUnclippedBoundsInRoot()
+        val paneHeight = paneBounds.bottom - paneBounds.top
+        val bodyBounds = rule.onNodeWithTag(BODY_SCROLLBAR_TAG).getUnclippedBoundsInRoot()
+        val bodyViewport = bodyBounds.bottom - bodyBounds.top
+        assertTrue(
+            paneHeight < bodyViewport,
+            "trace pane (${paneHeight.value}dp) fills the body viewport (${bodyViewport.value}dp), " +
+                "so a deep trace has become the body's scroll",
+        )
+
+        // And the body still scrolls past it to reach what's below.
+        rule.onNodeWithText("Include recent activity logs").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun theBoundaryRuleCostsNoLayoutHeight() {
+        setDialogAtMinimumWindowSize()
+        rule.onNodeWithText("Technical Details").performClick()
+        rule.waitForIdle()
+
+        // The invariant the overlay exists for: the rule lives *inside* the body region, so it
+        // adds nothing to the parent Column's height.
+        //
+        // Measured against the body scrollbar, which fillMaxHeight()s inside the same Box and so
+        // ends exactly at the body's bottom edge. Overlaid, the rule ends there too; as a footer
+        // sibling it would sit a spacer's width below it. Note this is *not* measured as a
+        // rule-to-footer gap — that gap is 16dp in both shapes, so it cannot tell them apart
+        // (verified by control: a sibling rule passes such an assertion).
+        val bodyBottom = rule.onNodeWithTag(BODY_SCROLLBAR_TAG).getUnclippedBoundsInRoot().bottom
+        val ruleBottom = rule.onNodeWithTag(BOUNDARY_RULE_TAG).getUnclippedBoundsInRoot().bottom
+        // Two-sided: `<=` alone would also pass a rule pinned to the *top* of the body, which is a
+        // visible bug unrelated to overlay-vs-sibling.
+        val delta = ruleBottom - bodyBottom
+        assertTrue(
+            abs(delta.value) <= RULE_OVERLAY_TOLERANCE.value,
+            "rule ends ${delta.value}dp from the body's bottom edge — expected it flush with it; " +
+                "below means a sibling consuming layout height, above means it is not at the edge",
+        )
+    }
+
+    @Test
+    fun theTraceScrollbarIsAbsentWhileTheDetailsAreCollapsed() {
+        setDialogAtMinimumWindowSize()
+
+        // Collapsed, the pane isn't composed at all — so this also pins that the hoisted trace
+        // scroll state's stale maxValue never leaks a thumb into the collapsed dialog.
+        rule.onNodeWithTag(TRACE_SCROLLBAR_TAG).assertDoesNotExist()
+    }
+
+    @Test
+    fun aBlankFailureMessageRendersThePlaceholderNotAnEmptyCard() {
+        // Unreachable today (every Error interpolates a prefix), but it is the one behaviour the
+        // sanitizer swap changed beyond redaction: maskUriParams answered "[empty]" for blank input,
+        // sanitizeExceptionMessage answers "[no message]".
+        setDialogAtMinimumWindowSize(CrashReportService.SubmitResult.Error(""))
+
+        rule.onNodeWithText("[no message]", substring = true).assertExists()
     }
 }
