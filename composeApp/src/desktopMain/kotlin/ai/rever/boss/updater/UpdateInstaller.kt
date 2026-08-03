@@ -471,6 +471,16 @@ object UpdateInstaller {
                         findAppBundleInVolume(mountedVolume)
                             ?: throw IllegalStateException("Could not find BOSS.app in mounted DMG")
 
+                    // Refuse a build this Mac cannot launch, while BOSS is still
+                    // running so the user gets a real dialog. The installer script
+                    // repeats this check as defence-in-depth, but by the time it
+                    // runs the app has already quit — an abort there is invisible
+                    // and reads like a crash. Engine upgrades move this floor
+                    // (JxBrowser 9.4.0 took it 12.0 -> 13.0) and the release
+                    // manifest carries no minimum-OS field, so nothing upstream
+                    // stops the update being offered.
+                    unsupportedOsError(appBundle)?.let { return@withContext InstallResult.Error(it) }
+
                     logger.info(LogCategory.SYSTEM, "DMG verified successfully", mapOf("appBundle" to appBundle.name))
 
                     // DMG is valid - now we can safely unmount it (script will remount it)

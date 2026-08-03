@@ -197,6 +197,55 @@ object UpdateScriptGenerator {
 
             echo "Found app bundle: ${'$'}APP_BUNDLE"
 
+            # Last line of defence before an irreversible rm -rf: refuse to install
+            # a build this Mac cannot launch. Nothing upstream gates on OS version —
+            # the release manifest carries no minimum — so without this an update
+            # that raises the floor deletes the working app, copies one Launch
+            # Services will refuse to open, and leaves no in-app way back.
+            #
+            # The requirement is read from the INCOMING bundle rather than hardcoded,
+            # so it can never drift from the DMG actually being installed and needs
+            # no maintenance when the floor moves again. If the key is unreadable we
+            # proceed: a plist that can't be parsed must not block every update.
+            # Gate on PlistBuddy's exit status AND the shape of what it printed.
+            # A missing key makes it print `Print: Entry, ":LSMinimumSystemVersion",
+            # Does Not Exist` to STDOUT and exit 1 — so `2>/dev/null` does not
+            # suppress it and a bare -n test would pass that sentence to sort -V,
+            # blocking the update instead of failing open. The pattern match also
+            # keeps DMG-controlled text out of the osascript literal below.
+            MIN_OS=${'$'}(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "${'$'}APP_BUNDLE/Contents/Info.plist" 2>/dev/null)
+            if [ ${'$'}? -ne 0 ] || ! echo "${'$'}MIN_OS" | grep -Eq '^[0-9]+(\.[0-9]+){0,2}${'$'}'; then
+                echo "No usable LSMinimumSystemVersion in the incoming bundle; proceeding without an OS check"
+                MIN_OS=""
+            fi
+            if [ -n "${'$'}MIN_OS" ]; then
+                # Same fail-open rule as MIN_OS above: an empty CUR_OS would sort
+                # ahead of any version and refuse the update with a dialog reading
+                # "this Mac runs macOS ." The script runs detached with whatever
+                # environment launchScript gives it, so sw_vers is not guaranteed.
+                CUR_OS=${'$'}(sw_vers -productVersion 2>/dev/null)
+                if [ -z "${'$'}CUR_OS" ]; then
+                    echo "Could not determine the current macOS version; proceeding without an OS check"
+                    MIN_OS=""
+                fi
+            fi
+            if [ -n "${'$'}MIN_OS" ]; then
+                if [ "${'$'}(printf '%s\n%s\n' "${'$'}MIN_OS" "${'$'}CUR_OS" | sort -V | head -n 1)" != "${'$'}MIN_OS" ]; then
+                    echo "This BOSS release requires macOS ${'$'}MIN_OS or later; this Mac runs ${'$'}CUR_OS."
+                    echo "Update cancelled — your current installation has been left untouched."
+                    hdiutil detach "${'$'}VOLUME" -quiet
+                    # BOSS has already quit by the time this script runs, and these
+                    # echoes only reach the updater log. Aborting silently would look
+                    # exactly like a crash: the user clicks "Install update", the app
+                    # quits, and nothing comes back. Tell them, then restore the app
+                    # they still have.
+                    osascript -e "display dialog \"This BOSS update requires macOS ${'$'}MIN_OS or later.\n\nThis Mac runs macOS ${'$'}CUR_OS, so the update was cancelled and your current version has been kept.\" buttons {\"OK\"} with icon caution with title \"Update cancelled\"" >/dev/null 2>&1 || true
+                    open $escapedTargetAppPath || echo "Relaunch failed - please start BOSS manually"
+                    exit 1
+                fi
+                echo "macOS ${'$'}CUR_OS satisfies the required ${'$'}MIN_OS"
+            fi
+
             # Remove old app (using escaped path for security)
             echo "Removing old BOSS: $escapedTargetAppPath"
             if [ -d $escapedTargetAppPath ]; then
