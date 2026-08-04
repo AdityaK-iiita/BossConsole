@@ -106,7 +106,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          claude_args: "--allowedTools 'Bash(git:*)' 'Bash(cat:*)' 'Bash(ls:*)' 'Bash(bash scripts/release-download-table.sh:*)' 'Read' 'Write' 'Edit' 'Glob' 'Grep'"
+          claude_args: "--allowedTools 'Bash(git:*)' 'Bash(cat:*)' 'Bash(ls:*)' 'Read' 'Write' 'Edit' 'Glob' 'Grep'"
           prompt: |
             Generate release notes for BOSS version ${{ steps.release-info.outputs.version }}.
 
@@ -123,10 +123,11 @@ jobs:
                - Summary (1-2 sentences)
                - Highlights (2-4 key changes)
                - Changes grouped by: Features, Bug Fixes, Improvements, Dependencies
-               - Downloads: run `bash scripts/release-download-table.sh ${{ steps.release-info.outputs.version }}`
-                 and paste its output verbatim. Do not hand-write this table — it is
-                 generated so that this file and the release.yml body stay identical,
-                 and so every platform and architecture actually gets a working link.
+               - Downloads: put the single line `<!-- DOWNLOADS -->` on its own line
+                 where the downloads section belongs, and write nothing else there.
+                 Do NOT write a download table — a later step substitutes the
+                 generated one. Hand-writing it produces links to assets that may
+                 not exist for this release.
 
             3. Update `docs/release-notes/README.md` index between RELEASE_INDEX markers
 
@@ -135,6 +136,65 @@ jobs:
             - Use conventional commit scopes: browser, terminal, tabs, panel, etc.
             - Link PR numbers: (#123)
             - Omit empty sections
+
+      # Substituted here rather than asked for in the prompt. "The two bodies
+      # cannot drift" is only true if nothing can paraphrase, reflow or
+      # hand-write the table — and a denied Bash call would silently push the
+      # model back to writing it itself, which is the failure this replaces.
+      - name: 📦 Substitute the generated download table
+        if: steps.check-existing.outputs.exists != 'true'
+        env:
+          VERSION: ${{ steps.release-info.outputs.version }}
+          RELEASE_TAG: ${{ steps.release-info.outputs.release_tag }}
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          NOTES_FILE="docs/release-notes/v${VERSION}.md"
+          if [[ ! -f "$NOTES_FILE" ]]; then
+            echo "::warning::$NOTES_FILE not found; nothing to substitute"
+            exit 0
+          fi
+
+          # Only list assets the release actually has: Windows ARM64 and Linux
+          # ARM64 are optional builds, so a fixed nine-row table would publish
+          # live 404s whenever one failed.
+          gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' > /tmp/assets.txt \
+            || : > /tmp/assets.txt
+
+          TABLE_ARGS=(--version "$VERSION")
+          if [[ -s /tmp/assets.txt ]]; then
+            TABLE_ARGS+=(--asset-list /tmp/assets.txt)
+          else
+            echo "::warning::Could not list release assets; listing all packages"
+          fi
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            TABLE_ARGS+=(--prerelease)
+          fi
+
+          bash scripts/release-download-table.sh "${TABLE_ARGS[@]}" > /tmp/downloads.md
+
+          if grep -q '<!-- DOWNLOADS -->' "$NOTES_FILE"; then
+            # python, not sed: the generated markdown contains &, | and [] that
+            # sed would treat as replacement syntax.
+            python3 - "$NOTES_FILE" /tmp/downloads.md <<'PY'
+          import sys
+          notes_path, table_path = sys.argv[1], sys.argv[2]
+          with open(notes_path) as f:
+              notes = f.read()
+          with open(table_path) as f:
+              table = f.read().rstrip("\n")
+          with open(notes_path, "w") as f:
+              f.write(notes.replace("<!-- DOWNLOADS -->", table))
+          PY
+            echo "✅ Substituted the download table into $NOTES_FILE"
+          else
+            # Never leave the notes without downloads just because the marker
+            # went missing.
+            echo "::warning::No <!-- DOWNLOADS --> marker in $NOTES_FILE; appending the table"
+            printf '\n' >> "$NOTES_FILE"
+            cat /tmp/downloads.md >> "$NOTES_FILE"
+          fi
 
       - name: 📤 Commit and Push
         if: steps.check-existing.outputs.exists != 'true'

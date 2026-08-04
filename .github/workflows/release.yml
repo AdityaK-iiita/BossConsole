@@ -1609,7 +1609,52 @@ jobs:
           # had to scroll to the assets list and match names by eye. Generate
           # it instead, from the same script release-notes.yml uses, so the
           # placeholder body and the curated notes cannot drift apart.
-          DOWNLOAD_TABLE=$(bash scripts/release-download-table.sh "$VERSION" "$GITHUB_REPOSITORY")
+          #
+          # --assets matters: Windows ARM64 and Linux ARM64 are optional builds
+          # (see this job's `if:`), so hardcoding nine rows would publish live
+          # 404s whenever one of them failed. --prerelease keeps a pre-release
+          # page's "always latest" links from resolving to an older stable.
+          TABLE_ARGS=(--version "$VERSION" --repo "$GITHUB_REPOSITORY" --assets ./release-assets)
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            TABLE_ARGS+=(--prerelease)
+          fi
+          DOWNLOAD_TABLE=$(bash scripts/release-download-table.sh "${TABLE_ARGS[@]}")
+
+          # Same reason the table is filtered: these three wget commands 404 on
+          # any release where the optional Linux ARM64 build failed. Emit the
+          # section only when the package is actually present.
+          if [[ -f "./release-assets/BOSS-${VERSION}-arm64.deb" ]]; then
+            LINUX_ARM64_SECTION=$(cat << ARM64EOF
+          ### Linux (ARM64 / aarch64)
+
+          **Ubuntu/Debian:**
+          \`\`\`bash
+          wget https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/BOSS-${VERSION}-arm64.deb
+          sudo apt-get install ./BOSS-${VERSION}-arm64.deb  # resolves dependencies + recommends
+          \`\`\`
+
+          > \`sudo dpkg -i\` works too and no longer requires \`xdg-utils\` to be present
+          > (headless installs used to fail during dependency resolution). But \`dpkg\`
+          > ignores \`Recommends:\`, so on a desktop without \`xdg-utils\` installed it
+          > skips the menu entry and icon silently — use apt to get them.
+
+          **RHEL/Fedora/openSUSE:**
+          \`\`\`bash
+          wget https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/BOSS-${VERSION}-arm64.rpm
+          sudo rpm -i BOSS-${VERSION}-arm64.rpm
+          \`\`\`
+
+          **JAR (requires Java 17+):**
+          \`\`\`bash
+          wget https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/BOSS-${VERSION}-arm64.jar
+          java -jar BOSS-${VERSION}-arm64.jar
+          \`\`\`
+          ARM64EOF
+          )
+          else
+            echo "::warning::No Linux ARM64 deb in release assets; omitting its install section"
+            LINUX_ARM64_SECTION=""
+          fi
 
           cat > release-notes.md << EOF
           # $RELEASE_TITLE
@@ -1675,30 +1720,7 @@ jobs:
           java -jar BOSS-${VERSION}-amd64.jar
           \`\`\`
 
-          ### Linux (ARM64 / aarch64)
-
-          **Ubuntu/Debian:**
-          \`\`\`bash
-          wget https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/BOSS-${VERSION}-arm64.deb
-          sudo apt-get install ./BOSS-${VERSION}-arm64.deb  # resolves dependencies + recommends
-          \`\`\`
-
-          > \`sudo dpkg -i\` works too and no longer requires \`xdg-utils\` to be present
-          > (headless installs used to fail during dependency resolution). But \`dpkg\`
-          > ignores \`Recommends:\`, so on a desktop without \`xdg-utils\` installed it
-          > skips the menu entry and icon silently — use apt to get them.
-
-          **RHEL/Fedora/openSUSE:**
-          \`\`\`bash
-          wget https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/BOSS-${VERSION}-arm64.rpm
-          sudo rpm -i BOSS-${VERSION}-arm64.rpm
-          \`\`\`
-
-          **JAR (requires Java 17+):**
-          \`\`\`bash
-          wget https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/BOSS-${VERSION}-arm64.jar
-          java -jar BOSS-${VERSION}-arm64.jar
-          \`\`\`
+          ${LINUX_ARM64_SECTION}
 
           ---
 
