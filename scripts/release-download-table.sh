@@ -56,12 +56,23 @@ usage() {
   echo "Usage: $(basename "$0") --version <X.Y.Z> [--repo <owner/name>] [--assets <dir>] [--asset-list <file>] [--prerelease]" >&2
 }
 
+# A bare `shift 2` on a flag given without a value fails under `set -e` and
+# exits with no message at all, which is a confusing way for a release job to
+# die.
+need_value() { # <flag> <value>
+  if [[ -z "${2:-}" ]]; then
+    echo "Error: $1 requires a value" >&2
+    usage
+    exit 1
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --version)    VERSION="${2:-}"; shift 2 ;;
-    --repo)       ASSET_REPO="${2:-}"; shift 2 ;;
-    --assets)     ASSETS_DIR="${2:-}"; shift 2 ;;
-    --asset-list) ASSET_LIST="${2:-}"; shift 2 ;;
+    --version)    need_value "$1" "${2:-}"; VERSION="$2"; shift 2 ;;
+    --repo)       need_value "$1" "${2:-}"; ASSET_REPO="$2"; shift 2 ;;
+    --assets)     need_value "$1" "${2:-}"; ASSETS_DIR="$2"; shift 2 ;;
+    --asset-list) need_value "$1" "${2:-}"; ASSET_LIST="$2"; shift 2 ;;
     --prerelease) IS_PRERELEASE=true; shift ;;
     -h|--help)    usage; exit 0 ;;
     *)            echo "Error: unknown argument '$1'" >&2; usage; exit 1 ;;
@@ -127,7 +138,8 @@ ROWS=(
 )
 
 latest_link() {
-  local pkg="$1" arch_param="$2" url="${LATEST_API}&download=$1"
+  local pkg="$1" arch_param="$2" url
+  url="${LATEST_API}&download=${pkg}"
   [[ -n "$arch_param" ]] && url="${url}&arch=${arch_param}"
   # Without this a pre-release page's "always latest" links resolve to the
   # newest *stable*, i.e. backwards.

@@ -50,6 +50,16 @@ done
 rc=$(run "$TD/g" --version 9.4.0 --bogus-flag)
 check "rejects an unknown flag" "$rc" "1"
 
+echo "== a flag with no value fails loudly, not silently =="
+# A bare `shift 2` here exits 1 under `set -e` with no output at all.
+for flag in --version --repo --assets --asset-list; do
+  rc=$(run "$TD/g" "$flag")
+  check "$flag alone exits 1" "$rc" "1"
+  check "$flag alone explains itself" "$(grep -c "requires a value" "$TD/g.err")" "1"
+done
+rc=$(run "$TD/h" --help)
+check "--help exits 0" "$rc" "0"
+
 echo "== full table (no asset filter) =="
 run "$TD/full" --version 9.4.0 >/dev/null
 check "9 asset rows" "$(grep -c '^| \*\*' "$TD/full")" "9"
