@@ -72,6 +72,14 @@ check "defaults to the public assets repo" \
   "$(grep -c 'risa-labs-inc/BossConsole-Releases/releases/download' "$TD/full")" "9"
 check "no unresolved shell expansion left in output" "$(grep -c '\${' "$TD/full")" "0"
 
+# The update dialog's inline scanner matches the link alternative first at
+# offset 0 and then appends the captured label verbatim (ReleaseNotesMarkdown.kt
+# `append(link.groupValues[1])`), so a code span nested in a link label renders
+# its backticks as literal characters. A bare code span is fine — that path does
+# removeSurrounding("`") — a linked one is not.
+check "no backticks inside any link label" \
+  "$(grep -oE '\[[^]]*\]\(' "$TD/full" | grep -c '`' || true)" "0"
+
 echo "== --repo threading (sync-release rewrites private -> public) =="
 run "$TD/priv" --version 9.4.0 --repo risa-labs-inc/BossConsole >/dev/null
 sed 's|risa-labs-inc/BossConsole|risa-labs-inc/BossConsole-Releases|g' "$TD/priv" > "$TD/pub"

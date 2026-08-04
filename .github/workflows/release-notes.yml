@@ -173,7 +173,22 @@ jobs:
           # and degrading to "list everything" would quietly publish the very
           # 404s this filtering exists to prevent. The script keeps a lenient
           # fallback for local use; a release job should not.
-          if ! gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' > /tmp/assets.txt; then
+          #
+          # The links point at the PUBLIC repo, so prefer its asset list: this
+          # workflow and sync-release both fire on `release: published`, and
+          # sync-release uploads assets one at a time (the DMG alone can take
+          # minutes), so the public release can exist while still missing files.
+          # Validating against the private repo in that window would approve a
+          # row whose public link 404s. Fall back to the private list when the
+          # public release does not exist yet at all — otherwise the release
+          # would be left with no curated notes, which is worse.
+          PUBLIC_REPO=risa-labs-inc/BossConsole-Releases
+          if gh release view "$RELEASE_TAG" --repo "$PUBLIC_REPO" --json assets --jq '.assets[].name' > /tmp/assets.txt 2>/dev/null \
+             && [[ -s /tmp/assets.txt ]]; then
+            echo "📋 Validating against the public release's assets"
+          elif gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' > /tmp/assets.txt; then
+            echo "::warning::Public release $RELEASE_TAG not readable yet; validating against the private release's assets"
+          else
             echo "::error::Could not list assets for $RELEASE_TAG; refusing to guess the download table"
             exit 1
           fi

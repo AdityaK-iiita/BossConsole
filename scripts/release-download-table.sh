@@ -161,7 +161,12 @@ build_rows() { # <apply_filter>
       omitted="${omitted}${asset} "
       continue
     fi
-    rows_out="${rows_out}| ${platform} | ${arch} | [\`${asset}\`](${ASSET_URL}/${asset}) |"$'\n'
+    # No backticks inside the link label. The update dialog renders this
+    # markdown, and its inline scanner matches the link alternative first at
+    # offset 0, then appends the captured label verbatim — a code span nested in
+    # a link label therefore shows its backticks as literal characters, styled
+    # as a link. A bare code span is fine (it strips them), a linked one is not.
+    rows_out="${rows_out}| ${platform} | ${arch} | [${asset}](${ASSET_URL}/${asset}) |"$'\n'
   done
 }
 
@@ -201,7 +206,7 @@ echo "correct in a bookmark and need no API key:"
 echo ""
 echo "${latest_out% · }"
 echo ""
-echo "Release metadata — version, every asset, sha256 checksums — is at [\`?app=boss\`](${LATEST_API})."
+echo "Release metadata — version, every asset, sha256 checksums — is at [?app=boss](${LATEST_API})."
 
 # Report drops on stderr: an omitted row is invisible in the output, and
 # "the ARM64 build failed" must not read as "this release has no ARM64".

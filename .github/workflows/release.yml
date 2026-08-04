@@ -1631,6 +1631,24 @@ jobs:
           # exactly as the table does per row.
           have_arm64() { [[ -f "./release-assets/BOSS-${VERSION}-arm64.$1" ]]; }
 
+          # Windows ARM64 is the other optional build. Its instructions name a
+          # file rather than linking one, so a missing build is not a 404 — but
+          # telling a reader to download something that was never published is
+          # the same defect, so it gets the same treatment.
+          if have_arm64 msi; then
+            WINDOWS_ARM64_SECTION=$(cat << WINARM64
+
+          ### Windows (ARM64)
+          1. Download \`BOSS-${VERSION}-arm64.msi\`
+          2. Run the installer as Administrator
+          3. Launch from Start Menu or Desktop
+          WINARM64
+          )
+          else
+            echo "::warning::No Windows ARM64 msi in release assets; omitting its install section"
+            WINDOWS_ARM64_SECTION=""
+          fi
+
           ARM64_FILE=$(mktemp)
           if have_arm64 deb || have_arm64 rpm || have_arm64 jar; then
             printf '### Linux (ARM64 / aarch64)\n' >> "$ARM64_FILE"
@@ -1713,10 +1731,7 @@ jobs:
           2. Run the installer as Administrator
           3. Launch from Start Menu or Desktop
 
-          ### Windows (ARM64)
-          1. Download \`BOSS-${VERSION}-arm64.msi\`
-          2. Run the installer as Administrator
-          3. Launch from Start Menu or Desktop
+          ${WINDOWS_ARM64_SECTION}
 
           ### Linux (AMD64 / x86_64)
 
