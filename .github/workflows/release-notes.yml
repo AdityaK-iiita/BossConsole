@@ -146,6 +146,14 @@ jobs:
         env:
           VERSION: ${{ steps.release-info.outputs.version }}
           RELEASE_TAG: ${{ steps.release-info.outputs.release_tag }}
+          # The release payload's own flag. Deriving "is this a prerelease" from
+          # the tag string would be wrong: release.yml sets is-prerelease from
+          # `is_prerelease_version || release_type != stable`, so a dispatch with
+          # release_type=beta on 9.4.0 produces a release tagged v9.4.0 — no dash
+          # — that IS a prerelease. sync-release.yml already compensates for that
+          # case when deriving a channel. Empty on workflow_run/dispatch, where
+          # the step falls back to asking the API.
+          EVENT_IS_PRERELEASE: ${{ github.event.release.prerelease }}
           GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
         run: |
           set -euo pipefail
@@ -159,16 +167,32 @@ jobs:
           # Only list assets the release actually has: Windows ARM64 and Linux
           # ARM64 are optional builds, so a fixed nine-row table would publish
           # live 404s whenever one failed.
-          gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' > /tmp/assets.txt \
-            || : > /tmp/assets.txt
-
-          TABLE_ARGS=(--version "$VERSION")
-          if [[ -s /tmp/assets.txt ]]; then
-            TABLE_ARGS+=(--asset-list /tmp/assets.txt)
-          else
-            echo "::warning::Could not list release assets; listing all packages"
+          #
+          # This is a hard failure, not a warning. The release exists by the time
+          # this runs, so an unreadable asset list means something is wrong —
+          # and degrading to "list everything" would quietly publish the very
+          # 404s this filtering exists to prevent. The script keeps a lenient
+          # fallback for local use; a release job should not.
+          if ! gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' > /tmp/assets.txt; then
+            echo "::error::Could not list assets for $RELEASE_TAG; refusing to guess the download table"
+            exit 1
           fi
-          if [[ "$RELEASE_TAG" == *-* ]]; then
+          if [[ ! -s /tmp/assets.txt ]]; then
+            echo "::error::$RELEASE_TAG has no assets; refusing to publish a download table"
+            exit 1
+          fi
+
+          TABLE_ARGS=(--version "$VERSION" --asset-list /tmp/assets.txt)
+
+          IS_PRERELEASE="${EVENT_IS_PRERELEASE:-}"
+          if [[ -z "$IS_PRERELEASE" ]]; then
+            IS_PRERELEASE=$(gh release view "$RELEASE_TAG" --json isPrerelease --jq '.isPrerelease' 2>/dev/null || echo "")
+          fi
+          if [[ -z "$IS_PRERELEASE" ]]; then
+            echo "::error::Could not determine whether $RELEASE_TAG is a prerelease"
+            exit 1
+          fi
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
             TABLE_ARGS+=(--prerelease)
           fi
 
