@@ -33,7 +33,7 @@ import androidx.compose.ui.unit.sp
 
 /**
  * App theme picker — mirrors BossTerm's theme settings. Lists the host themes
- * (Operator / Daylight / Clean); selecting one applies it live and persists it.
+ * from [BossThemes.all]; selecting one applies it live and persists it.
  */
 @Composable
 fun ThemeSettings() {

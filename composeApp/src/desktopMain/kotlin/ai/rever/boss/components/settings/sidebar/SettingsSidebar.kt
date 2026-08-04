@@ -94,7 +94,7 @@ enum class SettingsSection(
     ),
     THEME(
         displayName = "Theme",
-        description = "App color theme — Operator, Daylight, or Clean",
+        description = "App color theme — Blueprint, Operator, Daylight, Clean",
         icon = Icons.Outlined.Palette,
     ),
     WINDOW_APPEARANCE(

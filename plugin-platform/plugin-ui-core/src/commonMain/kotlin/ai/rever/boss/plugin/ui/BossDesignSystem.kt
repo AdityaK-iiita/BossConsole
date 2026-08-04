@@ -19,9 +19,11 @@ import androidx.compose.ui.unit.sp
  *
  *  1. The terminal character cell is the atomic grid unit; chrome borrows the
  *     terminal's discipline (8.dp base, hairline borders, high density).
- *  2. One amber [BossPalette.signal] means "live / active / now" — the primary
- *     action, the focused field, the selected tab, the cursor. Cyan
- *     [BossPalette.data] carries links and data. Everything else stays quiet.
+ *  2. Exactly one `signal` color means "live / active / now" — the primary
+ *     action, the focused field, the selected tab, the cursor. `data` carries
+ *     links and data. Everything else stays quiet. Which hues those are is the
+ *     theme's business (amber/cyan under Operator, electric blue under
+ *     Blueprint); the *rule* is the design system's.
  *
  * Access tokens inside a [BossTheme] via the [BossTheme] accessor object, e.g.
  * `BossTheme.colors.signal`, `BossTheme.space.md`, `BossTheme.radius.button`.

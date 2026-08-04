@@ -544,7 +544,7 @@ fun main(args: Array<String>) {
     AWTKeyboardInterceptor.install()
 
     // Apply the persisted app theme before any UI composes, so the app opens
-    // in the user's chosen look (Operator / Daylight / Clean).
+    // in the user's chosen look rather than flashing the default first.
     ai.rever.boss.theme.AppThemeSettingsManager
         .ensureInitialized()
 

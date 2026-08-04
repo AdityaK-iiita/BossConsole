@@ -85,9 +85,10 @@ object FluckEngine {
 
     /**
      * Mirror the active BOSS host theme into the live Chromium engine so web
-     * content's `prefers-color-scheme` matches the app (Daylight → light;
-     * Operator/Clean dark themes → dark). Emits the current value immediately,
-     * then on every host theme switch.
+     * content's `prefers-color-scheme` matches the app. Keyed off the theme's own
+     * [ai.rever.boss.plugin.ui.BossAppTheme.isLight] flag, so a new theme needs no
+     * change here. Emits the current value immediately, then on every host theme
+     * switch.
      */
     private fun startHostThemeObserver() {
         themeScope.launch {
