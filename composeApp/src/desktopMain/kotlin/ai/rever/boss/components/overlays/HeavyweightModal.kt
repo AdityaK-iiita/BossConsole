@@ -64,6 +64,8 @@ fun HeavyweightModal(
             }
         },
     ) {
+        EnsureOverlayWindowTransparent(window)
+
         // Dismiss when the modal loses focus (clicked elsewhere), matching modal expectations —
         // but NOT when one of our own heavyweight popups took the focus.
         //

@@ -106,6 +106,7 @@ fun HeavyweightPopup(
             }
         },
     ) {
+        EnsureOverlayWindowTransparent(window)
         RegisterOpenPopup()
 
         if (focusable) {
