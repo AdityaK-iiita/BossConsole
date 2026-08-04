@@ -72,7 +72,17 @@ class FluckEngineSwitchesTest {
         graphiteOptIn: Boolean = false,
         inContainer: Boolean = false,
         extras: List<String> = emptyList(),
-    ) = FluckEngine.performanceSwitchesFor(os, arch, graphiteOptIn, inContainer, extras)
+        noPings: Boolean = true,
+        domainReliability: Boolean = true,
+        winOcclusion: Boolean = true,
+        vaapi: Boolean = true,
+    ) = FluckEngine.performanceSwitchesFor(
+        os,
+        arch,
+        inContainer,
+        extras,
+        FluckEngine.SwitchToggles(noPings, domainReliability, winOcclusion, vaapi, graphiteOptIn),
+    )
 
     /**
      * Switches that are not platform-specific, so a per-platform assertion can say what that
@@ -173,6 +183,73 @@ class FluckEngineSwitchesTest {
     fun `unknown platforms get no platform-specific switches`() {
         assertEquals(emptyList(), platformSpecific(switchesFor("freebsd")))
         assertEquals(emptyList(), platformSpecific(switchesFor("sunos", inContainer = true)))
+    }
+
+    // --- the Settings-driven toggles ---
+
+    /**
+     * The default arguments are the shipped behaviour, and that is the part worth pinning: these
+     * four became [ChromiumFlagsSettings] rows where null means "no opinion", so a caller that
+     * resolved null to `false` instead of `true` would quietly strip flags from every user who has
+     * never opened the Settings screen. A signature default of true makes that mistake impossible
+     * to make by omission; this test makes it impossible to make by editing the signature.
+     */
+    @Test
+    fun `omitting the toggles yields exactly the pre-Settings switch set`() {
+        assertEquals(
+            listOf("--no-pings", "--disable-domain-reliability", "--disable-features=CalculateNativeWinOcclusion"),
+            FluckEngine.performanceSwitchesFor("windows 11", "x86_64", inContainer = false),
+        )
+        assertEquals(
+            listOf(
+                "--no-pings",
+                "--disable-domain-reliability",
+                "--enable-features=VaapiVideoDecoder,VaapiVideoDecodeLinuxGL,VaapiVideoEncoder",
+            ),
+            FluckEngine.performanceSwitchesFor("linux", "x86_64", inContainer = false),
+        )
+    }
+
+    @Test
+    fun `each network-trimming switch can be turned off independently`() {
+        // Independently, not as a pair: they are two separate rows in Settings, and a user
+        // debugging one site's hyperlink auditing should not lose Domain Reliability trimming too.
+        // Asserted on "freebsd", which contributes no platform switches, so the whole result IS
+        // the universal set and an exact-list assertion catches an unexpected addition too.
+        assertEquals(listOf("--disable-domain-reliability"), switchesFor("freebsd", noPings = false))
+        assertEquals(listOf("--no-pings"), switchesFor("freebsd", domainReliability = false))
+        assertEquals(emptyList(), switchesFor("freebsd", noPings = false, domainReliability = false))
+    }
+
+    @Test
+    fun `the windows occlusion opt-out can be turned off, leaving the rest of windows intact`() {
+        val switches = switchesFor("windows 11", winOcclusion = false)
+        assertFalse("--disable-features=CalculateNativeWinOcclusion" in switches)
+        assertTrue("--no-pings" in switches, "turning off one switch must not drop the universal set")
+    }
+
+    @Test
+    fun `VA-API can be turned off for machines whose driver is broken, container mode included`() {
+        val desktop = switchesFor("linux", vaapi = false)
+        assertEquals(emptyList(), platformSpecific(desktop))
+        // The container switch is a separate concern and must survive: /dev/shm sizing has nothing
+        // to do with whether video decode is hardware-accelerated.
+        val container = switchesFor("linux", inContainer = true, vaapi = false)
+        assertEquals(listOf("--disable-dev-shm-usage"), platformSpecific(container))
+    }
+
+    // --- disk cache ---
+
+    @Test
+    fun `disk cache falls back to the shipped size and clamps nonsense`() {
+        assertEquals(FluckEngine.DEFAULT_DISK_CACHE_MB, FluckEngine.diskCacheMb(null))
+        assertEquals(1024, FluckEngine.diskCacheMb(1024))
+        // 0 is the case that matters: JxBrowser/Chromium read a zero cache size as "size it
+        // yourself", so honouring a typed 0 as "no cache" would hand the user the several-hundred-MB
+        // auto-sized cache instead - the opposite of what they asked for.
+        assertEquals(1, FluckEngine.diskCacheMb(0))
+        assertEquals(1, FluckEngine.diskCacheMb(-500))
+        assertEquals(8192, FluckEngine.diskCacheMb(99_999_999))
     }
 
     @Test

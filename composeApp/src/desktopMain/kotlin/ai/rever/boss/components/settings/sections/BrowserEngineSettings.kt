@@ -372,5 +372,9 @@ fun BrowserEngineSettings() {
                 )
             }
         }
+
+        // The engine's OPTIONS, below its version. Same screen because both answer "what browser
+        // am I running", separate composable because they share no state — see ChromiumFlagsSections.
+        ChromiumFlagsSections()
     }
 }

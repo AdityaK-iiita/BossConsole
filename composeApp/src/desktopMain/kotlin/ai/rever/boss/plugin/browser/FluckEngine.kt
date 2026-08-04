@@ -5,6 +5,7 @@ import ai.rever.boss.components.plugin.tab_types.fluck.DownloadManager
 import ai.rever.boss.components.plugin.tab_types.fluck.DownloadSettings
 import ai.rever.boss.components.plugin.tab_types.fluck.DownloadStatus
 import ai.rever.boss.config.ChromiumAutoDownloader
+import ai.rever.boss.config.ChromiumFlagKeys
 import ai.rever.boss.config.JxBrowserConfig
 import ai.rever.boss.platform.FileNameSanitizer
 import ai.rever.boss.platform.FileSystemUtils
@@ -1023,9 +1024,27 @@ object FluckEngine {
 
     internal fun isFalsyFlag(value: String?): Boolean = value?.trim()?.lowercase() in ENV_FALSE
 
-    private fun envIsTrue(name: String) = isTruthyFlag(System.getenv(name))
+    /**
+     * Truthiness of a tunable, resolved through [ConfigLoader] rather than `System.getenv`.
+     *
+     * The distinction matters since these became Settings rows: settings are published as
+     * system properties at startup (see ChromiumFlagsSettingsManager.applyToSystemProperties),
+     * and getenv cannot see a system property — so a getenv read here would accept the
+     * environment and silently ignore the app's own setting. ConfigLoader keeps env first, so
+     * the override precedence is unchanged; it just stops being the *only* source.
+     */
+    private fun configIsTrue(name: String) =
+        isTruthyFlag(
+            ai.rever.boss.config.ConfigLoader
+                .getConfig(name),
+        )
 
-    private fun envIsFalse(name: String) = isFalsyFlag(System.getenv(name))
+    /** Falsiness of a tunable. See [configIsTrue] for why this is not `System.getenv`. */
+    private fun configIsFalse(name: String) =
+        isFalsyFlag(
+            ai.rever.boss.config.ConfigLoader
+                .getConfig(name),
+        )
 
     /**
      * Parse BOSS_CHROMIUM_EXTRA_SWITCHES: whitespace-separated, exactly like a
@@ -1075,7 +1094,7 @@ object FluckEngine {
      * the gate only decides whether the head start happens, never correctness.
      */
     fun prewarmInBackground() {
-        if (envIsFalse("BOSS_BROWSER_PREWARM")) return
+        if (configIsFalse(ChromiumFlagKeys.PREWARM)) return
         val profileDir = BossDirectories.resolve(BrowserSettings.currentProfile)
         if (!profileDir.exists()) {
             logger.debug(LogCategory.BROWSER, "Skipping engine pre-warm — no browser profile on this machine yet")
@@ -1791,26 +1810,40 @@ object FluckEngine {
      * Skia Graphite is opt-in only — it blanks OSR output on this JxBrowser (see
      * the mac branch below). Extra switches can be injected without a rebuild via
      * BOSS_CHROMIUM_EXTRA_SWITCHES (whitespace-separated, like a Chromium
-     * command line).
+     * command line) or the equivalent field in Settings > Browser Engine.
      *
-     * CAUTION for BOSS_CHROMIUM_EXTRA_SWITCHES users: Chromium's --enable-features /
+     * CAUTION for extra-switch users: Chromium's --enable-features /
      * --disable-features are NOT additive — the last occurrence on the command line
      * wins. Passing your own --enable-features=… replaces the platform set above
      * (e.g. SkiaGraphite, VA-API); include those features in your value if you want
      * to keep them.
+     *
+     * Everything resolved here is restart-scoped: EngineOptions are fixed when the
+     * engine is built, so a Settings change takes effect on the next launch. The
+     * resolved switch list is recorded in [lastAppliedSwitches] for the Settings UI to
+     * display, so what it shows as active is what was actually passed rather than a
+     * recomputation that could disagree with it.
      */
     private fun applyPerformanceSwitches(
         builder: EngineOptions.Builder,
         inContainer: Boolean,
     ) {
+        val flags = ai.rever.boss.config.ChromiumFlagsSettingsManager.currentSettings.value
+
         // Bigger fixed on-disk HTTP cache for faster repeat page loads. Chromium's
         // auto-sizing historically caps around ~320 MB; 512 MB comfortably exceeds
         // it without meaningfully eating the disk. Tune via this API, not a
         // --disk-cache-size extra switch — precedence between the two is
         // unspecified when both are set.
-        builder.diskCacheSize(512L * 1024 * 1024)
+        val diskCacheMb = diskCacheMb(flags.diskCacheMb)
+        builder.diskCacheSize(diskCacheMb.toLong() * 1024 * 1024)
+        lastDiskCacheMb = diskCacheMb
 
-        val (extras, dropped) = partitionExtraSwitches(System.getenv("BOSS_CHROMIUM_EXTRA_SWITCHES"))
+        val (extras, dropped) =
+            partitionExtraSwitches(
+                ai.rever.boss.config.ConfigLoader
+                    .getConfig(ChromiumFlagKeys.EXTRA_SWITCHES),
+            )
         if (extras.isNotEmpty()) {
             // Audit trail: extras are unrestricted and can re-weaken hardening,
             // so record exactly what this session runs with.
@@ -1846,19 +1879,51 @@ object FluckEngine {
         val rendererCap =
             renderCapSwitch(
                 ai.rever.boss.config.ConfigLoader
-                    .getConfig("BOSS_RENDERER_PROCESS_LIMIT"),
+                    .getConfig(ChromiumFlagKeys.RENDERER_PROCESS_LIMIT),
             )
 
         val platformSwitches =
             performanceSwitchesFor(
                 os = System.getProperty("os.name").lowercase(),
                 arch = System.getProperty("os.arch").lowercase(),
-                graphiteOptIn = envIsTrue("BOSS_ENABLE_SKIA_GRAPHITE"),
                 inContainer = inContainer,
                 extraSwitches = listOfNotNull(rendererCap) + extras,
+                // Graphite comes through ConfigLoader rather than off `flags` directly, because it
+                // is a published key: an operator's env var must keep outranking the setting.
+                toggles = SwitchToggles.from(flags).copy(skiaGraphite = configIsTrue(ChromiumFlagKeys.SKIA_GRAPHITE)),
             )
         platformSwitches.forEach { builder.addSwitch(it) }
+        lastAppliedSwitches = platformSwitches
     }
+
+    /**
+     * The switch list the live engine was actually built with, and the disk cache it was
+     * given, for Settings > Browser Engine to display as "active this session".
+     *
+     * Recorded rather than recomputed on demand. A recomputation would read the CURRENT
+     * settings, so the moment a user changed a row it would start reporting a command
+     * line no running process ever had — under the heading "active". Empty/null until
+     * the engine is first built, which is also true: nothing has been applied yet.
+     */
+    @Volatile internal var lastAppliedSwitches: List<String> = emptyList()
+        private set
+
+    @Volatile internal var lastDiskCacheMb: Int? = null
+        private set
+
+    /**
+     * Disk cache size in MB, clamped so a hand-edited settings file cannot hand Chromium
+     * something unusable.
+     *
+     * The floor is 1 rather than 0: `diskCacheSize(0)` is Chromium's "pick a size
+     * yourself" sentinel, so a user who typed 0 meaning "no cache" would silently get
+     * the auto-sized several-hundred-MB cache instead — the opposite of the request. The
+     * ceiling is 8 GB, far past any deliberate choice, so it only ever catches a slipped
+     * digit that would otherwise fill a disk.
+     */
+    internal fun diskCacheMb(requested: Int?): Int = requested?.coerceIn(1, 8192) ?: DEFAULT_DISK_CACHE_MB
+
+    internal const val DEFAULT_DISK_CACHE_MB = 512
 
     /**
      * Container detection for the Linux-only container switches. /.dockerenv only
@@ -1867,7 +1932,7 @@ object FluckEngine {
      * which is undetectable, so BOSS_IN_CONTAINER=true remains the explicit
      * override (and BOSS_CHROMIUM_DISABLE_SANDBOX=true the sandbox-specific one).
      */
-    private fun runningInContainer(): Boolean {
+    internal fun runningInContainer(): Boolean {
         if (System.getenv("BOSS_IN_CONTAINER") == "true") return true
         // File-based markers are Linux-only concepts — skip the I/O elsewhere.
         if (!System.getProperty("os.name").lowercase().contains("linux")) return false
@@ -1898,14 +1963,22 @@ object FluckEngine {
      * [applyPerformanceSwitches]). Reading config inside would hide an input from a function whose
      * whole point is an auditable decision, and would make these tests depend on the developer's
      * own environment: anyone with BOSS_RENDERER_PROCESS_LIMIT set would get a different switch
-     * set than CI.
+     * set than CI. The four toggles added when these became Settings rows follow the same rule:
+     * they arrive as booleans the caller has already resolved, so "which switches does this
+     * platform get" stays answerable by reading one function.
+     *
+     * The per-switch opt-ins arrive grouped in a [SwitchToggles] rather than as five more
+     * positional booleans: adjacent same-typed parameters are a call site where a
+     * transposition compiles and silently emits the wrong switches. [inContainer] stays a
+     * separate parameter on purpose — it is a fact about the machine, not a choice anyone
+     * made, and the two should not be able to be confused for each other.
      */
     internal fun performanceSwitchesFor(
         os: String,
         arch: String,
-        graphiteOptIn: Boolean,
         inContainer: Boolean,
         extraSwitches: List<String> = emptyList(),
+        toggles: SwitchToggles = SwitchToggles(),
     ): List<String> {
         val switches = mutableListOf<String>()
 
@@ -1915,8 +1988,12 @@ object FluckEngine {
         // for anything BOSS does, so this is pure reduction. Ported from BossConsoleLite, which
         // deliberately stopped short of --disable-background-networking and the component
         // updater pending proof they don't break the update/DRM paths — that caution is kept.
-        switches += "--no-pings"
-        switches += "--disable-domain-reliability"
+        //
+        // Both are switchable because "pure reduction" is a claim about BOSS's needs, not about
+        // every page a user will open: a site whose hyperlink auditing is load-bearing is a
+        // support case that should be answerable without a rebuild.
+        if (toggles.noPings) switches += "--no-pings"
+        if (toggles.domainReliability) switches += "--disable-domain-reliability"
 
         when {
             os.contains("win") -> {
@@ -1925,7 +2002,7 @@ object FluckEngine {
                 // producing frames — a known stall for embedded engines whose
                 // visibility is driven by the app's own surface, not the native
                 // window. CEF/JCEF embedders disable it for the same reason.
-                switches += "--disable-features=CalculateNativeWinOcclusion"
+                if (toggles.winOcclusion) switches += "--disable-features=CalculateNativeWinOcclusion"
             }
 
             os.contains("mac") -> {
@@ -1939,7 +2016,7 @@ object FluckEngine {
                 // frame-export path evidently doesn't support Graphite yet, so
                 // it is OPT-IN only, for re-testing on future JxBrowser upgrades:
                 // BOSS_ENABLE_SKIA_GRAPHITE=true.
-                if (arch.contains("aarch64") && graphiteOptIn) {
+                if (arch.contains("aarch64") && toggles.skiaGraphite) {
                     switches += "--enable-features=SkiaGraphite"
                 }
             }
@@ -1947,8 +2024,12 @@ object FluckEngine {
             os.contains("linux") -> {
                 // Linux hardware video decode is still gated in upstream defaults
                 // (feature names differ across Chromium generations; unknown ones
-                // are ignored, so list both eras).
-                switches += "--enable-features=VaapiVideoDecoder,VaapiVideoDecodeLinuxGL,VaapiVideoEncoder"
+                // are ignored, so list both eras). Switchable because VA-API depends on
+                // the driver actually being there: on a machine where it is broken,
+                // forcing it on is worse than leaving decode in software.
+                if (toggles.vaapi) {
+                    switches += "--enable-features=VaapiVideoDecoder,VaapiVideoDecodeLinuxGL,VaapiVideoEncoder"
+                }
                 // Container-only: tiny /dev/shm would otherwise crash renderers.
                 // Never on desktop Linux — it would push the OSR frame transport
                 // to disk.
@@ -1967,6 +2048,40 @@ object FluckEngine {
         return switches
     }
 
+    /**
+     * The switches that were unconditional until they became Settings rows.
+     *
+     * **Every default is true, and that is the whole point of this type.** In
+     * [ai.rever.boss.config.ChromiumFlagsSettings] these are nullable, where null means
+     * "no opinion" — and resolving a null to `false` instead of `true` would silently
+     * strip working flags from every user who has never opened the Settings screen.
+     * Putting the resolution in [from], once, means no call site can get it wrong, and
+     * putting the defaults here means omitting the argument entirely is also safe.
+     */
+    internal data class SwitchToggles(
+        val noPings: Boolean = true,
+        val domainReliability: Boolean = true,
+        val winOcclusion: Boolean = true,
+        val vaapi: Boolean = true,
+        // The one toggle whose default is OFF, and the only one that is off because the feature is
+        // BROKEN rather than because it is a preference: Graphite blanks off-screen output on this
+        // JxBrowser. Grouped here anyway - it decides whether a switch is emitted, which is what
+        // this type is - but it is resolved from the settings with `?: false`, not `?: true`.
+        val skiaGraphite: Boolean = false,
+    ) {
+        companion object {
+            /** Resolve the nullable settings form, treating "no opinion" as each switch's shipped default. */
+            fun from(flags: ai.rever.boss.config.ChromiumFlagsSettings) =
+                SwitchToggles(
+                    noPings = flags.noPings ?: true,
+                    domainReliability = flags.disableDomainReliability ?: true,
+                    winOcclusion = flags.disableWinOcclusion ?: true,
+                    vaapi = flags.enableVaapi ?: true,
+                    skiaGraphite = flags.enableSkiaGraphite ?: false,
+                )
+        }
+    }
+
     /** Pure part of the renderer-process cap, split out so the guard is unit-testable. */
     internal fun renderCapSwitch(raw: String?): String? =
         raw
@@ -1981,32 +2096,45 @@ object FluckEngine {
      * one browser we most want to profile is the one that can only be read off a
      * screenshot (see benchmarks/speedometer/win/SpeedometerCdp.java).
      *
-     * OFF unless BOSS_BROWSER_REMOTE_DEBUGGING_PORT names a valid port, because
-     * an open DevTools port is full control of the browser profile: any local
-     * process can read cookies and session tokens and drive navigation through
-     * it, with no prompt. That is why this is an env var and not a setting — it
-     * should be a deliberate act for one session, not something that can be left
-     * on. Chromium binds the endpoint to loopback only, which bounds the exposure
-     * to this machine but not to this app.
+     * OFF unless a valid port comes from BOSS_BROWSER_REMOTE_DEBUGGING_PORT or the
+     * Settings row, because an open DevTools port is full control of the browser
+     * profile: any local process can read cookies and session tokens and drive
+     * navigation through it, with no prompt. Chromium binds the endpoint to loopback
+     * only, which bounds the exposure to this machine but not to this app.
      *
      * [parseRemoteDebuggingPort] rejects anything outside the unprivileged range
      * so a typo cannot silently mean "port 0" — which Chromium reads as
      * "pick any free port", i.e. a debugging endpoint nobody knows is open.
      *
-     * Read with getenv rather than ConfigLoader ON PURPOSE, unlike the other tunables here: a
-     * value in local.properties persists across every future run of that checkout, and this one
-     * should not be possible to leave on by accident. It also applies to the SHARED engine, so
-     * without BOSS_DEV_MODE it exposes the operator's real profile and cookies — hence the
-     * per-session env var and the warning below.
+     * **Two sources, and deliberately NOT ConfigLoader**, unlike every other tunable
+     * here. ConfigLoader would add local.properties and the embedded build config as
+     * sources, and a line in someone's local.properties enables this for every future
+     * run of that checkout with nothing in the app to reveal it. The two sources it
+     * does accept are both revocable and visible:
+     *
+     *  - the environment variable, scoped to one session by construction;
+     *  - the Settings row, which the UI writes only behind a confirmation that spells
+     *    out the exposure, shows as enabled whenever it is, and can turn back off.
+     *
+     * The env var is checked first so a one-session override still wins over a
+     * persisted setting, matching the precedence everywhere else. This applies to the
+     * SHARED engine, so without BOSS_DEV_MODE it exposes the operator's real profile
+     * and cookies — hence the warning below on every boot it is on.
      */
     private fun applyRemoteDebuggingPort(builder: EngineOptions.Builder) {
-        val raw = System.getenv("BOSS_BROWSER_REMOTE_DEBUGGING_PORT") ?: return
+        val fromEnv = System.getenv(ChromiumFlagKeys.REMOTE_DEBUGGING_PORT)
+        val fromSettings =
+            ai.rever.boss.config.ChromiumFlagsSettingsManager.currentSettings.value
+                .remoteDebuggingPort
+                ?.toString()
+        val source = if (fromEnv != null) "environment" else "settings"
+        val raw = fromEnv ?: fromSettings ?: return
         val port = parseRemoteDebuggingPort(raw)
         if (port == null) {
             logger.warn(
                 LogCategory.BROWSER,
-                "Ignoring BOSS_BROWSER_REMOTE_DEBUGGING_PORT - not a port in 1024..65535",
-                mapOf("value" to raw),
+                "Ignoring remote debugging port - not a port in 1024..65535",
+                mapOf("value" to raw, "source" to source),
             )
             return
         }
@@ -2014,8 +2142,9 @@ object FluckEngine {
         logger.warn(
             LogCategory.BROWSER,
             "DevTools remote debugging ENABLED on this engine - any local process can drive the browser " +
-                "and read its cookies. Unset BOSS_BROWSER_REMOTE_DEBUGGING_PORT when you are done.",
-            mapOf("port" to port),
+                "and read its cookies. Turn it off in Settings > Browser Engine, or unset " +
+                "BOSS_BROWSER_REMOTE_DEBUGGING_PORT, when you are done.",
+            mapOf("port" to port, "source" to source),
         )
     }
 
@@ -2048,7 +2177,7 @@ object FluckEngine {
                 // the sandbox usually can't start (no user namespaces) and the
                 // container boundary provides the isolation instead.
                 .apply {
-                    if (envIsTrue("BOSS_CHROMIUM_DISABLE_SANDBOX") || inContainer) disableSandbox()
+                    if (configIsTrue(ChromiumFlagKeys.DISABLE_SANDBOX) || inContainer) disableSandbox()
                 }.apply { applyRemoteDebuggingPort(this) }
 
         // Add user agent if configured
