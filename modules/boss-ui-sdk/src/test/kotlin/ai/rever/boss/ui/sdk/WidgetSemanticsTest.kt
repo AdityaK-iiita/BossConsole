@@ -134,6 +134,8 @@ class WidgetSemanticsTest {
         assertEquals(BackgroundSpec.Token(ThemeToken.SIGNAL_WASH), parseBackgroundColor("signal_wash"))
         assertEquals(BackgroundSpec.Token(ThemeToken.SIGNAL_WASH), parseBackgroundColor("SIGNAL-WASH"))
         assertEquals(BackgroundSpec.Token(ThemeToken.ON_SIGNAL), parseBackgroundColor("onSignal"))
+        assertEquals(BackgroundSpec.Token(ThemeToken.SIGNAL_TEXT), parseBackgroundColor("signalText"))
+        assertEquals(BackgroundSpec.Token(ThemeToken.SIGNAL_TEXT), parseBackgroundColor("signal_text"))
     }
 
     @Test
@@ -141,7 +143,10 @@ class WidgetSemanticsTest {
         for (token in ThemeToken.entries) {
             assertEquals(BackgroundSpec.Token(token), parseBackgroundColor(token.tokenName))
         }
-        assertEquals(17, ThemeToken.entries.size)
+        // Deliberate literal: this module cannot see BossColorScheme (that reflective
+        // check lives in composeApp's RemoteWidgetRendererColorTest), so the count is
+        // what makes adding a scheme field without a wire token fail here.
+        assertEquals(18, ThemeToken.entries.size)
     }
 
     @Test

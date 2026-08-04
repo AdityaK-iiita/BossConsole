@@ -107,7 +107,7 @@ fun MagicLinkWaitingScreen(
                     text = email,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Medium,
-                    color = BossTheme.colors.signal,
+                    color = BossTheme.colors.signalText,
                     textAlign = TextAlign.Center,
                 )
 
@@ -128,7 +128,7 @@ fun MagicLinkWaitingScreen(
                         Icon(
                             imageVector = Icons.Default.Email,
                             contentDescription = "Email",
-                            tint = BossTheme.colors.signal,
+                            tint = BossTheme.colors.signalText,
                             modifier = Modifier.size(24.dp),
                         )
 
@@ -307,7 +307,7 @@ fun MagicLinkWaitingScreen(
                                 focusedBorderColor = BossTheme.colors.signal,
                                 unfocusedBorderColor = BossTheme.colors.line,
                                 cursorColor = BossTheme.colors.signal,
-                                focusedLabelColor = BossTheme.colors.signal,
+                                focusedLabelColor = BossTheme.colors.signalText,
                                 unfocusedLabelColor = BossTheme.colors.textSecondary,
                             ),
                     )
@@ -346,7 +346,7 @@ fun MagicLinkWaitingScreen(
                     Text(
                         text = "Back to Sign In",
                         fontSize = 14.sp,
-                        color = BossTheme.colors.signal,
+                        color = BossTheme.colors.signalText,
                         textDecoration = TextDecoration.Underline,
                     )
                 }

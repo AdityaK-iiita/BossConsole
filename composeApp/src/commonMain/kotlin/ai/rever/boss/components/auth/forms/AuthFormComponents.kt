@@ -121,7 +121,7 @@ fun EmailField(
                 focusedBorderColor = BossTheme.colors.signal,
                 unfocusedBorderColor = BossTheme.colors.line,
                 cursorColor = BossTheme.colors.signal,
-                focusedLabelColor = BossTheme.colors.signal,
+                focusedLabelColor = BossTheme.colors.signalText,
                 unfocusedLabelColor = BossTheme.colors.textSecondary,
             ),
     )

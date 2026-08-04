@@ -225,7 +225,7 @@ private fun LinkOpenOption(
             Icon(
                 imageVector = icon,
                 contentDescription = title,
-                tint = BossTheme.colors.signal,
+                tint = BossTheme.colors.signalText,
                 modifier = Modifier.size(24.dp),
             )
             Spacer(modifier = Modifier.width(16.dp))

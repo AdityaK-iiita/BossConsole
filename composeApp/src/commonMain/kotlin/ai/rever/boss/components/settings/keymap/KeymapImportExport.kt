@@ -61,7 +61,7 @@ fun KeymapImportExport(
             }
             TextButton(
                 onClick = { showExportDialog = true },
-                colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.signal),
+                colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.signalText),
             ) {
                 Icon(
                     imageVector = Icons.Default.FileDownload,
@@ -99,7 +99,7 @@ fun KeymapImportExport(
             }
             TextButton(
                 onClick = { showImportDialog = true },
-                colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.signal),
+                colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.signalText),
             ) {
                 Icon(
                     imageVector = Icons.Default.FileUpload,
@@ -234,7 +234,7 @@ private fun ExportDialog(onDismiss: () -> Unit) {
                     Text(
                         text = "💡 Tip: Save this JSON to a file for backup",
                         fontSize = 11.sp,
-                        color = BossTheme.colors.signal,
+                        color = BossTheme.colors.signalText,
                     )
                 }
             }

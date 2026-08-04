@@ -399,7 +399,7 @@ private fun CommitFileSectionHeader(
         ) {
             Text(
                 text = actionText,
-                color = BossTheme.colors.signal,
+                color = BossTheme.colors.signalText,
                 fontSize = 10.sp,
             )
         }

@@ -434,7 +434,7 @@ fun SecuritySettings() {
                                     Icon(
                                         Icons.Outlined.Security,
                                         contentDescription = "WebAuthn",
-                                        tint = BossTheme.colors.signal,
+                                        tint = BossTheme.colors.signalText,
                                         modifier = Modifier.size(24.dp),
                                     )
                                     Spacer(modifier = Modifier.width(16.dp))
@@ -506,7 +506,7 @@ fun SecuritySettings() {
                                             else -> Icons.Outlined.Security
                                         },
                                         contentDescription = passkey.displayName,
-                                        tint = BossTheme.colors.signal,
+                                        tint = BossTheme.colors.signalText,
                                         modifier = Modifier.size(20.dp),
                                     )
                                     Spacer(modifier = Modifier.width(12.dp))
@@ -555,7 +555,7 @@ fun SecuritySettings() {
                             colors =
                                 ButtonDefaults.buttonColors(
                                     backgroundColor = BossTheme.colors.ink,
-                                    contentColor = BossTheme.colors.signal,
+                                    contentColor = BossTheme.colors.signalText,
                                 ),
                             border = BorderStroke(1.dp, BossTheme.colors.line),
                             modifier = Modifier.fillMaxWidth(),
@@ -679,7 +679,7 @@ fun SecuritySettings() {
                                     else -> Icons.Outlined.Security
                                 },
                                 contentDescription = passkey.displayName,
-                                tint = BossTheme.colors.signal,
+                                tint = BossTheme.colors.signalText,
                                 modifier = Modifier.size(20.dp),
                             )
                             Spacer(modifier = Modifier.width(12.dp))
@@ -887,7 +887,7 @@ private fun SecurityTip(
         Icon(
             icon,
             contentDescription = null,
-            tint = BossTheme.colors.signal,
+            tint = BossTheme.colors.signalText,
             modifier = Modifier.size(20.dp),
         )
         Spacer(modifier = Modifier.width(12.dp))

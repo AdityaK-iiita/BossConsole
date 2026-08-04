@@ -51,8 +51,18 @@ a theme is one `BossAppTheme` plus one list entry.
 | **Clean** | `clean` | dark | Neutral charcoal, steel-blue accent |
 
 The choice is explicit and persisted (`~/.boss/app-theme-settings.json`); the OS
-theme setting is never consulted. Existing installs keep whatever they had —
-only a fresh install picks up Blueprint.
+theme setting is never consulted.
+
+**Who a default change re-skins.** `AppThemeSettingsManager` writes that file only
+from `select()` — `ensureInitialized()` resolves the id without saving. So a file
+that omits `appThemeId`, *or no file at all*, means "whatever the default is", and
+**anyone who never explicitly picked a theme moves to Blueprint on update**. Only an
+explicit selection survives. That is intended here (it is the brand alignment this
+theme exists for); if a future default change should instead be a no-op for current
+users, `ensureInitialized()` has to persist the resolved id once.
+
+That property is why the four mirrors below have to agree on the default, not just
+on the palettes.
 
 #### Blueprint — the default palette
 
@@ -74,6 +84,7 @@ site's rather than an interpretation of it.
 | `signal` | `#0F5BFF` | `#0F5BFF` | `--blue` |
 | `signalDim` | `#0A45C4` | `#0A45C4` | pressed / variant |
 | `signalWash` | `#0A1A3C` | `#DCE7FF` | `.console-sidebar .selected` / `--blue-soft` |
+| `signalText` | `#88A9FF` | `#0F5BFF` | the site's link-blue family (see below) |
 | `data` | `#88A9FF` | `#0C3FBF` | `.audit-line svg` `#8af` |
 | `ok` | `#2FD98A` | `#1E9E63` | — |
 | `warn` | `#F0B429` | `#A8710A` | — |
@@ -81,12 +92,27 @@ site's rather than an interpretation of it.
 | `onSignal` | `#FFFFFF` | `#FFFFFF` | `.button-light { background: --blue; color: #fff }` |
 | `onData` | `#05070B` | `#FFFFFF` | — |
 
-**On `signal`'s contrast.** `--blue` sits at 3.8:1 against Blueprint's `ink` —
-above the WCAG 3:1 floor for UI components, below any text floor. That is
-deliberate and it is how the site behaves: emphasis comes from a `signalWash`
-fill plus a 2.dp indicator, never from a hairline of `signal` alone. If a control
-reads as too quiet, thicken the indicator or lift the wash. Do not brighten
-`signal`. `BossThemesRegistryTest` holds every theme to these floors.
+**`signal` is the fill; `signalText` is the glyph.** `--blue` sits at 3.8:1 against
+Blueprint's `ink` — fine for the WCAG 3:1 UI-component floor (indicators, borders,
+focus rings, fills), below the 4.5:1 text floor. A *saturated* accent cannot be
+both: dark enough to carry white `onSignal` content as a fill, and light enough to
+read as a glyph on `ink`. Amber can do both, which is why the single-`signal`
+assumption held until Blueprint.
+
+So: **`signal` on a rect, `signalText` on a `Text` or `Icon`.** In Operator and
+Clean the two are the same value; in Blueprint `signalText` is the site's own
+link-blue (`#88A9FF`, 8.1:1), and in Daylight it is a darker amber (`#95580A`,
+5.3:1) — which also retires a defect that predated Blueprint, where Daylight's
+`signal` was 2.6:1 as text on its own near-white floor.
+
+`BossThemesRegistryTest` holds every theme to both floors, on `ink`, `panel` **and**
+`raised` — the dark themes' `panel`/`raised` are lighter than `ink`, so an ink-only
+check reports better ratios than the surfaces the chrome actually paints on. It
+also fails if `signalText` aliases `signal` in a theme where `signal` does not
+already clear 4.5:1, so the token cannot quietly become decorative.
+
+If a control reads as too quiet, thicken the indicator or lift the wash — do not
+brighten `signal`.
 
 ### Surface & ink — Operator
 
@@ -112,6 +138,7 @@ for what color the app is currently painted; use `BossTheme.colors.*` for that.
 | `signal` | `#F2A93B` | Amber — live / active / primary action |
 | `signalDim` | `#C98A2E` | Pressed / variant |
 | `signalWash` | `#2A2113` | Faint amber hover fill on `ink` |
+| `signalText` | `#F2A93B` | Signal-colored **glyphs** (= `signal` here; amber clears 4.5:1) |
 | `data` | `#56C7E0` | Cyan — links / info / data |
 | `ok` | `#6FD08C` | Success / clean exit |
 | `warn` | `#F0B429` | Warning |
@@ -280,8 +307,9 @@ raw-palette names `chalk` / `mist` / `muted`.
 | Legacy color object (delegates to `BossPalette`) | `…/ui/BossColors.kt` |
 | `BossTheme()` composable (provides token locals) | `…/ui/BossTheme.kt` |
 | composeApp re-exports + MesloLGS font injection | `composeApp/.../components/misc/BossTheme.kt` |
-| Terminal theme + ANSI palette | BossTerm `…/settings/theme/BuiltinThemes.kt`, `BuiltinColorPalettes.kt` (id `boss-operator`, now the default) |
-| Terminal defaults | BossTerm `…/settings/TerminalSettings.kt` (`activeThemeId = "boss-operator"`) |
+| Terminal theme + ANSI palette | BossTerm `…/settings/theme/BuiltinThemes.kt`, `BuiltinColorPalettes.kt` (`boss-blueprint` is the default, `boss-operator` alongside it) |
+| Terminal defaults | BossTerm `…/settings/TerminalSettings.kt` (`activeThemeId = "boss-blueprint"`, and the fg/bg/selection defaults must match that theme) |
+| Terminal chrome tokens | BossTerm `…/settings/theme/UiTheme.kt` (`EXACT_TOKENS` — both BOSS identities skip derivation) |
 
 **Defaults:** the host default is `blueprint` (`BossThemes.DEFAULT_ID`) and the
 BossTerm default is `boss-blueprint` (`DEFAULT_THEME_ID` /

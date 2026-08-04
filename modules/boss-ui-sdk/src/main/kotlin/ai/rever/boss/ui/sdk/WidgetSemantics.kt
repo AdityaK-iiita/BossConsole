@@ -123,6 +123,7 @@ enum class ThemeToken(
     SIGNAL("signal"),
     SIGNAL_DIM("signalDim"),
     SIGNAL_WASH("signalWash"),
+    SIGNAL_TEXT("signalText"),
     DATA("data"),
     OK("ok"),
     WARN("warn"),

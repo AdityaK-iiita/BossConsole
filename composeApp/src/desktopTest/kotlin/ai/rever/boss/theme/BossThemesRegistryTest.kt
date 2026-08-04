@@ -3,6 +3,7 @@ package ai.rever.boss.theme
 import ai.rever.boss.plugin.ui.BossAppTheme
 import ai.rever.boss.plugin.ui.BossBlueprintColorScheme
 import ai.rever.boss.plugin.ui.BossBlueprintLightColorScheme
+import ai.rever.boss.plugin.ui.BossColorScheme
 import ai.rever.boss.plugin.ui.BossThemeController
 import ai.rever.boss.plugin.ui.BossThemes
 import androidx.compose.ui.graphics.Color
@@ -78,38 +79,82 @@ class BossThemesRegistryTest {
         assertTrue(luminance(light.colors.ink) > 0.5, "blueprint-light's floor should be light")
     }
 
+    /**
+     * Text tokens against every surface they are actually drawn on.
+     *
+     * Checked against `panel` and `raised` too, not just `ink`: in the dark
+     * themes both are *lighter* than `ink`, so every ratio is worse in practice
+     * than an ink-only check reports, and chrome paints on them far more often
+     * than on the bare floor.
+     */
     @Test
-    fun `every theme clears the text contrast floors`() {
+    fun `every theme clears the text contrast floors on every surface`() {
         BossThemes.all.forEach { theme ->
             val c = theme.colors
-            assertFloor(theme, "textPrimary on ink", c.textPrimary, c.ink, 7.0)
-            assertFloor(theme, "textPrimary on panel", c.textPrimary, c.panel, 7.0)
-            assertFloor(theme, "textSecondary on ink", c.textSecondary, c.ink, 4.0)
+            surfaces(c).forEach { (name, bg) ->
+                assertFloor(theme, "textPrimary on $name", c.textPrimary, bg, 7.0)
+                assertFloor(theme, "textSecondary on $name", c.textSecondary, bg, 4.0)
+                // The whole reason `signalText` exists: signal-colored glyphs are
+                // held to the real text floor on every surface, while `signal`
+                // itself is only held to the 3:1 component floor below.
+                assertFloor(theme, "signalText on $name", c.signalText, bg, 4.5)
+            }
             assertFloor(theme, "onSignal on signal", c.onSignal, c.signal, 4.5)
             assertFloor(theme, "onData on data", c.onData, c.data, 4.5)
         }
     }
 
     /**
-     * Non-text tokens against the 3:1 WCAG floor for UI components.
+     * Non-text tokens against the 3:1 WCAG floor for UI components, on every
+     * surface they are drawn on.
      *
      * `signal` is held to 3.0 and not 4.5 on purpose: Blueprint's `--blue` sits
      * at ~3.8:1 on ink, exactly as it does on bossconsole.ai, where emphasis
      * comes from a `signalWash` fill plus a 2.dp indicator rather than from a
      * hairline of `signal` alone. Do not brighten `signal` to buy headroom —
-     * thicken the indicator or lift the wash.
+     * thicken the indicator, lift the wash, or (for a glyph) use `signalText`.
      */
     @Test
-    fun `every theme clears the UI-component contrast floors`() {
+    fun `every theme clears the UI-component contrast floors on every surface`() {
         BossThemes.all.forEach { theme ->
             val c = theme.colors
-            assertFloor(theme, "data on ink", c.data, c.ink, 3.0)
-            assertFloor(theme, "alert on ink", c.alert, c.ink, 3.0)
-            if (theme.id !in SIGNAL_CONTRAST_DEBT) {
-                assertFloor(theme, "signal on ink", c.signal, c.ink, 3.0)
+            surfaces(c).forEach { (name, bg) ->
+                assertFloor(theme, "data on $name", c.data, bg, 3.0)
+                assertFloor(theme, "alert on $name", c.alert, bg, 3.0)
+                assertFloor(theme, "ok on $name", c.ok, bg, 3.0)
+                assertFloor(theme, "warn on $name", c.warn, bg, 3.0)
+                if (theme.id !in SIGNAL_CONTRAST_DEBT) {
+                    assertFloor(theme, "signal on $name", c.signal, bg, 3.0)
+                }
             }
         }
     }
+
+    /**
+     * `signalText` may only equal `signal` in a theme where `signal` already
+     * clears the text floor — otherwise the token is decorative and the sweep
+     * that moved glyphs onto it bought nothing.
+     */
+    @Test
+    fun `signalText only aliases signal where signal is already legible text`() {
+        BossThemes.all.forEach { theme ->
+            val c = theme.colors
+            if (c.signalText == c.signal) {
+                surfaces(c).forEach { (name, bg) ->
+                    assertTrue(
+                        contrast(c.signal, bg) >= 4.5,
+                        "${theme.id}: signalText aliases signal, but signal is only " +
+                            "${format(contrast(c.signal, bg))}:1 on $name — give it its own value",
+                    )
+                }
+            }
+        }
+    }
+
+    // Return type inferred so this fits on one line: ktlint requires the body
+    // expression on the signature line, detekt caps that line at 120 chars, and
+    // spelling out List<Pair<String, Color>> cannot satisfy both.
+    private fun surfaces(c: BossColorScheme) = listOf("ink" to c.ink, "panel" to c.panel, "raised" to c.raised)
 
     /**
      * Pins the one pre-existing violation of the floor above so it cannot spread.

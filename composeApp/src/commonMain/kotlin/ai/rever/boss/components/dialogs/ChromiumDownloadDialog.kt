@@ -144,7 +144,7 @@ private fun DownloadSurface(
                         onClick = onRetry,
                         colors =
                             ButtonDefaults.textButtonColors(
-                                contentColor = BossTheme.colors.signal,
+                                contentColor = BossTheme.colors.signalText,
                             ),
                     ) {
                         Text("Retry", fontWeight = FontWeight.Medium)

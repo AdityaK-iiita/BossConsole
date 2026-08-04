@@ -86,7 +86,7 @@ fun BookmarkDialog(
                     Icon(
                         imageVector = Icons.Outlined.Star,
                         contentDescription = "Bookmark",
-                        tint = BossTheme.colors.signal,
+                        tint = BossTheme.colors.signalText,
                         modifier = Modifier.size(24.dp),
                     )
                     Spacer(modifier = Modifier.width(12.dp))

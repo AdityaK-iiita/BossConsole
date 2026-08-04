@@ -172,8 +172,11 @@ message WidgetModifier {
   // Hex color ("#RRGGBB" / "#AARRGGBB") or a design-system theme token resolved
   // against the host's ACTIVE theme, so the widget re-skins with the app:
   // ink, panel, raised, line, lineStrong, textPrimary, textSecondary,
-  // textMuted, signal, signalDim, signalWash, data, ok, warn, alert, onSignal,
-  // onData. Token names are matched case-insensitively, ignoring '_' and '-'.
+  // textMuted, signal, signalDim, signalWash, signalText, data, ok, warn,
+  // alert, onSignal, onData. Note this field is a BACKGROUND, so `signal` is
+  // the one you want for an accent fill; `signalText` is the text-contrast
+  // variant and only makes sense as a foreground.
+  // Token names are matched case-insensitively, ignoring '_' and '-'.
   // Empty, or anything that is neither a token nor valid hex: no background.
   string background_color = 7;
 

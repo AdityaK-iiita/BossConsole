@@ -43,7 +43,7 @@ fun DropdownSelector(
                     textColor = TextPrimary,
                     focusedBorderColor = BossTheme.colors.signal,
                     unfocusedBorderColor = BossTheme.colors.line,
-                    focusedLabelColor = BossTheme.colors.signal,
+                    focusedLabelColor = BossTheme.colors.signalText,
                     unfocusedLabelColor = TextMuted,
                     trailingIconColor = TextMuted,
                 ),

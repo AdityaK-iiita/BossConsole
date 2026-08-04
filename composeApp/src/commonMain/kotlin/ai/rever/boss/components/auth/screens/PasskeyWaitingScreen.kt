@@ -84,7 +84,7 @@ fun PasskeyWaitingScreen(
                     text = email,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Medium,
-                    color = BossTheme.colors.signal,
+                    color = BossTheme.colors.signalText,
                     textAlign = TextAlign.Center,
                 )
 
@@ -133,7 +133,7 @@ fun PasskeyWaitingScreen(
                                 Icon(
                                     imageVector = Icons.Default.Fingerprint,
                                     contentDescription = "Passkey",
-                                    tint = BossTheme.colors.signal,
+                                    tint = BossTheme.colors.signalText,
                                     modifier = Modifier.size(48.dp),
                                 )
                             }
@@ -238,7 +238,7 @@ fun PasskeyWaitingScreen(
                     Text(
                         text = "Back to Sign In",
                         fontSize = 14.sp,
-                        color = BossTheme.colors.signal,
+                        color = BossTheme.colors.signalText,
                         textDecoration = TextDecoration.Underline,
                     )
                 }

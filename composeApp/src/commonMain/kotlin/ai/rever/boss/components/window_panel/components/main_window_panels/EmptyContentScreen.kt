@@ -132,7 +132,7 @@ fun EmptyContent(
                 Icon(
                     imageVector = Icons.Outlined.Dashboard,
                     contentDescription = "BOSS",
-                    tint = BossTheme.colors.signal,
+                    tint = BossTheme.colors.signalText,
                     modifier = Modifier.size(80.dp),
                 )
             }
@@ -151,7 +151,12 @@ fun EmptyContent(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                Text("Quick Tips", color = BossTheme.colors.signal, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Text(
+                    "Quick Tips",
+                    color = BossTheme.colors.signalText,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     tips.forEachIndexed { index, tip ->
                         Card(

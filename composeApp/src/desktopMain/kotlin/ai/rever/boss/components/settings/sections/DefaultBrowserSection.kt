@@ -217,7 +217,7 @@ fun DefaultBrowserSection() {
                             enabled = !isLoading && isDefault != true,
                             colors =
                                 ButtonDefaults.textButtonColors(
-                                    contentColor = BossTheme.colors.signal,
+                                    contentColor = BossTheme.colors.signalText,
                                     disabledContentColor = BossTheme.colors.textSecondary,
                                 ),
                         ) {
@@ -270,7 +270,7 @@ fun DefaultBrowserSection() {
                 Icon(
                     Icons.Outlined.Info,
                     contentDescription = "Info",
-                    tint = BossTheme.colors.signal,
+                    tint = BossTheme.colors.signalText,
                     modifier = Modifier.size(16.dp),
                 )
                 Spacer(modifier = Modifier.width(8.dp))
@@ -318,7 +318,7 @@ fun DefaultBrowserSection() {
             },
             confirmButton = {
                 TextButton(onClick = { showSuccessDialog = false }) {
-                    Text("OK", color = BossTheme.colors.signal, fontSize = 13.sp)
+                    Text("OK", color = BossTheme.colors.signalText, fontSize = 13.sp)
                 }
             },
             backgroundColor = BossTheme.colors.panel,
@@ -390,7 +390,7 @@ fun DefaultBrowserSection() {
             },
             confirmButton = {
                 TextButton(onClick = { showInstructionsDialog = false }) {
-                    Text("Got it", color = BossTheme.colors.signal, fontSize = 13.sp)
+                    Text("Got it", color = BossTheme.colors.signalText, fontSize = 13.sp)
                 }
             },
             backgroundColor = BossTheme.colors.panel,

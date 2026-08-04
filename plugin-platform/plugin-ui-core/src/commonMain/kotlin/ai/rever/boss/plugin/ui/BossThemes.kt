@@ -41,7 +41,7 @@ data class BossAppTheme(
  * (`.console-frame` / `.console-topbar` / `.console-sidebar` / `.agent-strip`),
  * so the chrome ladder is the site's, not an interpretation of it.
  *
- * On [signal]: `--blue` sits at 3.7:1 against [ink] — above the WCAG 3:1 floor
+ * On [signal]: `--blue` sits at 3.8:1 against [ink] — above the WCAG 3:1 floor
  * for UI components, below a text floor. That is deliberate and it is how the
  * site behaves: emphasis comes from a [signalWash] fill plus a 2.dp indicator,
  * never from a hairline of `signal` alone. Do not "fix" it by brightening
@@ -60,6 +60,9 @@ val BossBlueprintColorScheme =
         signal = Color(0xFF0F5BFF), // --blue
         signalDim = Color(0xFF0A45C4), // pressed / variant
         signalWash = Color(0xFF0A1A3C), // .console-sidebar .selected (#0f5bff2e over panel)
+        // Coincides with `data` here on purpose: the site never sets --blue as
+        // text on ink either, it reaches for this same light-blue family.
+        signalText = Color(0xFF88A9FF), // 8.1:1 min vs --blue's 3.5:1
         data = Color(0xFF88A9FF), // .audit-line svg #8af / .approval > span
         ok = Color(0xFF2FD98A),
         warn = Color(0xFFF0B429),
@@ -89,6 +92,7 @@ val BossBlueprintLightColorScheme =
         signal = Color(0xFF0F5BFF), // --blue (.subpage .eyebrow)
         signalDim = Color(0xFF0A45C4),
         signalWash = Color(0xFFDCE7FF), // --blue-soft
+        signalText = Color(0xFF0F5BFF), // --blue clears 4.9:1 on paper, no separate value needed
         data = Color(0xFF0C3FBF), // deeper than signal so links stay distinct from the action blue
         ok = Color(0xFF1E9E63),
         warn = Color(0xFFA8710A),
@@ -111,9 +115,13 @@ val BossLightColorScheme =
         signal = Color(0xFFD9871A),
         signalDim = Color(0xFFB36F12),
         signalWash = Color(0xFFFBEFD8),
+        signalText = Color(0xFF95580A), // 5.3:1; the amber signal is 2.6:1 on this floor
         data = Color(0xFF1E7FA8),
         ok = Color(0xFF2F9E54),
-        warn = Color(0xFFC5860C),
+        // Darkened from #C5860C, which was 2.88:1 on this theme's own near-white
+        // floor — under the 3:1 UI-component floor. Amber on white is a hard
+        // combination; this is the smallest change that clears it (3.27:1).
+        warn = Color(0xFFB87D0A),
         alert = Color(0xFFD2453B),
         onSignal = Color(0xFF2A1B05),
         onData = Color(0xFFFFFFFF),
@@ -133,6 +141,7 @@ val BossCleanColorScheme =
         signal = Color(0xFF6E94C4),
         signalDim = Color(0xFF5A7DAB),
         signalWash = Color(0xFF1B2430),
+        signalText = Color(0xFF6E94C4), // = signal; clears 4.7:1
         data = Color(0xFF58B0A8),
         ok = Color(0xFF6FB58A),
         warn = Color(0xFFD8B66A),
@@ -225,12 +234,15 @@ object BossThemes {
     /** All selectable themes, in display order. */
     val all: List<BossAppTheme> = listOf(BLUEPRINT, BLUEPRINT_LIGHT, OPERATOR, DAYLIGHT, CLEAN)
 
+    /** The theme [DEFAULT_ID] names — resolved, never restated. */
+    private val default: BossAppTheme get() = all.first { it.id == DEFAULT_ID }
+
     /**
-     * Resolve a persisted id. The fallback must stay pinned to [DEFAULT_ID]'s
-     * theme — if it drifts, an unknown id resolves to one theme while a fresh
-     * install gets another, and [BossThemeController] disagrees with itself.
+     * Resolve a persisted id, falling back to [DEFAULT_ID]'s theme. Derived
+     * rather than hardcoded: naming a theme here is exactly the drift the old
+     * KDoc warned about, and a comment is a weaker guarantee than an expression.
      */
-    fun byId(id: String?): BossAppTheme = all.find { it.id == id } ?: BLUEPRINT
+    fun byId(id: String?): BossAppTheme = all.find { it.id == id } ?: default
 }
 
 /**
