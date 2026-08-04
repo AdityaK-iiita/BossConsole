@@ -256,6 +256,11 @@ class KernelBootstrap(
             Thread({
                 try {
                     logger.info("JVM shutdown hook: cleaning up child processes...")
+                    // Stop supervision before reaping. Each destroy below is indistinguishable
+                    // from a crash to the monitor, whose failure handler respawns - so reaping
+                    // while it still watches can hand an exiting host a fresh generation of
+                    // children to strand.
+                    runCatching { processMonitor?.stopAll() }
                     processRegistry?.getAllProcesses()?.forEach { process ->
                         try {
                             process.destroy()

@@ -7,6 +7,7 @@ import ai.rever.boss.plugin.api.PluginManifest
 import ai.rever.boss.plugin.loader.PluginManifestReader
 import ai.rever.boss.process.ManagedProcess
 import ai.rever.boss.process.ProcessConfig
+import ai.rever.boss.process.ProcessRegistry
 import ai.rever.boss.process.ProcessSpawner
 import ai.rever.boss.process.ProcessType
 import ai.rever.boss.process.RestartPolicy
@@ -151,6 +152,17 @@ class OutOfProcessPluginSpawnerImpl(
                 val managedProcess = processSpawner.spawn(config)
                 managedProcesses[pluginId] = managedProcess
 
+                // Publish the child to the kernel registry. That registry is what the JVM
+                // shutdown hook in KernelBootstrap reaps on exit, and until this call existed
+                // no plugin child was ever in it: the hook iterated an empty list, killed
+                // nothing, and every host exit - including a clean Cmd+Q - stranded the whole
+                // cohort as PPID-1 orphans that then outlived the host indefinitely.
+                //
+                // The child's gRPC registration only reaches the registry's *manifest* map
+                // (see KernelServiceImpl.onProcessRegistered), which is why waitForReady below
+                // can see it while getAllProcesses() could not.
+                kernelRegistry()?.register(processIdOf(pluginId), managedProcess)
+
                 // Wait for the child process to register with the kernel
                 waitForReady(pluginId, managedProcess, config.startupTimeoutMs)
 
@@ -182,14 +194,33 @@ class OutOfProcessPluginSpawnerImpl(
                     manifest.pluginId,
                     e,
                 )
+                // A waitForReady timeout leaves a child that started but never registered -
+                // still alive, and no longer referenced by anything that would kill it. Reap
+                // it here rather than let a failed spawn become another orphan.
+                cleanupFailedSpawn(manifest.pluginId)
                 Result.failure(e)
             }
         }
     }
 
+    /**
+     * Tear down everything [spawn] may have created for a plugin whose startup failed.
+     */
+    private fun cleanupFailedSpawn(pluginId: String) {
+        kernelRegistry()?.unregister(processIdOf(pluginId))
+        runCatching { stateBridges.remove(pluginId)?.dispose() }
+        runCatching { pluginChannels.remove(pluginId)?.shutdownNow() }
+        runCatching { managedProcesses.remove(pluginId)?.destroyForcibly() }
+    }
+
     override suspend fun terminate(pluginId: String): Result<Unit> =
         withContext(Dispatchers.IO) {
             try {
+                // Drop the registry entry before killing the child. This is a deliberate
+                // termination, so leaving the entry in place would hand a dead handle to
+                // anything that iterates the registry afterwards.
+                kernelRegistry()?.unregister(processIdOf(pluginId))
+
                 // Dispose state bridge
                 stateBridges.remove(pluginId)?.dispose()
 
@@ -280,8 +311,8 @@ class OutOfProcessPluginSpawnerImpl(
         timeoutMs: Long,
     ) {
         withTimeout(timeoutMs) {
-            val processId = "plugin-$pluginId"
-            val registry = KernelBootstrap.instance?.processRegistry
+            val processId = processIdOf(pluginId)
+            val registry = kernelRegistry()
 
             while (true) {
                 if (!process.isAlive) {
@@ -325,3 +356,17 @@ class OutOfProcessPluginSpawnerImpl(
             ?.absolutePath
     }
 }
+
+/**
+ * Kernel-side process id for a plugin. Must stay in step with the `processId` that
+ * [OutOfProcessPluginSpawnerImpl.spawn] puts in its [ProcessConfig] - the registry is keyed by it.
+ */
+private fun processIdOf(pluginId: String): String = "plugin-$pluginId"
+
+/**
+ * The kernel's process registry, or null when the kernel is not up.
+ *
+ * Resolved per call rather than cached: the spawner is constructed while KERNEL mode is still
+ * bootstrapping, so a value captured at construction time would pin null forever.
+ */
+private fun kernelRegistry(): ProcessRegistry? = KernelBootstrap.instance?.processRegistry
