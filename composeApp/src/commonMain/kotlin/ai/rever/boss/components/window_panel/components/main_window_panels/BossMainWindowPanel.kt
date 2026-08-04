@@ -118,6 +118,17 @@ import kotlin.time.Clock
 private val bossMainWindowPanelLogger = BossLogger.forComponent("BossMainWindowPanel")
 
 /**
+ * Width of the ring a panel reserves for its active-panel border.
+ *
+ * Named once because it is used twice and the two uses must agree exactly: the border is
+ * drawn at this width and the content is inset by the same amount, so that a child which
+ * Compose cannot draw over — a foreign native surface such as the HARDWARE_ACCELERATED
+ * browser — has nowhere to cover it from. A padding smaller than the border leaves a
+ * sliver the browser paints over; larger leaves a visible gap inside the border.
+ */
+private val ACTIVE_PANEL_BORDER = 2.dp
+
+/**
  * Wrapper for BossTabButton that loads and displays favicons from cache
  * Uses shared rememberFaviconLoader composable for DRY and error handling
  */
@@ -859,13 +870,27 @@ fun BossTabsComponent.BossMainPanel(
                 }
                 // Removed .clickable() - it was stealing focus from child components (terminals)
                 // Panel activation is handled by .onFocusChanged() above and .pointerInput() above
-                .then(
-                    if (isActivePanel) {
-                        Modifier.border(2.dp, MaterialTheme.colors.primary.copy(alpha = 0.5f))
-                    } else {
-                        Modifier
-                    },
-                ),
+                //
+                // The active-panel border RESERVES its own ring rather than being painted over the
+                // content, and the ring exists whether or not this panel is active.
+                //
+                // Both halves matter. Painting over content is fine for Compose-rendered children
+                // (a terminal, an editor) because Compose draws the border on top of them. It is
+                // NOT fine for a child that is a foreign native surface: under
+                // HARDWARE_ACCELERATED the browser is Chromium's own native window composited
+                // ABOVE the Compose scene, so Compose cannot draw over it or clip it, and the page
+                // simply covered this border along every edge it touched. Reported from a live
+                // macOS build as the selected panel's border being cut off across the browser.
+                // Reserving the ring is the fix that works for any such child, present or future,
+                // rather than teaching each one to inset itself by a number it should not know.
+                //
+                // Unconditional because a ring that appeared only when active would resize the
+                // content on every activation — and for a browser that means a reflow of the page
+                // each time the user clicks into the panel.
+                .border(
+                    ACTIVE_PANEL_BORDER,
+                    if (isActivePanel) MaterialTheme.colors.primary.copy(alpha = 0.5f) else Color.Transparent,
+                ).padding(ACTIVE_PANEL_BORDER),
     ) {
         BossMainTabBar(
             splitViewState = splitViewState,
