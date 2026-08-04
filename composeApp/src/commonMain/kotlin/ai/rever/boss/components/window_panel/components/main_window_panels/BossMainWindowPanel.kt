@@ -887,6 +887,15 @@ fun BossTabsComponent.BossMainPanel(
                 // Unconditional because a ring that appeared only when active would resize the
                 // content on every activation — and for a browser that means a reflow of the page
                 // each time the user clicks into the panel.
+                //
+                // The ring is FILLED with the panel surface, and that is not optional. Reserving
+                // space without painting it leaves the parent showing through: the split-view Box
+                // behind this panel paints no background at all, so the bare ring rendered as a
+                // white outline around every panel regardless of theme. Filling it with
+                // BossTheme.colors.panel — the same token the tab bar above uses — makes an
+                // inactive panel look exactly as it did before the ring existed, and gives the
+                // active border something themed to sit on.
+                .background(BossTheme.colors.panel)
                 .border(
                     ACTIVE_PANEL_BORDER,
                     if (isActivePanel) MaterialTheme.colors.primary.copy(alpha = 0.5f) else Color.Transparent,
