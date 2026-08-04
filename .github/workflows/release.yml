@@ -1605,23 +1605,17 @@ jobs:
             PRERELEASE_WARNING=""
           fi
 
+          # The table listed bare filenames with no links at all, so a reader
+          # had to scroll to the assets list and match names by eye. Generate
+          # it instead, from the same script release-notes.yml uses, so the
+          # placeholder body and the curated notes cannot drift apart.
+          DOWNLOAD_TABLE=$(bash scripts/release-download-table.sh "$VERSION" "$GITHUB_REPOSITORY")
+
           cat > release-notes.md << EOF
           # $RELEASE_TITLE
           $PRERELEASE_WARNING
 
-          ## 📦 Downloads
-
-          | Platform | Architecture | Package |
-          |----------|--------------|---------|
-          | **macOS** | Universal (Apple Silicon + Intel via Rosetta) | \`BOSS-${VERSION}-Universal.dmg\` |
-          | **Windows** | x64 | \`BOSS-${VERSION}.msi\` |
-          | **Windows** | ARM64 | \`BOSS-${VERSION}-arm64.msi\` |
-          | **Linux DEB** | AMD64 (x86_64) | \`BOSS-${VERSION}-amd64.deb\` |
-          | **Linux DEB** | ARM64 (aarch64) | \`BOSS-${VERSION}-arm64.deb\` |
-          | **Linux RPM** | AMD64 (x86_64) | \`BOSS-${VERSION}-amd64.rpm\` |
-          | **Linux RPM** | ARM64 (aarch64) | \`BOSS-${VERSION}-arm64.rpm\` |
-          | **Linux JAR** | AMD64 (x86_64) | \`BOSS-${VERSION}-amd64.jar\` |
-          | **Linux JAR** | ARM64 (aarch64) | \`BOSS-${VERSION}-arm64.jar\` |
+          ${DOWNLOAD_TABLE}
 
           ## ✨ What's New
 

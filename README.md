@@ -101,7 +101,9 @@ Absolute scores were depressed by heavy co-tenancy — **800–1300% ambient CPU
 | **Linux** | AMD64 | [DEB](https://api.risaboss.com/functions/v1/latest-release?app=boss&download=deb&arch=amd64) \| [RPM](https://api.risaboss.com/functions/v1/latest-release?app=boss&download=rpm&arch=amd64) \| [JAR](https://api.risaboss.com/functions/v1/latest-release?app=boss&download=jar&arch=amd64) |
 | **Linux** | ARM64 | [DEB](https://api.risaboss.com/functions/v1/latest-release?app=boss&download=deb&arch=arm64) \| [RPM](https://api.risaboss.com/functions/v1/latest-release?app=boss&download=rpm&arch=arm64) \| [JAR](https://api.risaboss.com/functions/v1/latest-release?app=boss&download=jar&arch=arm64) |
 
-Download links always fetch the newest release directly (via the [`latest-release`](supabase/functions/latest-release/app.ts) edge function; the saved file keeps its versioned name). Release metadata as JSON — version, assets, sha256 checksums — is at [`?app=boss`](https://api.risaboss.com/functions/v1/latest-release?app=boss). To browse all versions, see [BossConsole-Releases](https://github.com/risa-labs-inc/BossConsole-Releases/releases).
+Download links always fetch the newest release directly, via the [`latest-release`](supabase/functions/latest-release/app.ts) edge function — no API key, no rate limit. Release metadata as JSON — version, assets, sha256 checksums — is at [`?app=boss`](https://api.risaboss.com/functions/v1/latest-release?app=boss). Prereleases are excluded by default; add `&prerelease=true` to consider them, or `&channel=beta` (`alpha`, `rc`) to track one channel. To browse or pin a specific version, see [BossConsole-Releases](https://github.com/risa-labs-inc/BossConsole-Releases/releases).
+
+A browser resolves the redirect and saves the versioned filename. Command-line tools do not: there is no `Content-Disposition` header, so `curl -O` would name the file after the URL's last path segment — `latest-release`. Pass a name explicitly, `curl -fL -o boss.dmg "<link>"`.
 
 ### Quick Install
 

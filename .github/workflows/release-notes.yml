@@ -106,7 +106,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          claude_args: "--allowedTools 'Bash(git:*)' 'Bash(cat:*)' 'Bash(ls:*)' 'Read' 'Write' 'Edit' 'Glob' 'Grep'"
+          claude_args: "--allowedTools 'Bash(git:*)' 'Bash(cat:*)' 'Bash(ls:*)' 'Bash(bash scripts/release-download-table.sh:*)' 'Read' 'Write' 'Edit' 'Glob' 'Grep'"
           prompt: |
             Generate release notes for BOSS version ${{ steps.release-info.outputs.version }}.
 
@@ -123,7 +123,10 @@ jobs:
                - Summary (1-2 sentences)
                - Highlights (2-4 key changes)
                - Changes grouped by: Features, Bug Fixes, Improvements, Dependencies
-               - Download table with platform links to BossConsole-Releases
+               - Downloads: run `bash scripts/release-download-table.sh ${{ steps.release-info.outputs.version }}`
+                 and paste its output verbatim. Do not hand-write this table — it is
+                 generated so that this file and the release.yml body stay identical,
+                 and so every platform and architecture actually gets a working link.
 
             3. Update `docs/release-notes/README.md` index between RELEASE_INDEX markers
 
