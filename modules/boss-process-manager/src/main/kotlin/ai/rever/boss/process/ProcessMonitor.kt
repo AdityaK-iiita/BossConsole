@@ -60,12 +60,17 @@ class ProcessMonitor(
     /**
      * Start the global monitor that watches for new/removed processes.
      *
-     * [ProcessType.PLUGIN] is deliberately left alone. Plugin children get their health,
-     * restart budget and in-process fallback from `PluginProcessMonitor` on the host side,
-     * and attaching this monitor too would make every plugin doubly supervised: a plugin the
-     * operator disables exits on purpose, which reads here as a crash and comes back through
-     * the kernel's respawn path. Plugins are still registered - the registry is what the
-     * shutdown hook reaps on exit - they are just not health-supervised from here.
+     * [ProcessType.PLUGIN] is not health-supervised. Plugin children get their health, restart
+     * budget and in-process fallback from `PluginProcessMonitor` on the host side, and attaching
+     * this monitor too would make every plugin doubly supervised: a plugin the operator disables
+     * exits on purpose, which reads here as a crash and comes back through the kernel's respawn
+     * path. Plugins are still registered, because the registry is what the shutdown hook reaps.
+     *
+     * They are instead *reaped* from the registry once dead. Only a deliberate terminate
+     * unregisters a plugin, so a plugin that died on its own - crashed, or out of restart budget
+     * and left at FAILED - would otherwise sit in the registry for the rest of the session, with
+     * [ProcessRegistry.getAllProcesses] handing out a dead handle and processCount over-reporting
+     * it as live.
      */
     fun startGlobalMonitor(checkIntervalMs: Long = 2_000) {
         globalMonitorJob =
@@ -73,7 +78,10 @@ class ProcessMonitor(
                 while (isActive) {
                     // Check all registered processes
                     registry.getAllProcesses().forEach { process ->
-                        if (process.config.processType == ProcessType.PLUGIN) return@forEach
+                        if (process.config.processType == ProcessType.PLUGIN) {
+                            if (!process.isAlive) registry.unregister(process.config.processId)
+                            return@forEach
+                        }
                         if (!monitorJobs.containsKey(process.config.processId) ||
                             monitorJobs[process.config.processId]?.isActive != true
                         ) {

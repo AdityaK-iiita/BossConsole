@@ -149,19 +149,17 @@ class OutOfProcessPluginSpawnerImpl(
                     runtimeClasspath,
                 )
 
+                // spawn() enters the child in the kernel registry, which is what the JVM shutdown
+                // hook in KernelBootstrap reaps on exit. This class used to keep its handles only
+                // in managedProcesses below, so the hook iterated a list that never contained a
+                // plugin, killed nothing, and every host exit - a clean Cmd+Q included - stranded
+                // the whole cohort as PPID-1 orphans that outlived the host indefinitely.
+                //
+                // The child's own gRPC registration reaches only the registry's *manifest* map
+                // (see KernelServiceImpl.onProcessRegistered), which is why waitForReady below
+                // could see a child that getAllProcesses() could not.
                 val managedProcess = processSpawner.spawn(config)
                 managedProcesses[pluginId] = managedProcess
-
-                // Publish the child to the kernel registry. That registry is what the JVM
-                // shutdown hook in KernelBootstrap reaps on exit, and until this call existed
-                // no plugin child was ever in it: the hook iterated an empty list, killed
-                // nothing, and every host exit - including a clean Cmd+Q - stranded the whole
-                // cohort as PPID-1 orphans that then outlived the host indefinitely.
-                //
-                // The child's gRPC registration only reaches the registry's *manifest* map
-                // (see KernelServiceImpl.onProcessRegistered), which is why waitForReady below
-                // can see it while getAllProcesses() could not.
-                kernelRegistry()?.register(processIdOf(pluginId), managedProcess)
 
                 // Wait for the child process to register with the kernel
                 waitForReady(pluginId, managedProcess, config.startupTimeoutMs)

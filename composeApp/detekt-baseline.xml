@@ -305,7 +305,7 @@
     <ID>LongMethod:GlobalSearchDialog.kt$@Composable private fun SearchDialogHeader( fileCount: Int, isIndexing: Boolean, onClose: () -&gt; Unit, )</ID>
     <ID>LongMethod:GlobalSearchDialog.kt$@Composable private fun SearchInputField( query: String, onQueryChange: (String) -&gt; Unit, focusRequester: FocusRequester, isSearching: Boolean, )</ID>
     <ID>LongMethod:KernelBootstrap.kt$KernelBootstrap$fun initialize()</ID>
-    <ID>LongMethod:KernelBootstrap.kt$KernelBootstrap$private fun spawnServices( registry: ProcessRegistry, spawner: ProcessSpawner, )</ID>
+    <ID>LongMethod:KernelBootstrap.kt$KernelBootstrap$private fun spawnServices(spawner: ProcessSpawner)</ID>
     <ID>LongMethod:KeyCaptureDialog.kt$@Composable fun KeyCaptureDialog( actionId: String, actionDescription: String, context: ShortcutContext, category: String, currentBinding: KeyBinding?, onKeyCaptured: (KeyBinding) -&gt; Unit, onDismiss: () -&gt; Unit, )</ID>
     <ID>LongMethod:KeymapData.kt$fun getKeyboardShortcuts(): List&lt;KeyboardShortcut&gt;</ID>
     <ID>LongMethod:KeymapImportExport.kt$@Composable fun KeymapImportExport( onImport: suspend (String) -&gt; Boolean, modifier: Modifier = Modifier, )</ID>

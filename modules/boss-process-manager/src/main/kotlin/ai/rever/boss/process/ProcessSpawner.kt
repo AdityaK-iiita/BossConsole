@@ -14,6 +14,11 @@ import java.io.File
  * - BOSS_PROCESS_TYPE: Process type (SERVICE, APP, PLUGIN)
  *
  * Process stdout/stderr are redirected to log files under $BOSS_DATA_DIR/logs/{processId}/
+ *
+ * Everything spawned here is entered into [registry], because the registry is what the kernel's
+ * shutdown hook reaps on exit. Registration used to be each caller's job, and the caller that
+ * forgot - the out-of-process plugin spawner - leaked a full cohort of child JVMs on every host
+ * exit for months. Owning it here makes that class of bug impossible for every call site.
  */
 class ProcessSpawner(
     private val kernelIpcAddress: String,
@@ -23,14 +28,19 @@ class ProcessSpawner(
                 ?: "${System.getProperty("user.home")}/.boss",
             "logs",
         ),
+    private val registry: ProcessRegistry? = null,
 ) {
     private val logger = LoggerFactory.getLogger(ProcessSpawner::class.java)
 
     /**
-     * Spawn a new child process from the given configuration.
+     * Spawn a new child process from the given configuration and register it.
      *
      * If a native image path is specified and the binary exists, it runs natively.
      * Otherwise falls back to JVM mode.
+     *
+     * The returned process is already in [registry], so callers must not register it again.
+     * Removing it is still the caller's job: only the caller knows the difference between a
+     * deliberate termination and a crash.
      */
     fun spawn(config: ProcessConfig): ManagedProcess {
         val processLogDir = File(logDir, config.processId).also { it.mkdirs() }
@@ -82,6 +92,7 @@ class ProcessSpawner(
             ipcAddress = ipcAddress,
         ).also {
             it.ipcClient = BossIpcClient(ipcAddress)
+            registry?.register(config.processId, it)
         }
     }
 

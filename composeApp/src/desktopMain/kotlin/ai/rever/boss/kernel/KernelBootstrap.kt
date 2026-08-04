@@ -15,7 +15,6 @@ import ai.rever.boss.ipc.services.StateServiceImpl
 import ai.rever.boss.kernel.services.*
 import ai.rever.boss.kernel.ui.RemoteUiSurfaceRegistry
 import ai.rever.boss.plugin.api.*
-import ai.rever.boss.process.ManagedProcess
 import ai.rever.boss.process.ProcessConfig
 import ai.rever.boss.process.ProcessFailure
 import ai.rever.boss.process.ProcessMode
@@ -246,7 +245,8 @@ class KernelBootstrap(
         // Create infrastructure
         kernelAddress = IpcAddressResolver.kernelAddress()
         val registry = ProcessRegistry()
-        val spawner = ProcessSpawner(kernelAddress!!)
+        // The spawner registers everything it spawns, so no call site can forget to.
+        val spawner = ProcessSpawner(kernelAddress!!, registry = registry)
         processRegistry = registry
         processSpawner = spawner
         processMonitor = ProcessMonitor(registry, scope)
@@ -342,7 +342,7 @@ class KernelBootstrap(
         }
 
         // Spawn child services (M7 fix — structure in place)
-        spawnServices(registry, spawner)
+        spawnServices(spawner)
 
         // Store singleton for DefaultPlugin to access via reflection
         instance = this
@@ -497,8 +497,9 @@ class KernelBootstrap(
             if (jvmArgsOverride != null) ", tuned: $jvmArgsOverride" else "",
         )
         try {
-            val newProcess = spawner.spawn(config)
-            registry.register(processId, newProcess, registry.getManifest(processId))
+            // spawn() registers the replacement itself. The manifest survives because a respawn
+            // never unregisters, so it is still keyed under this processId.
+            spawner.spawn(config)
             registry.incrementRestartCount(processId)
         } catch (e: Exception) {
             logger.error("Respawn failed for {}: {}", processId, e.message)
@@ -512,10 +513,7 @@ class KernelBootstrap(
      * them under the app's resources; in development, build them with:
      *   ./gradlew :boss-orchestrator:fatJar :boss-service-auth:fatJar
      */
-    private fun spawnServices(
-        registry: ProcessRegistry,
-        spawner: ProcessSpawner,
-    ) {
+    private fun spawnServices(spawner: ProcessSpawner) {
         val bossDataDir =
             System.getenv("BOSS_DATA_DIR")
                 ?: try {
@@ -544,7 +542,6 @@ class KernelBootstrap(
 
         spawnIfJarExists(
             spawner,
-            registry,
             ProcessConfig(
                 processId = ORCHESTRATOR_PROCESS_ID,
                 processType = ProcessType.ORCHESTRATOR,
@@ -560,7 +557,6 @@ class KernelBootstrap(
 
         spawnIfJarExists(
             spawner,
-            registry,
             ProcessConfig(
                 processId = "boss-service-auth",
                 processType = ProcessType.SERVICE,
@@ -577,7 +573,6 @@ class KernelBootstrap(
         val masteryOrchestratorJar = resolveServiceJar(bossDataDir, "boss-mastery-orchestrator-all.jar")
         spawnIfJarExists(
             spawner,
-            registry,
             ProcessConfig(
                 processId = "boss-mastery-orchestrator",
                 processType = ProcessType.SERVICE,
@@ -594,7 +589,6 @@ class KernelBootstrap(
         val workspaceJar = resolveServiceJar(bossDataDir, "boss-service-workspace-all.jar")
         spawnIfJarExists(
             spawner,
-            registry,
             ProcessConfig(
                 processId = "boss-service-workspace",
                 processType = ProcessType.SERVICE,
@@ -611,7 +605,6 @@ class KernelBootstrap(
         val settingsJar = resolveServiceJar(bossDataDir, "boss-service-settings-all.jar")
         spawnIfJarExists(
             spawner,
-            registry,
             ProcessConfig(
                 processId = "boss-service-settings",
                 processType = ProcessType.SERVICE,
@@ -628,7 +621,6 @@ class KernelBootstrap(
         val filesystemJar = resolveServiceJar(bossDataDir, "boss-service-filesystem-all.jar")
         spawnIfJarExists(
             spawner,
-            registry,
             ProcessConfig(
                 processId = "boss-service-filesystem",
                 processType = ProcessType.SERVICE,
@@ -645,7 +637,6 @@ class KernelBootstrap(
         val terminalJar = resolveServiceJar(bossDataDir, "boss-app-terminal-all.jar")
         spawnIfJarExists(
             spawner,
-            registry,
             ProcessConfig(
                 processId = "boss-app-terminal",
                 processType = ProcessType.APP,
@@ -662,7 +653,6 @@ class KernelBootstrap(
         val editorJar = resolveServiceJar(bossDataDir, "boss-app-editor-all.jar")
         spawnIfJarExists(
             spawner,
-            registry,
             ProcessConfig(
                 processId = "boss-app-editor",
                 processType = ProcessType.APP,
@@ -679,7 +669,6 @@ class KernelBootstrap(
         val browserJar = resolveServiceJar(bossDataDir, "boss-app-browser-all.jar")
         spawnIfJarExists(
             spawner,
-            registry,
             ProcessConfig(
                 processId = "boss-app-browser",
                 processType = ProcessType.APP,
@@ -696,14 +685,12 @@ class KernelBootstrap(
 
     private fun spawnIfJarExists(
         spawner: ProcessSpawner,
-        registry: ProcessRegistry,
         config: ProcessConfig,
         jarPath: String,
     ) {
         if (java.io.File(jarPath).exists()) {
             try {
-                val process: ManagedProcess = spawner.spawn(config)
-                registry.register(config.processId, process)
+                spawner.spawn(config)
                 processMonitor?.startMonitoring(config.processId)
                 logger.info("Spawned service: {} at {}", config.processId, jarPath)
             } catch (e: Exception) {

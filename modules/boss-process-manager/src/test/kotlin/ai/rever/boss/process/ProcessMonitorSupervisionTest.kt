@@ -117,6 +117,45 @@ class ProcessMonitorSupervisionTest {
         )
     }
 
+    /**
+     * Run the global monitor over one registered process of [type] and return the registry ids
+     * still present after it dies.
+     */
+    private fun registeredIdsAfterDeath(
+        type: ProcessType,
+        kill: Boolean,
+    ): List<String> {
+        var remaining = emptyList<String>()
+        runTest {
+            val registry = ProcessRegistry()
+            val monitor = ProcessMonitor(registry, backgroundScope)
+
+            val proc = FakeProcess(7272)
+            registry.register("p1", managed("p1", type, proc))
+
+            monitor.startGlobalMonitor(checkIntervalMs = 10)
+            advanceTimeBy(50)
+            if (kill) proc.die(exitCode = 1)
+            advanceTimeBy(500)
+
+            remaining = registry.getAllProcesses().map { it.config.processId }
+        }
+        return remaining
+    }
+
+    @Test
+    fun `a dead plugin is pruned from the registry`() {
+        // Only a deliberate terminate unregisters a plugin, so a plugin that crashed or ran out of
+        // restart budget would otherwise leave a dead handle in the registry for the whole session
+        // and keep processCount over-reporting it.
+        assertEquals(emptyList(), registeredIdsAfterDeath(ProcessType.PLUGIN, kill = true))
+    }
+
+    @Test
+    fun `a live plugin is left in the registry`() {
+        assertEquals(listOf("p1"), registeredIdsAfterDeath(ProcessType.PLUGIN, kill = false))
+    }
+
     @Test
     fun `plugins stay in the registry so the shutdown hook can still reap them`() {
         val registry = ProcessRegistry()
