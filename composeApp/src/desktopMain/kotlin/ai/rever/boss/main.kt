@@ -461,6 +461,11 @@ fun main(args: Array<String>) {
         ai.rever.boss.plugin.browser.FluckEngine
             .engineStartupAction(hasUsableEngine, cacheHealthy)
 
+    // Named in the download dialog: it blocks the whole app for a several-hundred-MB
+    // fetch, and which engine it is turns out to be the first thing anyone asks when
+    // it appears unexpectedly — an engine mismatch is exactly what triggers it.
+    val engineLabel = "BOSS Browser Engine ${ChromiumAutoDownloader.effectiveVersion}"
+
     val chromiumNeedsDownload =
         engineAction == ai.rever.boss.plugin.browser.FluckEngine.EngineStartupAction.Download
     when (engineAction) {
@@ -744,12 +749,17 @@ fun main(args: Array<String>) {
                                 progress = downloadProgress.progressFraction,
                                 downloadedMB = downloadProgress.downloadedMB,
                                 totalMB = downloadProgress.totalMB,
+                                // Name the version being fetched. This dialog blocks
+                                // the whole app for a several-hundred-MB download, and
+                                // which engine it is turns out to be the first thing
+                                // anyone asks when it appears unexpectedly — an engine
+                                // mismatch is exactly what triggers it.
                                 status =
-                                    when {
-                                        downloadProgress.isExtracting -> "Extracting files..."
-                                        downloadProgress.totalBytes > 0 -> "Installing BOSS Browser Engine..."
-                                        else -> "Connecting to download server..."
-                                    },
+                                    ai.rever.boss.components.dialogs.engineDownloadStatus(
+                                        engineLabel = engineLabel,
+                                        isExtracting = downloadProgress.isExtracting,
+                                        totalBytes = downloadProgress.totalBytes,
+                                    ),
                                 error = downloadProgress.error,
                                 onCancel = { exitApplication() },
                                 onRetry = {

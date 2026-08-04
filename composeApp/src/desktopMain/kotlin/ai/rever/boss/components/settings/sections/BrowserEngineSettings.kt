@@ -1,5 +1,6 @@
 package ai.rever.boss.components.settings.sections
 
+import ai.rever.boss.components.dialogs.ConfirmationDialog
 import ai.rever.boss.components.settings.shared.SettingsButtonRow
 import ai.rever.boss.components.settings.shared.SettingsDropdown
 import ai.rever.boss.components.settings.shared.SettingsInfoRow
@@ -12,6 +13,7 @@ import ai.rever.boss.config.BrowserEngineSettingsManager
 import ai.rever.boss.config.ChromiumAutoDownloader
 import ai.rever.boss.config.ChromiumReleaseSource
 import ai.rever.boss.config.EngineVersionListing
+import ai.rever.boss.utils.ApplicationRestarter
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,6 +44,70 @@ private data class InstalledVersion(
  * a staged install succeeds, so browsing the dropdown never changes what the next
  * launch downloads.
  */
+
+/**
+ * What Settings shows after a staged engine install.
+ *
+ * A sealed type rather than a message plus a flag: those were two `mutableStateOf`s
+ * encoding one outcome, kept consistent only by convention, so "staged but failed"
+ * was representable. Here it isn't.
+ *
+ * [Staged.appliesOnRestart] is the part that matters. `updateSettings` runs
+ * `withoutUnusablePin()`, which drops any `selectedVersion` that isn't the bundled
+ * version — so staging a *non-default* engine persists no pin, and the next launch
+ * promotes it, finds it doesn't match `effectiveVersion`, and re-downloads the
+ * default. Offering "Restart BOSS" there would cost the user their session and a
+ * several-hundred-MB download to end up exactly where they started.
+ */
+internal sealed interface StagedInstallOutcome {
+    data class Staged(
+        val version: String,
+        val appliesOnRestart: Boolean,
+    ) : StagedInstallOutcome
+
+    data class Failed(
+        val message: String,
+    ) : StagedInstallOutcome
+}
+
+/** The message for an outcome. Derived, never stored alongside it. */
+internal fun StagedInstallOutcome.message(defaultVersion: String): String =
+    when (this) {
+        is StagedInstallOutcome.Failed -> {
+            message
+        }
+
+        is StagedInstallOutcome.Staged -> {
+            if (appliesOnRestart) {
+                "Engine $version is staged. It is not in use until BOSS restarts."
+            } else {
+                "Engine $version is staged, but this build requires $defaultVersion — " +
+                    "it will be replaced on the next launch."
+            }
+        }
+    }
+
+/** Whether this outcome should offer the restart that completes it. */
+internal fun StagedInstallOutcome.offersRestart(): Boolean = this is StagedInstallOutcome.Staged && appliesOnRestart
+
+internal fun stagedInstallOutcome(
+    version: String,
+    defaultVersion: String,
+    result: Result<*>,
+): StagedInstallOutcome =
+    result.fold(
+        onSuccess = {
+            StagedInstallOutcome.Staged(
+                version = version,
+                // Only a default-version stage survives to be used.
+                appliesOnRestart = version == defaultVersion,
+            )
+        },
+        onFailure = { e ->
+            StagedInstallOutcome.Failed(e.message ?: "unknown error")
+        },
+    )
+
 @Composable
 fun BrowserEngineSettings() {
     val settings by BrowserEngineSettingsManager.currentSettings.collectAsState()
@@ -70,7 +136,22 @@ fun BrowserEngineSettings() {
     var versionListing by remember { mutableStateOf<EngineVersionListing?>(null) }
     var versionsError by remember { mutableStateOf<String?>(null) }
     var installProgress by remember { mutableStateOf<ChromiumAutoDownloader.DownloadProgress?>(null) }
-    var installStatus by remember { mutableStateOf<String?>(null) }
+    // One state, so "staged but failed" is unrepresentable.
+    var outcome by remember { mutableStateOf<StagedInstallOutcome?>(null) }
+    var confirmingRestart by remember { mutableStateOf(false) }
+
+    // Seeded from disk, not just from the install that happened in this composition:
+    // both flags used to be plain `remember`, so closing and reopening Settings lost
+    // the pending state while boss-chromium.pending still sat on disk — leaving no
+    // indication a restart was owed and inviting a second install.
+    val pendingStagedVersion =
+        produceState<String?>(initialValue = null) {
+            value =
+                withContext(Dispatchers.IO) {
+                    val dir = ChromiumAutoDownloader.getPendingChromiumDir()
+                    if (dir.toFile().exists()) ChromiumAutoDownloader.installedVersionAt(dir) else null
+                }
+        }.value
 
     LaunchedEffect(Unit) {
         try {
@@ -202,7 +283,8 @@ fun BrowserEngineSettings() {
                     label = "Download and stage the selected version",
                     buttonText = if (selectedVersion == installedVersion) "Reinstall" else "Install",
                     onClick = {
-                        installStatus = null
+                        outcome = null
+                        confirmingRestart = false
                         installProgress = ChromiumAutoDownloader.DownloadProgress(0, 0)
                         val versionToInstall = selectedVersion
                         val overrideToPersist = selectedOverride
@@ -217,20 +299,14 @@ fun BrowserEngineSettings() {
                                     }
                                 }
                             installProgress = null
-                            installStatus =
-                                result.fold(
-                                    onSuccess = {
-                                        // Persist the pin only now, so an abandoned dropdown
-                                        // selection never changes what the next launch boots.
-                                        BrowserEngineSettingsManager.updateSettings(
-                                            BrowserEngineSettingsData(selectedVersion = overrideToPersist),
-                                        )
-                                        "Engine $versionToInstall downloaded — restart BOSS to apply."
-                                    },
-                                    onFailure = { e ->
-                                        "Install failed: ${e.message ?: "unknown error"}"
-                                    },
+                            if (result.isSuccess) {
+                                // Persist the pin only now, so an abandoned dropdown
+                                // selection never changes what the next launch boots.
+                                BrowserEngineSettingsManager.updateSettings(
+                                    BrowserEngineSettingsData(selectedVersion = overrideToPersist),
                                 )
+                            }
+                            outcome = stagedInstallOutcome(versionToInstall, defaultVersion, result)
                         }
                     },
                     description =
@@ -240,12 +316,59 @@ fun BrowserEngineSettings() {
                 )
             }
 
-            installStatus?.let { status ->
+            // Either an outcome from this session, or a stage left pending by an
+            // earlier one that this Settings view never saw.
+            val effectiveOutcome =
+                outcome
+                    ?: pendingStagedVersion?.let { staged ->
+                        StagedInstallOutcome.Staged(
+                            version = staged,
+                            appliesOnRestart = staged == defaultVersion,
+                        )
+                    }
+
+            effectiveOutcome?.let { current ->
                 Spacer(modifier = Modifier.height(8.dp))
-                SettingsInfoRow(
-                    label = "Status",
-                    value = "",
-                    description = status,
+                if (current.offersRestart()) {
+                    // An action, not a note: a staged engine sits in
+                    // boss-chromium.pending and does nothing until
+                    // promotePendingInstall swaps it in at startup, so a missed note
+                    // reads like the install failed and invites a second one.
+                    SettingsButtonRow(
+                        label = "Staged — restart to apply",
+                        buttonText = "Restart BOSS",
+                        // Confirmed, not immediate. This quits the app ~500ms later
+                        // with no undo, and the repo already handles that this way
+                        // (see FluckBrowserSettings' Restart Required dialog); a
+                        // single unconfirmed click sitting directly under Install is
+                        // too easy to hit by accident.
+                        onClick = { confirmingRestart = true },
+                        isDestructive = true,
+                        description =
+                            current.message(defaultVersion) +
+                                " BOSS reopens with your tabs restored; running terminal processes end.",
+                    )
+                } else {
+                    SettingsInfoRow(
+                        label = "Status",
+                        value = "",
+                        description = current.message(defaultVersion),
+                    )
+                }
+            }
+
+            if (confirmingRestart) {
+                ConfirmationDialog(
+                    title = "Restart Required",
+                    message =
+                        "BOSS will close and reopen to apply the staged browser engine. " +
+                            "Your tabs are restored; running terminal processes end.",
+                    confirmText = "Restart Now",
+                    onConfirm = {
+                        confirmingRestart = false
+                        ApplicationRestarter.scheduleRestart(delayMillis = 500)
+                    },
+                    onDismiss = { confirmingRestart = false },
                 )
             }
         }
