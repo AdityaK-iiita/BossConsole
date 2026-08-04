@@ -77,11 +77,22 @@ Two things the scripts do that are easy to leave out and invalidate the run:
   shrinks the fluck viewport below Speedometer's 850×650 minimum and repaints
   continuously beside it. Your own session is backed up once and restored on any
   exit, including Ctrl+C.
-- **The window is raised and maximized.** Speedometer paces on
-  `requestAnimationFrame`, which Chromium throttles in a window the OS reports
-  hidden. On macOS this needs accessibility permission for your terminal; on Linux it
-  needs `wmctrl` or `xdotool`. Both are best-effort with a warning, and
-  `SpeedometerCdp` refuses a run it detects as occluded.
+- **The window is raised and maximized, and it is found by executable path.**
+  Speedometer paces on `requestAnimationFrame`, which Chromium throttles in a window
+  the OS reports hidden. Your own BOSS is almost certainly running — that is why this
+  harness uses dev mode — and it is *also* called "BOSS", so matching the window by
+  process name resolves to whichever the OS lists first. That failure is silent and
+  doubly bad: it moves your window, and it leaves the benchmark window unraised, so the
+  arm scores throttled garbage while appearing to work. On macOS the launched pid is not
+  the one the accessibility API sees either (the bundle re-execs), so the window is
+  resolved by matching each candidate pid's executable against this worktree's binary.
+  If none matches, the script warns and touches nothing. macOS needs accessibility
+  permission for your terminal; Linux needs `wmctrl`. `SpeedometerCdp` independently
+  refuses a run it detects as occluded.
+
+Note also that **`screencapture` returns an all-black image rather than an error when
+Screen Recording permission is missing**, so a screenshot is not a way to check the
+browser is compositing — the file gets written and the exit code is 0 either way.
 
 Scoring reuses `win/SpeedometerCdp.java` unchanged — single-file Java on
 `java.net.http`, no platform code. Its `--attach` mode is the only way to score a

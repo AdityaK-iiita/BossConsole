@@ -138,39 +138,79 @@ wait_devtools() {
     return 1
 }
 
-# Speedometer 3.1 paces on requestAnimationFrame, which Chromium throttles in a
-# window the OS reports hidden — and the fluck viewport is the BOSS window minus tab
-# bar, toolbar and sidebar, so a small window can also land under Speedometer's
-# 850x650 minimum. Every arm must get the SAME window, or the comparison measures
-# window size. Best-effort: a missing tool is a warning, not a failed run, and
-# SpeedometerCdp refuses a run it detects as occluded anyway.
+# The PID whose window belongs to THIS worktree's build, or empty.
+#
+# Never match the window by process name. The operator's own BOSS is very likely
+# running — that is the whole reason this harness uses dev mode — and it is also called
+# "BOSS", so `first process whose name is "BOSS"` resolves to whichever the
+# accessibility API happens to list first. Observed doing exactly that: it returned
+# /Applications/BOSS.app and repositioned the operator's window while the benchmark
+# build sat unraised behind it, which both disturbs them and silently invalidates the
+# run (an unraised window means Chromium throttles rAF, which is what Speedometer
+# paces on, so the arm would score garbage while looking like it worked).
+#
+# Matching the LAUNCHED pid does not work either: on macOS the bundle's binary re-execs,
+# so the pid this script holds is not the one the accessibility API sees — the same trap
+# ../win/run-boss-arm.ps1 documents for BOSS.exe being a launcher. So: enumerate the
+# accessibility processes, resolve each one's executable through ps, and keep the one
+# running from this worktree.
+boss_window_pid() {
+    local pids pid cmd
+    pids="$(osascript -e 'tell application "System Events" to get unix id of every process whose name is "BOSS"' 2>/dev/null |
+        tr -d ' ' | tr ',' ' ')"
+    for pid in $pids; do
+        cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+        if [[ "$cmd" == "$APP_BIN"* ]]; then
+            echo "$pid"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Speedometer 3.1 paces on requestAnimationFrame, which Chromium throttles in a window
+# the OS reports hidden — and the fluck viewport is the BOSS window minus tab bar,
+# toolbar and sidebar, so a small window can also land under Speedometer's 850x650
+# minimum. Every arm must get the SAME window, or the comparison measures window size.
+#
+# Best-effort by design: a missing tool or a denied permission is a warning, not a
+# failed run, because SpeedometerCdp independently refuses a run it detects as
+# occluded. But it must never fall back to "resize some other BOSS".
 raise_and_maximize() {
     if [[ "$PLATFORM" == "mac" ]]; then
-        osascript -e 'tell application "System Events" to tell (first process whose name is "BOSS") to set frontmost to true' \
-            >/dev/null 2>&1 || {
-            echo "WARNING: could not raise BOSS via osascript. Grant Terminal accessibility access, or raise it by hand." >&2
+        local pid
+        if ! pid="$(boss_window_pid)"; then
+            echo "WARNING: no BOSS window found for this worktree's build — not touching any other BOSS." >&2
+            echo "         (If your terminal lacks accessibility access, grant it or raise the window by hand.)" >&2
             return 1
-        }
-        # No AppleScript "maximize": zoom the window to fill the screen instead.
-        osascript -e 'tell application "System Events" to tell (first process whose name is "BOSS") to set value of attribute "AXFullScreen" of front window to false' \
-            >/dev/null 2>&1 || true
-        osascript <<'AS' >/dev/null 2>&1 || true
+        fi
+        osascript <<AS >/dev/null 2>&1
 tell application "Finder" to set screenBounds to bounds of window of desktop
 tell application "System Events"
-    tell (first process whose name is "BOSS")
+    tell (first process whose unix id is $pid)
+        set frontmost to true
         set position of front window to {0, 0}
         set size of front window to {(item 3 of screenBounds), (item 4 of screenBounds)}
     end tell
 end tell
 AS
     else
+        # Same rule on Linux. `wmctrl -a BOSS` and `xdotool search --name BOSS` both match
+        # by TITLE, so both would grab the operator's window; -lp gives the owning pid, so
+        # the window can be picked by identity instead.
+        local wid
         if command -v wmctrl >/dev/null 2>&1; then
-            wmctrl -a BOSS >/dev/null 2>&1 || true
-            wmctrl -r BOSS -b add,maximized_vert,maximized_horz >/dev/null 2>&1 || true
-        elif command -v xdotool >/dev/null 2>&1; then
-            xdotool search --name BOSS windowactivate --sync windowsize 100% 100% >/dev/null 2>&1 || true
+            wid="$(wmctrl -lp 2>/dev/null | while read -r id _ wpid _; do
+                [[ "$(ps -p "$wpid" -o command= 2>/dev/null)" == "$APP_BIN"* ]] && { echo "$id"; break; }
+            done)"
+            if [[ -z "$wid" ]]; then
+                echo "WARNING: no BOSS window found for this worktree's build — not touching any other BOSS." >&2
+                return 1
+            fi
+            wmctrl -i -a "$wid" >/dev/null 2>&1 || true
+            wmctrl -i -r "$wid" -b add,maximized_vert,maximized_horz >/dev/null 2>&1 || true
         else
-            echo "WARNING: neither wmctrl nor xdotool found — maximize BOSS by hand, or rAF throttling will skew the run." >&2
+            echo "WARNING: wmctrl not found — maximize the benchmark window by hand, or rAF throttling will skew the run." >&2
             return 1
         fi
     fi
@@ -181,8 +221,14 @@ restore_session() {
     [[ -f "$BACKUP" ]] && cp "$BACKUP" "$LAST_SESSION" || true
 }
 # An interrupted sweep is the normal case here (Ctrl+C, a failed run), so putting the
-# operator's layout back on ANY exit is what makes this self-healing rather than
-# leaving their session replaced until someone remembers to restore it.
+# operator's layout back on ANY exit is what makes this self-healing rather than leaving
+# their session replaced until someone remembers to restore it.
+#
+# ORDER MATTERS: kill first, THEN restore. BOSS writes "Last Session" back over this
+# shared file as it shuts down, so restoring before the app is gone loses the race and
+# leaves the benchmark's single-tab fixture in place as the operator's session. Verified
+# the hard way — a probe script that restored first ended up with the fixture saved over
+# the real layout, by the dying app, a moment after the restore.
 trap 'stop_dev_boss; restore_session' EXIT INT TERM
 
 mkdir -p "$HERE/$RESULTS"
