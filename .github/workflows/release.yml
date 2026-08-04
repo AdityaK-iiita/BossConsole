@@ -1605,23 +1605,103 @@ jobs:
             PRERELEASE_WARNING=""
           fi
 
+          # The table listed bare filenames with no links at all, so a reader
+          # had to scroll to the assets list and match names by eye. Generate
+          # it instead, from the same script release-notes.yml uses, so the
+          # placeholder body and the curated notes cannot drift apart.
+          #
+          # --assets matters: Windows ARM64 and Linux ARM64 are optional builds
+          # (see this job's `if:`), so hardcoding nine rows would publish live
+          # 404s whenever one of them failed. --prerelease keeps a pre-release
+          # page's "always latest" links from resolving to an older stable.
+          #
+          # The AMD64 install section below is deliberately NOT gated on its
+          # assets: build-linux-amd64 is a required job for this one, so those
+          # packages always exist. Only the optional builds need checking.
+          TABLE_ARGS=(--version "$VERSION" --repo "$GITHUB_REPOSITORY" --assets ./release-assets)
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            TABLE_ARGS+=(--prerelease)
+          fi
+          DOWNLOAD_TABLE=$(bash scripts/release-download-table.sh "${TABLE_ARGS[@]}")
+
+          # Same reason the table is filtered: a wget for a package that was
+          # never built is a 404. Each Linux ARM64 asset is copied by its own
+          # best-effort `find ... || true` above, so the deb being present does
+          # NOT imply the rpm or the jar is — gate each block on its own file,
+          # exactly as the table does per row.
+          have_arm64() { [[ -f "./release-assets/BOSS-${VERSION}-arm64.$1" ]]; }
+
+          # Windows ARM64 is the other optional build. Its instructions name a
+          # file rather than linking one, so a missing build is not a 404 — but
+          # telling a reader to download something that was never published is
+          # the same defect, so it gets the same treatment.
+          if have_arm64 msi; then
+            WINDOWS_ARM64_SECTION=$(cat << WINARM64
+
+          ### Windows (ARM64)
+          1. Download \`BOSS-${VERSION}-arm64.msi\`
+          2. Run the installer as Administrator
+          3. Launch from Start Menu or Desktop
+          WINARM64
+          )
+          else
+            echo "::warning::No Windows ARM64 msi in release assets; omitting its install section"
+            WINDOWS_ARM64_SECTION=""
+          fi
+
+          ARM64_FILE=$(mktemp)
+          if have_arm64 deb || have_arm64 rpm || have_arm64 jar; then
+            printf '### Linux (ARM64 / aarch64)\n' >> "$ARM64_FILE"
+          else
+            echo "::warning::No Linux ARM64 packages in release assets; omitting its install section"
+          fi
+
+          if have_arm64 deb; then
+            cat >> "$ARM64_FILE" << ARM64DEB
+
+          **Ubuntu/Debian:**
+          \`\`\`bash
+          wget https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/BOSS-${VERSION}-arm64.deb
+          sudo apt-get install ./BOSS-${VERSION}-arm64.deb  # resolves dependencies + recommends
+          \`\`\`
+
+          > \`sudo dpkg -i\` works too and no longer requires \`xdg-utils\` to be present
+          > (headless installs used to fail during dependency resolution). But \`dpkg\`
+          > ignores \`Recommends:\`, so on a desktop without \`xdg-utils\` installed it
+          > skips the menu entry and icon silently — use apt to get them.
+          ARM64DEB
+          fi
+
+          if have_arm64 rpm; then
+            cat >> "$ARM64_FILE" << ARM64RPM
+
+          **RHEL/Fedora/openSUSE:**
+          \`\`\`bash
+          wget https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/BOSS-${VERSION}-arm64.rpm
+          sudo rpm -i BOSS-${VERSION}-arm64.rpm
+          \`\`\`
+          ARM64RPM
+          fi
+
+          if have_arm64 jar; then
+            cat >> "$ARM64_FILE" << ARM64JAR
+
+          **JAR (requires Java 17+):**
+          \`\`\`bash
+          wget https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/BOSS-${VERSION}-arm64.jar
+          java -jar BOSS-${VERSION}-arm64.jar
+          \`\`\`
+          ARM64JAR
+          fi
+
+          LINUX_ARM64_SECTION=$(cat "$ARM64_FILE")
+          rm -f "$ARM64_FILE"
+
           cat > release-notes.md << EOF
           # $RELEASE_TITLE
           $PRERELEASE_WARNING
 
-          ## 📦 Downloads
-
-          | Platform | Architecture | Package |
-          |----------|--------------|---------|
-          | **macOS** | Universal (Apple Silicon + Intel via Rosetta) | \`BOSS-${VERSION}-Universal.dmg\` |
-          | **Windows** | x64 | \`BOSS-${VERSION}.msi\` |
-          | **Windows** | ARM64 | \`BOSS-${VERSION}-arm64.msi\` |
-          | **Linux DEB** | AMD64 (x86_64) | \`BOSS-${VERSION}-amd64.deb\` |
-          | **Linux DEB** | ARM64 (aarch64) | \`BOSS-${VERSION}-arm64.deb\` |
-          | **Linux RPM** | AMD64 (x86_64) | \`BOSS-${VERSION}-amd64.rpm\` |
-          | **Linux RPM** | ARM64 (aarch64) | \`BOSS-${VERSION}-arm64.rpm\` |
-          | **Linux JAR** | AMD64 (x86_64) | \`BOSS-${VERSION}-amd64.jar\` |
-          | **Linux JAR** | ARM64 (aarch64) | \`BOSS-${VERSION}-arm64.jar\` |
+          ${DOWNLOAD_TABLE}
 
           ## ✨ What's New
 
@@ -1651,10 +1731,7 @@ jobs:
           2. Run the installer as Administrator
           3. Launch from Start Menu or Desktop
 
-          ### Windows (ARM64)
-          1. Download \`BOSS-${VERSION}-arm64.msi\`
-          2. Run the installer as Administrator
-          3. Launch from Start Menu or Desktop
+          ${WINDOWS_ARM64_SECTION}
 
           ### Linux (AMD64 / x86_64)
 
@@ -1681,30 +1758,7 @@ jobs:
           java -jar BOSS-${VERSION}-amd64.jar
           \`\`\`
 
-          ### Linux (ARM64 / aarch64)
-
-          **Ubuntu/Debian:**
-          \`\`\`bash
-          wget https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/BOSS-${VERSION}-arm64.deb
-          sudo apt-get install ./BOSS-${VERSION}-arm64.deb  # resolves dependencies + recommends
-          \`\`\`
-
-          > \`sudo dpkg -i\` works too and no longer requires \`xdg-utils\` to be present
-          > (headless installs used to fail during dependency resolution). But \`dpkg\`
-          > ignores \`Recommends:\`, so on a desktop without \`xdg-utils\` installed it
-          > skips the menu entry and icon silently — use apt to get them.
-
-          **RHEL/Fedora/openSUSE:**
-          \`\`\`bash
-          wget https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/BOSS-${VERSION}-arm64.rpm
-          sudo rpm -i BOSS-${VERSION}-arm64.rpm
-          \`\`\`
-
-          **JAR (requires Java 17+):**
-          \`\`\`bash
-          wget https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/BOSS-${VERSION}-arm64.jar
-          java -jar BOSS-${VERSION}-arm64.jar
-          \`\`\`
+          ${LINUX_ARM64_SECTION}
 
           ---
 

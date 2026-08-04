@@ -49,6 +49,15 @@ jobs:
         # deterministic and does not consume credentials.
         run: bash scripts/test/test-jxbrowser-autorelease.sh
 
+      - name: 🧪 Release download table tests
+        # Generates the Downloads section of every release body, which also
+        # becomes app_releases.release_notes and is rendered by the in-app update
+        # dialog. Release workflows only run on publish, so nothing else touches
+        # it first. Guards the two ways it can publish something wrong: a row for
+        # an optional ARM64 asset that was never built (a live 404), and a
+        # pre-release page whose "always latest" links point at an older stable.
+        run: bash scripts/test/test-release-download-table.sh
+
   version-check:
     runs-on: ubuntu-latest
     outputs:

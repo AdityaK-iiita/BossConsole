@@ -123,7 +123,11 @@ jobs:
                - Summary (1-2 sentences)
                - Highlights (2-4 key changes)
                - Changes grouped by: Features, Bug Fixes, Improvements, Dependencies
-               - Download table with platform links to BossConsole-Releases
+               - Downloads: put the single line `<!-- DOWNLOADS -->` on its own line
+                 where the downloads section belongs, and write nothing else there.
+                 Do NOT write a download table — a later step substitutes the
+                 generated one. Hand-writing it produces links to assets that may
+                 not exist for this release.
 
             3. Update `docs/release-notes/README.md` index between RELEASE_INDEX markers
 
@@ -132,6 +136,104 @@ jobs:
             - Use conventional commit scopes: browser, terminal, tabs, panel, etc.
             - Link PR numbers: (#123)
             - Omit empty sections
+
+      # Substituted here rather than asked for in the prompt. "The two bodies
+      # cannot drift" is only true if nothing can paraphrase, reflow or
+      # hand-write the table — and a denied Bash call would silently push the
+      # model back to writing it itself, which is the failure this replaces.
+      - name: 📦 Substitute the generated download table
+        if: steps.check-existing.outputs.exists != 'true'
+        env:
+          VERSION: ${{ steps.release-info.outputs.version }}
+          RELEASE_TAG: ${{ steps.release-info.outputs.release_tag }}
+          # The release payload's own flag. Deriving "is this a prerelease" from
+          # the tag string would be wrong: release.yml sets is-prerelease from
+          # `is_prerelease_version || release_type != stable`, so a dispatch with
+          # release_type=beta on 9.4.0 produces a release tagged v9.4.0 — no dash
+          # — that IS a prerelease. sync-release.yml already compensates for that
+          # case when deriving a channel. Empty on workflow_run/dispatch, where
+          # the step falls back to asking the API.
+          EVENT_IS_PRERELEASE: ${{ github.event.release.prerelease }}
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          NOTES_FILE="docs/release-notes/v${VERSION}.md"
+          if [[ ! -f "$NOTES_FILE" ]]; then
+            echo "::warning::$NOTES_FILE not found; nothing to substitute"
+            exit 0
+          fi
+
+          # Only list assets the release actually has: Windows ARM64 and Linux
+          # ARM64 are optional builds, so a fixed nine-row table would publish
+          # live 404s whenever one failed.
+          #
+          # This is a hard failure, not a warning. The release exists by the time
+          # this runs, so an unreadable asset list means something is wrong —
+          # and degrading to "list everything" would quietly publish the very
+          # 404s this filtering exists to prevent. The script keeps a lenient
+          # fallback for local use; a release job should not.
+          #
+          # The links point at the PUBLIC repo, so prefer its asset list: this
+          # workflow and sync-release both fire on `release: published`, and
+          # sync-release uploads assets one at a time (the DMG alone can take
+          # minutes), so the public release can exist while still missing files.
+          # Validating against the private repo in that window would approve a
+          # row whose public link 404s. Fall back to the private list when the
+          # public release does not exist yet at all — otherwise the release
+          # would be left with no curated notes, which is worse.
+          PUBLIC_REPO=risa-labs-inc/BossConsole-Releases
+          if gh release view "$RELEASE_TAG" --repo "$PUBLIC_REPO" --json assets --jq '.assets[].name' > /tmp/assets.txt 2>/dev/null \
+             && [[ -s /tmp/assets.txt ]]; then
+            echo "📋 Validating against the public release's assets"
+          elif gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' > /tmp/assets.txt; then
+            echo "::warning::Public release $RELEASE_TAG not readable yet; validating against the private release's assets"
+          else
+            echo "::error::Could not list assets for $RELEASE_TAG; refusing to guess the download table"
+            exit 1
+          fi
+          if [[ ! -s /tmp/assets.txt ]]; then
+            echo "::error::$RELEASE_TAG has no assets; refusing to publish a download table"
+            exit 1
+          fi
+
+          TABLE_ARGS=(--version "$VERSION" --asset-list /tmp/assets.txt)
+
+          IS_PRERELEASE="${EVENT_IS_PRERELEASE:-}"
+          if [[ -z "$IS_PRERELEASE" ]]; then
+            IS_PRERELEASE=$(gh release view "$RELEASE_TAG" --json isPrerelease --jq '.isPrerelease' 2>/dev/null || echo "")
+          fi
+          if [[ -z "$IS_PRERELEASE" ]]; then
+            echo "::error::Could not determine whether $RELEASE_TAG is a prerelease"
+            exit 1
+          fi
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            TABLE_ARGS+=(--prerelease)
+          fi
+
+          bash scripts/release-download-table.sh "${TABLE_ARGS[@]}" > /tmp/downloads.md
+
+          if grep -q '<!-- DOWNLOADS -->' "$NOTES_FILE"; then
+            # python, not sed: the generated markdown contains &, | and [] that
+            # sed would treat as replacement syntax.
+            python3 - "$NOTES_FILE" /tmp/downloads.md <<'PY'
+          import sys
+          notes_path, table_path = sys.argv[1], sys.argv[2]
+          with open(notes_path) as f:
+              notes = f.read()
+          with open(table_path) as f:
+              table = f.read().rstrip("\n")
+          with open(notes_path, "w") as f:
+              f.write(notes.replace("<!-- DOWNLOADS -->", table))
+          PY
+            echo "✅ Substituted the download table into $NOTES_FILE"
+          else
+            # Never leave the notes without downloads just because the marker
+            # went missing.
+            echo "::warning::No <!-- DOWNLOADS --> marker in $NOTES_FILE; appending the table"
+            printf '\n' >> "$NOTES_FILE"
+            cat /tmp/downloads.md >> "$NOTES_FILE"
+          fi
 
       - name: 📤 Commit and Push
         if: steps.check-existing.outputs.exists != 'true'
