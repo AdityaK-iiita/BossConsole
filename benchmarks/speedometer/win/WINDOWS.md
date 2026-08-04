@@ -14,14 +14,14 @@ Edge.
 
 | Arm | Typical | Best observed |
 |---|---:|---:|
-| Microsoft Edge 150.0.4078.105 | — | **24.7** |
+| Microsoft Edge 150.0.4078.105 | - | **24.7** |
 | fluck, HARDWARE_ACCELERATED (new Windows default) | **~21-23** | 23.8 |
 | fluck, OFF_SCREEN (previous behaviour) | **~17-18** | 17.9 |
 
 **Roughly +33%**, bringing fluck within ~10% of Edge on the same Chromium generation.
 
 Read the *relative* figure, not the absolutes. Across one session this machine
-produced **18.8, 21.1, 21.2, 22.8, 23.8** from a single unchanged HARDWARE build —
+produced **18.8, 21.1, 21.2, 22.8, 23.8** from a single unchanged HARDWARE build -
 a 27% spread on identical bytes, driven by ambient load. An earlier stretch, while
 the machine was also building continuously, produced 9.5-11.5 for OFF_SCREEN and
 14-16 for HARDWARE: half the numbers, same ratio. So a single absolute score from
@@ -32,7 +32,7 @@ The OFF_SCREEN figure of ~17.9 independently reproduces the operator's own repor
 18.1, which is the main reason to trust the harness at all.
 
 The direction has been confirmed twice by interleaved pairs (alternate the arms,
-never group them — see [Why interleaving](#why-interleaving-is-not-optional-here)).
+never group them - see [Why interleaving](#why-interleaving-is-not-optional-here)).
 Rendering mode, 3 pairs, **+47% median, 3/3**:
 
 | Pair | OFF_SCREEN | HARDWARE_ACCELERATED | Gain |
@@ -55,7 +55,7 @@ against 21.2 for the old one. Re-running the two builds **alternately**
 | 3 | 21.1 | 23.2 | +10% |
 | **median** | | | **+10%** |
 
-i.e. no regression — the two builds are the same speed, and the apparent 10% loss was
+i.e. no regression - the two builds are the same speed, and the apparent 10% loss was
 the machine drifting between the two sequential arms. **On this machine a sequential
 A-then-B comparison can invent or erase a 10-15% difference.** Anything worth
 believing gets interleaved.
@@ -85,7 +85,7 @@ flag change that did nothing.
 | Renderer backgrounded / EcoQoS demotion to E-cores | Read the live Win32 process state: the active renderer is `Normal` priority, EcoQoS `default`. Only an idle background tab was `Idle` + ECO, which is correct |
 | Windows timer resolution (15.6ms vs 1ms) | `setTimeout(0)` median **4.16 ms in both** fluck and Edge |
 | Frame clock throttled | rAF median **16.65 ms in both** (a clean 60 Hz) |
-| Slow JIT / low CPU clocks | Tight arithmetic loop: 44.5 ms vs Edge 38.0 ms — only **1.17x** |
+| Slow JIT / low CPU clocks | Tight arithmetic loop: 44.5 ms vs Edge 38.0 ms - only **1.17x** |
 | DEBUG logging / app startup burst | Pinning `BOSS_LOG_LEVEL=INFO` and adding a 60s settle changed nothing (7.87 -> 7.51) |
 
 ## The signature that pointed at the frame path
@@ -98,7 +98,7 @@ Per-metric comparison of a fluck run against an Edge run (`compare-suites.ps1`):
 | Async total | 1405 ms | 292 ms | 4.82x |
 | median per-test (206 metrics) | | | **3.13x** |
 
-Two things stand out. The slowdown is **uniform** — no suite carries it, unlike the
+Two things stand out. The slowdown is **uniform** - no suite carries it, unlike the
 Chrome/Comet DOM-mutation signature in [`../../benchmark.md`](../../benchmark.md).
 And it coexists with near-parity on raw arithmetic. Work that penalizes DOM and
 layout but barely touches a register-bound loop is per-frame overhead, not slower
@@ -115,7 +115,7 @@ total 36.1s over 55.7s wall
 ```
 
 Speedometer is CPU-bound single-threaded work, so a healthy renderer sits near a
-full core. **This one used 0.26 of a core** while the whole machine sat at 0.65 —
+full core. **This one used 0.26 of a core** while the whole machine sat at 0.65 -
 nothing was starved, the renderer was *blocked waiting for frames*. Note also that
 the JVM side is cheap (0.14 cores): the cost is inside Chromium's own off-screen
 pipeline, not in the Compose integration.
@@ -142,7 +142,7 @@ scale adds a per-frame resample.
 
 ## The fix: rendering mode
 
-Interleaved pairs (alternating modes, never grouped — see caveat 4 in
+Interleaved pairs (alternating modes, never grouped - see caveat 4 in
 [`../../benchmark.md`](../../benchmark.md) for why grouping is untrustworthy here):
 
 | Pair | OFF_SCREEN | HARDWARE_ACCELERATED | Gain |
@@ -169,13 +169,13 @@ hit three regressions, fixed in commit `539fbb48`. All three are ported here:
 
 | Regression | Fix |
 |---|---|
-| Browser surface sits ~toolbar-height too high — overlaps the URL bar, gap at the bottom | `BrowserHandleImpl` offsets the surface down (`offset`, not `padding`, which shrank it). `BOSS_BROWSER_TOP_INSET_DP`, HARDWARE-only. **Default 0 here, not Lite's 24** — see below |
+| Browser surface sits ~toolbar-height too high - overlaps the URL bar, gap at the bottom | `BrowserHandleImpl` offsets the surface down (`offset`, not `padding`, which shrank it). `BOSS_BROWSER_TOP_INSET_DP`, HARDWARE-only. **Default 0 here, not Lite's 24** - see below |
 | Ctrl/Cmd+R does nothing when focus is inside the page | `FluckEngine` reloads the focused browser directly from the key callback instead of routing through the focused *window* (which is unset when the native surface holds focus) |
 | Hover tooltips render behind the browser | `SwingTooltip`: a tiny non-focusable `JWindow` clamped to the cursor's monitor, wired through `OverlayConfig.heavyweightTooltip` |
 
 Plus `OverlayConfig` + `HeavyweightPopup` / `HeavyweightModal`, which route context
 menus and modals into heavyweight windows. Every one of these is gated on
-`OverlayConfig.useHeavyweightPopups`, which is false on OFF_SCREEN — so macOS and
+`OverlayConfig.useHeavyweightPopups`, which is false on OFF_SCREEN - so macOS and
 Linux take the unchanged Compose path.
 
 **The top inset does not transfer, and was re-measured rather than copied.** Loading
@@ -184,17 +184,17 @@ HARDWARE-mode browser tab on this machine:
 
 | `BOSS_BROWSER_TOP_INSET_DP` | Result |
 |---|---|
-| 0 | Red top edge sits flush under the URL bar — **correct** |
+| 0 | Red top edge sits flush under the URL bar - **correct** |
 | 24 (Lite's default) | ~24dp dark gap above the page; bottom edge pushed off-screen |
 
 So BossConsole defaults it to **0**. Lite is a browser-only build with different
-chrome heights, so the amount that corrects its layout over-corrects this one — the
+chrome heights, so the amount that corrects its layout over-corrects this one - the
 inset belongs to the install, not to the platform. Anyone who does see the overlap
 can set the env var. Copying Lite's constant unexamined would have shipped a visible
 gap on this machine.
 
 **Still moving:** Lite marks its own `HeavyweightPopup` and `HeavyweightModal` as
-DRAFT, with known gaps — positioning is cursor-based (right for context menus, wrong
+DRAFT, with known gaps - positioning is cursor-based (right for context menus, wrong
 for widget-anchored dropdowns), the popup window is a fixed 320x480 that leaves a
 transparent click-capturing margin, and HiDPI px→dp mapping is unverified. Expect
 overlay polish to continue.
@@ -205,10 +205,10 @@ Honest status per fix, on this machine, with HARDWARE as the default:
 
 | Item | Status |
 |---|---|
-| Page renders correctly in HARDWARE | **Verified** — screenshot, real page |
-| Surface alignment | **Verified and corrected** — marker page; inset 0 is right here, 24 is wrong (see above) |
-| Tooltips layer above the browser | **Verified** — the sidebar hover tooltip draws over page content as a native window |
-| Keyboard input still reaches the page | **Verified** — `keydown` for `hello` observed by page JS; HARDWARE does not suppress input |
+| Page renders correctly in HARDWARE | **Verified** - screenshot, real page |
+| Surface alignment | **Verified and corrected** - marker page; inset 0 is right here, 24 is wrong (see above) |
+| Tooltips layer above the browser | **Verified** - the sidebar hover tooltip draws over page content as a native window |
+| Keyboard input still reaches the page | **Verified** - `keydown` for `hello` observed by page JS; HARDWARE does not suppress input |
 | Ctrl+R reload | **Not verified.** Synthetic `SendKeys ^r` fails to reload in **both** HARDWARE and OFF_SCREEN on this machine, so the harness cannot exercise it. Identical in both modes, so the port is not a regression; the fix (reload the focused browser directly rather than routing through the focused window) is a strict logic improvement but is unproven here |
 | Context menus / modals over the browser | **Not verified.** Compose dropdowns could not be driven with synthetic clicks. Needs a human |
 
@@ -227,12 +227,12 @@ The branch is ~16 commits, not one. What was taken, and what was deliberately le
 | Retain `BrowserViewState` across tab switches (`651cdfb0`) | The "fast-switch blank": HARDWARE tore down and rebuilt the GPU surface on every tab switch, so A→B→A painted blank |
 | `NewTabDialog` → `OverlayModal` (`651cdfb0`) | The dialog otherwise renders under the page |
 | Ctrl/Cmd+R reloads the focused browser directly (`539fbb48`) | Window-routed reload does not reach a page holding native focus |
-| Browser-surface top inset (`539fbb48`) | Kept as a tunable, default changed — see above |
+| Browser-surface top inset (`539fbb48`) | Kept as a tunable, default changed - see above |
 | `--no-pings`, `--disable-domain-reliability` (`e42b1926`) | Background network chatter with no feature depending on it |
 | Opt-in `BOSS_RENDERER_PROCESS_LIMIT` (`e42b1926`) | RAM cap for many-tab sessions; off by default |
 | Opt-in `BOSS_SKIKO_RENDER_API` (`e3f96d73`) | A/B the *Compose host's* backend without a rebuild; unset by default |
 
-**Not ported — Lite's engine switch set predates BossConsole's flag audit.** Taking it
+**Not ported - Lite's engine switch set predates BossConsole's flag audit.** Taking it
 wholesale would have regressed both security and Linux:
 
 | Lite carries | Why it is not taken here |
@@ -243,7 +243,7 @@ wholesale would have regressed both security and Linux:
 | `--disk-cache-size` as a switch | BossConsole sets it through `diskCacheSize()`; precedence between the two is unspecified |
 
 Lite also does **not** have `--disable-features=CalculateNativeWinOcclusion`, which
-BossConsole needs on Windows — so the flag debt runs in both directions.
+BossConsole needs on Windows - so the flag debt runs in both directions.
 
 **Also on Lite's branch, not adopted:** tab hibernation, battery-aware throttling,
 AppCDS startup tuning and memory-pressure work. All real, all out of scope for a
@@ -255,7 +255,7 @@ stays on OFF_SCREEN.
 
 ### Lite's independent corroboration
 
-Lite reached the same conclusion by a different measurement — power and memory rather
+Lite reached the same conclusion by a different measurement - power and memory rather
 than throughput. Content-matched A/B, same page, clean 94-sample idle windows
 (commit `6e637198`): idle CPU **0.59 → 0.06 cores (~10x)**, RSS **3095 → 1974 MB
 (-1.1 GB, -36%)**, peak CPU -14%, peak RSS -25%. Two unrelated methods, same answer.
@@ -267,7 +267,7 @@ costs macOS the two-finger swipe-back gesture.
 ## Reproducing
 
 The macOS harness (`../run-all.sh`) shells to `osascript`/`pgrep` and exits on other
-platforms. This directory is the Windows counterpart. It needs **only a JDK** —
+platforms. This directory is the Windows counterpart. It needs **only a JDK** -
 single-file Java plus `java.net.http`'s WebSocket client, because this machine had no
 Node, Python, or Deno.
 
@@ -292,7 +292,7 @@ java -cp out SpeedometerCdp --name Edge `
 | `Json.java` | Minimal JSON reader/writer, so the harness needs no dependency |
 | `run-boss-arm.ps1` | One Chromium-switch arm against the fluck tab, N repeats, fresh app each time |
 | `run-paired-rendering.ps1` | Interleaved OFF_SCREEN vs HARDWARE_ACCELERATED |
-| `run-paired-builds.ps1` | Interleaved A/B between two already-built distributions — for "did this commit cost performance?" without a rebuild between every run |
+| `run-paired-builds.ps1` | Interleaved A/B between two already-built distributions - for "did this commit cost performance?" without a rebuild between every run |
 | `launch-dev.ps1` | Launch the worktree build as an isolated dev instance for manual checking (`-RenderingMode` to A/B by hand) |
 | `screen-arms.ps1` | Fast single-run triage of several switch sets |
 | `compare-suites.ps1` | Per-metric Sync/Async diff between two result files |
@@ -303,7 +303,7 @@ java -cp out SpeedometerCdp --name Edge `
 | `keyinput-test.html` | Records `keydown` into `window.__keys`, for checking that keyboard input still reaches the page |
 
 `SpeedometerCdp --eval <port> --expr "<js>"` evaluates one expression in the first
-page target — used to mark a page, drive real input from outside the app, then check
+page target - used to mark a page, drive real input from outside the app, then check
 what the page saw.
 
 ### Things that will bite you
@@ -312,8 +312,8 @@ what the page saw.
   unless set: an open DevTools port is full control of the browser profile (cookies,
   session tokens) for any local process, with no prompt. Unset it when done.
 - **Workspaces are shared between dev mode and the real install**
-  (`~/Documents/BOSS/workspaces`), so a `BOSS_DEV_MODE=true` run restores — and
-  overwrites — the operator's "Last Session". `run-boss-arm.ps1` backs it up once and
+  (`~/Documents/BOSS/workspaces`), so a `BOSS_DEV_MODE=true` run restores - and
+  overwrites - the operator's "Last Session". `run-boss-arm.ps1` backs it up once and
   forces a known single-browser-tab layout; `restore-last-session.ps1` undoes it.
 - **`BOSS_DEV_MODE=true` alone forces logging to DEBUG**
   (`BossLogger.configureFromEnvironment`), which measures the app doing work a
@@ -325,8 +325,8 @@ what the page saw.
 - **The fluck viewport here is 1202x602, under Speedometer's 850x650 minimum on
   height** (BOSS chrome plus a 1280x800 logical screen). Speedometer still reports
   `valid: true`, but these absolute numbers should not be compared to published
-  browserbench figures — only to each other.
-- **Run-to-run spread on one fixed configuration is large** — 7.5 to 11.5 under load,
+  browserbench figures - only to each other.
+- **Run-to-run spread on one fixed configuration is large** - 7.5 to 11.5 under load,
   18.8 to 23.8 when quiet, both on unchanged builds. Single runs are triage only, and
   a sequential A-then-B comparison is worthless: use `run-paired-rendering.ps1` or
   `run-paired-builds.ps1` and read the per-pair ratio.

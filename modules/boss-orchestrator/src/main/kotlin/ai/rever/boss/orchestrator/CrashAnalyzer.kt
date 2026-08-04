@@ -71,7 +71,7 @@ class CrashAnalyzer {
 
             "StackOverflowError" in errorType || "StackOverflowError" in stackTrace -> {
                 DiagnosticResult(
-                    rootCause = "Stack overflow — possible infinite recursion",
+                    rootCause = "Stack overflow - possible infinite recursion",
                     strategy = RepairStrategy.REPAIR_STRATEGY_RESTART,
                     confidence = Confidence.MEDIUM,
                 )
@@ -79,7 +79,7 @@ class CrashAnalyzer {
 
             "NoClassDefFoundError" in errorType || "NoClassDefFoundError" in stackTrace -> {
                 DiagnosticResult(
-                    rootCause = "Class definition not found — possible classpath issue",
+                    rootCause = "Class definition not found - possible classpath issue",
                     strategy = RepairStrategy.REPAIR_STRATEGY_ESCALATE,
                     confidence = Confidence.HIGH,
                     suggestedFix = "Verify process classpath and dependencies",

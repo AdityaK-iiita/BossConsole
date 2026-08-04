@@ -572,7 +572,7 @@ class DynamicPluginLoaderImpl(
             }
             logger.warn(
                 LogCategory.SYSTEM,
-                "Plugin has no store signature — allowing for now, will be rejected once signature enforcement is enabled",
+                "Plugin has no store signature - allowing for now, will be rejected once signature enforcement is enabled",
                 mapOf(
                     "pluginId" to manifest.pluginId,
                     "version" to manifest.version,
@@ -597,7 +597,7 @@ class DynamicPluginLoaderImpl(
             // say so, since the JAR looks installed but never loads.
             logger.error(
                 LogCategory.SYSTEM,
-                "Plugin signature verification failed — plugin will NOT load and will keep being rejected until it is reinstalled or removed",
+                "Plugin signature verification failed - plugin will NOT load and will keep being rejected until it is reinstalled or removed",
                 mapOf(
                     "pluginId" to manifest.pluginId,
                     "version" to manifest.version,

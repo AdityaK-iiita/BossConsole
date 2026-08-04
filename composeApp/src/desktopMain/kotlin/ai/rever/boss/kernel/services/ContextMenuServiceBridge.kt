@@ -48,7 +48,7 @@ class ContextMenuServiceBridge : ContextMenuServiceGrpcKt.ContextMenuServiceCoro
     override suspend fun registerContextMenu(request: RegisterContextMenuRequest): Empty {
         logger.debug(
             LogCategory.SYSTEM,
-            "Dropping context menu registration — the host does not render out-of-process context menus (issue #30)",
+            "Dropping context menu registration - the host does not render out-of-process context menus (issue #30)",
             mapOf(
                 "contextMenuId" to request.contextMenuId,
                 "nodeId" to request.nodeId,
@@ -61,7 +61,7 @@ class ContextMenuServiceBridge : ContextMenuServiceGrpcKt.ContextMenuServiceCoro
     override suspend fun unregisterContextMenu(request: ContextMenuIdRequest): Empty {
         logger.debug(
             LogCategory.SYSTEM,
-            "Ignoring context menu unregistration — nothing was registered",
+            "Ignoring context menu unregistration - nothing was registered",
             mapOf("contextMenuId" to request.contextMenuId),
         )
         return Empty.getDefaultInstance()
@@ -73,7 +73,7 @@ class ContextMenuServiceBridge : ContextMenuServiceGrpcKt.ContextMenuServiceCoro
         // why the kernel cannot route it anywhere.
         logger.debug(
             LogCategory.SYSTEM,
-            "Ignoring context menu action — the host renders no out-of-process context menus",
+            "Ignoring context menu action - the host renders no out-of-process context menus",
             mapOf("contextMenuId" to request.contextMenuId, "actionId" to request.actionId),
         )
         return Empty.getDefaultInstance()

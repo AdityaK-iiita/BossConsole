@@ -198,15 +198,15 @@ printf '%s' "$rows_out"
 echo ""
 
 if [[ "$IS_PRERELEASE" == true ]]; then
-  echo "**Always latest** — newest release including pre-releases, resolved server-side, so"
+  echo "**Always latest** - newest release including pre-releases, resolved server-side, so"
 else
-  echo "**Always latest** — newest stable release, resolved server-side, so these stay"
+  echo "**Always latest** - newest stable release, resolved server-side, so these stay"
 fi
 echo "correct in a bookmark and need no API key:"
 echo ""
 echo "${latest_out% · }"
 echo ""
-echo "Release metadata — version, every asset, sha256 checksums — is at [?app=boss](${LATEST_API})."
+echo "Release metadata - version, every asset, sha256 checksums - is at [?app=boss](${LATEST_API})."
 
 # Report drops on stderr: an omitted row is invisible in the output, and
 # "the ARM64 build failed" must not read as "this release has no ARM64".

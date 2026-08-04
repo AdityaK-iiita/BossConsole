@@ -56,7 +56,7 @@ object PluginSignatureEnforcement {
                     if (warnedValue.getAndSet(raw) != raw) {
                         logger.warn(
                             LogCategory.SYSTEM,
-                            "Unrecognized plugin-signature enforcement flag value — flag IGNORED, falling back to default (enforcement ${if (DEFAULT) "ON" else "OFF"})",
+                            "Unrecognized plugin-signature enforcement flag value - flag IGNORED, falling back to default (enforcement ${if (DEFAULT) "ON" else "OFF"})",
                             mapOf(
                                 "value" to raw,
                             ),

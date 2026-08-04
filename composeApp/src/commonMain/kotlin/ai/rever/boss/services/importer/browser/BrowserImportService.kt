@@ -23,12 +23,12 @@ object BrowserImportService {
 
     /** Shown when a browser's passwords can't be read on this platform. */
     private const val FIREFOX_PASSWORD_NOTE =
-        "Firefox passwords need its own export — use Passwords ▸ Export Logins, then import the CSV."
+        "Firefox passwords need its own export - use Passwords ▸ Export Logins, then import the CSV."
     private const val SAFARI_PASSWORD_NOTE =
         "Safari keeps passwords in the login keychain, which asks per item. Use File ▸ Export ▸ Passwords, " +
             "then import the CSV."
     private const val UNREADABLE_PASSWORD_NOTE =
-        "Saved passwords couldn't be read — the browser may be running, or its database may have moved."
+        "Saved passwords couldn't be read - the browser may be running, or its database may have moved."
     private const val WINDOWS_PASSWORD_NOTE =
         "Saved passwords can't be read on Windows yet. Export a CSV from the browser instead."
 
@@ -155,7 +155,7 @@ object BrowserImportService {
             // the keychain-service-name bug.
             val sealedNote =
                 if (read.undecryptable > 0) {
-                    "${read.undecryptable} saved passwords could not be decrypted — they are likely sealed by " +
+                    "${read.undecryptable} saved passwords could not be decrypted - they are likely sealed by " +
                         "your desktop keyring. Export a CSV from the browser to import those."
                 } else {
                     null

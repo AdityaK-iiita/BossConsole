@@ -71,7 +71,7 @@ fun main() {
                         .setFailurePattern(".*IOException.*broken.pipe.*")
                         .setSeverity(FailureSeverity.FAILURE_SEVERITY_TRANSIENT)
                         .setRepairStrategy(RepairStrategy.REPAIR_STRATEGY_RESTART)
-                        .setDescription("PTY pipe disconnected — terminal sessions dropped")
+                        .setDescription("PTY pipe disconnected - terminal sessions dropped")
                         .setSuggestedFix("Restart terminal service; active sessions will need to be recreated")
                         .build(),
                     RepairHint

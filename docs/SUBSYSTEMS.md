@@ -22,7 +22,7 @@ This document covers the core subsystems of BOSS Console.
 
 **Server-side ceremony verification** (`supabase/functions/passkey/`):
 
-The relying party — not the browser — is responsible for these checks, and the
+The relying party - not the browser - is responsible for these checks, and the
 edge function performs all of them on every ceremony:
 
 | Check | Where |
@@ -32,7 +32,7 @@ edge function performs all of them on every ceremony:
 | `authData.rpIdHash` is `SHA-256` of an allowed RP ID (pinned to `user_passkeys.rp_id` once recorded) | `utils/webauthn.ts` → `matchRpIdHash` |
 | User Present flag is set | both services |
 | Signature counter advances, written compare-and-set (authenticators that always report 0 are tolerated) | `utils/webauthn.ts` → `evaluateSignCounter`, `utils/database.ts` → `recordPasskeyUse` |
-| Signature verifies for the credential's algorithm — ES256 and RS256 | `utils/crypto.ts` → `verifySignature` |
+| Signature verifies for the credential's algorithm - ES256 and RS256 | `utils/crypto.ts` → `verifySignature` |
 | Origin is in `ALLOWED_ORIGINS` | route **and** service layer |
 | Ceremony principal binding: challenge ↔ user, credential ↔ challenge, attested ↔ stored credential id | both services |
 | Enrolment is bound to a verified caller, never to a body `userId` | `utils/authorization.ts` + `routes/register.ts` |
@@ -44,7 +44,7 @@ one flow here that requires an existing session:
 
 - `POST /register/challenge` **requires** `Authorization: Bearer <user access token>`.
   The challenge row is bound to that verified identity. A `userId` in the body is
-  optional and may only agree with the token — a mismatch is a 403.
+  optional and may only agree with the token - a mismatch is a 403.
 - `POST /register/complete` derives the enrolling user from that challenge row.
   A bearer token is verified and cross-checked when present, but is not required:
   the cross-device page runs in a phone browser that holds no session of ours, and
@@ -55,18 +55,18 @@ one flow here that requires an existing session:
 - `POST /manage/list|delete|update` require the same verified session and act on
   the caller's own credentials. They run against the service-role client, so a
   body `userId` would otherwise let anyone enumerate and disable another
-  account's passkeys — de-enrolment, and a forced downgrade to email sign-in.
+  account's passkeys - de-enrolment, and a forced downgrade to email sign-in.
 - The relying party for a registration comes from the server (`/register/challenge`
   returns `rpId`), and the `rpId` query parameter on the mobile pages is validated
   against the allow-list. Two sources of truth here produce a credential pinned to
   one RP ID while later assertions advertise another: permanently unusable, and
   invisible until the next login.
 
-**Bootstrap — the first passkey.** There is no chicken-and-egg problem: passkey
+**Bootstrap - the first passkey.** There is no chicken-and-egg problem: passkey
 enrolment is reached from Settings → Security in an already-authenticated app.
 A new user signs in by email magic link / OTP (`EmailAuthService`), which
 establishes a normal Supabase session, and enrols their first passkey from it.
-Passkey *authentication* (`/auth/*`) stays unauthenticated by design — it is how a
+Passkey *authentication* (`/auth/*`) stays unauthenticated by design - it is how a
 session is obtained in the first place.
 
 All transport payloads are decoded with `utils/base64.ts` → `decodeBase64Any`,
@@ -75,9 +75,9 @@ one alphabet produces failures that depend on the bytes of the individual
 ceremony.
 
 **Environment**:
-- `PASSKEY_RP_ID` — **required in hosted deployments.** RP ID for ceremonies. The fallback derives it from `SUPABASE_URL`, which inside the edge runtime is the internal `kong` gateway and maps to `localhost` — not what the browser uses.
-- `PASSKEY_RP_ID_ALIASES` — comma-separated additional RP IDs accepted during verification
-- `PASSKEY_ALLOW_LOCALHOST` — set to `true` only for local development. Loopback RP IDs (`localhost`, `127.0.0.1`, `::1`) are rejected without it, since `localhost` is whatever host the client runs on rather than a BOSS-owned domain. A loopback `SUPABASE_URL` also counts as local.
+- `PASSKEY_RP_ID` - **required in hosted deployments.** RP ID for ceremonies. The fallback derives it from `SUPABASE_URL`, which inside the edge runtime is the internal `kong` gateway and maps to `localhost` - not what the browser uses.
+- `PASSKEY_RP_ID_ALIASES` - comma-separated additional RP IDs accepted during verification
+- `PASSKEY_ALLOW_LOCALHOST` - set to `true` only for local development. Loopback RP IDs (`localhost`, `127.0.0.1`, `::1`) are rejected without it, since `localhost` is whatever host the client runs on rather than a BOSS-owned domain. A loopback `SUPABASE_URL` also counts as local.
 
 The tests are gated by `.github/workflows/edge-functions.yml` (`deno check` + `deno test`, scoped to `supabase/functions`).
 

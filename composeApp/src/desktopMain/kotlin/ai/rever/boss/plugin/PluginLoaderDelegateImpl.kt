@@ -83,7 +83,7 @@ class PluginLoaderDelegateImpl(
             )
             throw IllegalArgumentException(
                 "The Microkernel Runtime is a system component, not a user-installable plugin. " +
-                    "It is managed automatically when Microkernel Mode is enabled — no manual install needed.",
+                    "It is managed automatically when Microkernel Mode is enabled - no manual install needed.",
             )
         }
         return try {

@@ -402,7 +402,7 @@ class RemoteUiSurfaceRegistryTest {
 
         surface.applyUpdate(diffUpdate("after", baseVersion = 9, newVersion = 10))
 
-        assertEquals("after", surface.tree?.label(), "still applied — refusing would freeze the surface")
+        assertEquals("after", surface.tree?.label(), "still applied - refusing would freeze the surface")
         assertEquals(5L, surface.tree?.version, "but the sender's numbering is not adopted")
     }
 

@@ -112,7 +112,7 @@ class BrowserServiceImpl : BrowserServiceGrpcKt.BrowserServiceCoroutineImplBase(
     override suspend fun getPageInfo(request: Empty): PageInfoResponse {
         if (windowStates.size > 1) {
             logger.warn(
-                "getPageInfo called with {} windows tracked — returning first window only; use a window-specific RPC for multi-window support",
+                "getPageInfo called with {} windows tracked - returning first window only; use a window-specific RPC for multi-window support",
                 windowStates.size,
             )
         }

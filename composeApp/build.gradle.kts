@@ -199,7 +199,7 @@ val generateEmbeddedConfig =
             }
             outputFile.get().asFile.apply {
                 parentFile.mkdirs()
-                writer().use { resolved.store(it, "Generated at build time — never commit") }
+                writer().use { resolved.store(it, "Generated at build time - never commit") }
             }
             println(
                 "🔑 Embedded config: " +
@@ -945,7 +945,7 @@ val macOSSigningDisabledProvider: Provider<Boolean> =
             val disabled = envDisabled || (onMac && !available)
             if (onMac && disabled && !envDisabled) {
                 println(
-                    "⚠️  macOS signing identity not found in keychain ('$devId') — building UNSIGNED. Import the cert or set MACOS_DEVELOPER_ID to sign.",
+                    "⚠️  macOS signing identity not found in keychain ('$devId') - building UNSIGNED. Import the cert or set MACOS_DEVELOPER_ID to sign.",
                 )
             }
             disabled

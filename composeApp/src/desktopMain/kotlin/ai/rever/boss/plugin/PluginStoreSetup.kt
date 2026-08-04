@@ -556,7 +556,7 @@ object PluginStoreSetup {
         if (!flag.compareAndSet(false, true)) {
             logger.debug(
                 LogCategory.SYSTEM,
-                "Background update check already in flight — skipping",
+                "Background update check already in flight - skipping",
                 mapOf(
                     "pluginId" to systemPlugin.pluginId,
                 ),
@@ -589,7 +589,7 @@ object PluginStoreSetup {
                     installedVersion == null -> {
                         logger.info(
                             LogCategory.SYSTEM,
-                            "Installed system plugin version unknown — refreshing in background",
+                            "Installed system plugin version unknown - refreshing in background",
                             mapOf(
                                 "pluginId" to systemPlugin.pluginId,
                                 "latestVersion" to latestVersion,
@@ -617,7 +617,7 @@ object PluginStoreSetup {
                         // release is strictly newer (the else branch below).
                         logger.debug(
                             LogCategory.SYSTEM,
-                            "Local system plugin newer than published — keeping local build",
+                            "Local system plugin newer than published - keeping local build",
                             mapOf(
                                 "pluginId" to systemPlugin.pluginId,
                                 "installedVersion" to installedVersion,
@@ -629,7 +629,7 @@ object PluginStoreSetup {
                     else -> {
                         logger.info(
                             LogCategory.SYSTEM,
-                            "Newer system plugin version available — updating in background",
+                            "Newer system plugin version available - updating in background",
                             mapOf(
                                 "pluginId" to systemPlugin.pluginId,
                                 "installedVersion" to installedVersion,
@@ -799,7 +799,7 @@ object PluginStoreSetup {
             // read failure unsign an already-signed JAR.
             logger.warn(
                 LogCategory.SYSTEM,
-                "System plugin left unsigned — could not read or hash the JAR",
+                "System plugin left unsigned - could not read or hash the JAR",
                 mapOf("file" to jarFile.name),
             )
             return
@@ -818,7 +818,7 @@ object PluginStoreSetup {
         if (!stillMatchesResolvedBytes(jarFile, resolvedAgainstSha)) {
             logger.warn(
                 LogCategory.SYSTEM,
-                "System plugin left unsigned — JAR changed while its signature was being fetched",
+                "System plugin left unsigned - JAR changed while its signature was being fetched",
                 mapOf("pluginId" to manifest.pluginId, "version" to manifest.version),
             )
         } else {
@@ -856,7 +856,7 @@ object PluginStoreSetup {
                 if (it == null && info.signature != null) {
                     logger.warn(
                         LogCategory.SYSTEM,
-                        "System plugin left unsigned — GitHub asset differs from the store artifact",
+                        "System plugin left unsigned - GitHub asset differs from the store artifact",
                         mapOf(
                             "pluginId" to pluginId,
                             "version" to version,
@@ -880,7 +880,7 @@ object PluginStoreSetup {
             // by default.
             logger.warn(
                 LogCategory.SYSTEM,
-                "System plugin left unsigned — no store signature available",
+                "System plugin left unsigned - no store signature available",
                 mapOf("pluginId" to pluginId, "version" to version, "error" to e.toString()),
             )
             null
@@ -1162,7 +1162,7 @@ object PluginStoreSetup {
                     tmpFile.delete()
                     logger.warn(
                         LogCategory.SYSTEM,
-                        "Downloaded plugin is IPC-incompatible — keeping existing JAR",
+                        "Downloaded plugin is IPC-incompatible - keeping existing JAR",
                         mapOf(
                             "pluginId" to plugin.pluginId,
                             "minIpcVersion" to minIpc,

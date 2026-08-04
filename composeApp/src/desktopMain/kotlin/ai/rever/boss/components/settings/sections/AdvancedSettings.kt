@@ -234,7 +234,7 @@ private suspend fun writeBossMode(enabled: Boolean) =
         } else {
             // Add after last non-empty line
             lines.add("")
-            lines.add("# Microkernel mode — enables out-of-process plugins, gRPC IPC, and AI self-healing")
+            lines.add("# Microkernel mode - enables out-of-process plugins, gRPC IPC, and AI self-healing")
             lines.add(newLine)
         }
 

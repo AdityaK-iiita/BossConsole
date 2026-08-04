@@ -23,16 +23,16 @@ BOSS (Business Operating System Service) is a desktop application built with Kot
 
 ## Workflow Rules
 
-**IMPORTANT**: Do NOT run `./gradlew run` in a blocking/foreground way just to test — the user runs and tests the app themselves. **Exception:** launching the app **in a dedicated bottom split pane is allowed** (backgrounded so it doesn't wedge the pane).
+**IMPORTANT**: Do NOT run `./gradlew run` in a blocking/foreground way just to test - the user runs and tests the app themselves. **Exception:** launching the app **in a dedicated bottom split pane is allowed** (backgrounded so it doesn't wedge the pane).
 
 ### Running commands in a visible terminal pane
 
-When a terminal MCP server is available, prefer it over the plain `Bash` tool for commands worth showing — it runs in a visible BossTerm pane and still returns stdout/stderr/exit code. Two servers may be present depending on which app hosts the session; use whichever the session's `SessionStart` hook designates:
+When a terminal MCP server is available, prefer it over the plain `Bash` tool for commands worth showing - it runs in a visible BossTerm pane and still returns stdout/stderr/exit code. Two servers may be present depending on which app hosts the session; use whichever the session's `SessionStart` hook designates:
 
-- **`mcp__boss__*`** — exposed by the `terminal-tab` plugin inside BossConsole (e.g. `mcp__boss__run_command`, `run_in_sidebar`).
-- **`mcp__bossterm__*`** — exposed by the standalone BossTerm app.
+- **`mcp__boss__*`** - exposed by the `terminal-tab` plugin inside BossConsole (e.g. `mcp__boss__run_command`, `run_in_sidebar`).
+- **`mcp__bossterm__*`** - exposed by the standalone BossTerm app.
 
-For a bottom split use `panel: horizontal_split`. Reuse a pane across calls by passing back its `pane_id`. Keep plain `Bash` for trivial read-only commands where opening a visible pane is churn. (Do not mix the two servers in one session — they target different app instances.)
+For a bottom split use `panel: horizontal_split`. Reuse a pane across calls by passing back its `pane_id`. Keep plain `Bash` for trivial read-only commands where opening a visible pane is churn. (Do not mix the two servers in one session - they target different app instances.)
 
 ## Architecture
 
@@ -47,12 +47,12 @@ For a bottom split use `panel: horizontal_split`. Reuse a pane across calls by p
   the standalone `boss-microkernel-runtime` repo.
 - **`plugin-platform/`** - Host-side plugin platform / SDK modules
   (`plugin-loader`, `plugin-repository`, `plugin-api-core`, …). This is the
-  infrastructure that loads and runs plugins, **not** the plugins themselves —
+  infrastructure that loads and runs plugins, **not** the plugins themselves -
   those live in the separate `boss_plugins` repo.
 - **`supabase/`** - Database migrations and Edge Functions
 
 ### External Dependencies
-- **BossEditor** (`com.risaboss:bosseditor-compose-desktop`) - Standalone code editor with LSP and PSI support. **Not a host dependency** — bundled privately inside the `editor-tab` plugin, like BossTerm inside `terminal-tab` (see [docs/BOSSEDITOR.md](docs/BOSSEDITOR.md))
+- **BossEditor** (`com.risaboss:bosseditor-compose-desktop`) - Standalone code editor with LSP and PSI support. **Not a host dependency** - bundled privately inside the `editor-tab` plugin, like BossTerm inside `terminal-tab` (see [docs/BOSSEDITOR.md](docs/BOSSEDITOR.md))
 
 ### Key Technologies
 - Kotlin Multiplatform + Compose Multiplatform
@@ -101,6 +101,23 @@ supabase link --project-ref pcnwqamqdnsadranufjv  # First time
   `git config blame.ignoreRevsFile .git-blame-ignore-revs` once per clone so
   `git blame` skips it.
 
+### Prose style: no em-dashes
+
+Write a spaced hyphen (` - `), never an em-dash (U+2014), in anything a person
+reads: docs, READMEs, release notes, commit messages, PR descriptions, UI labels
+and log lines. Existing code **comments** are out of scope and were deliberately
+left alone, so do not sweep them.
+
+(This paragraph names the character by codepoint rather than printing it, because
+the guard below would otherwise flag the rule that defines it.)
+
+This is enforced, not advisory. `build.yml` fails a PR that *adds* an em-dash to
+a doc or a string literal, and `test-release-download-table.sh` asserts the
+generated release-notes table emits none. The rule exists because generated text
+is the main source: `release-notes.yml` has Claude write every release's notes,
+and 343 of this repo's 549 doc em-dashes came from `docs/release-notes/`. The
+guard only looks at added lines, so legacy prose never breaks the build.
+
 ## Logging
 
 Use structured logging via `BossLogger` (SLF4J backend):
@@ -119,12 +136,12 @@ logger.error(LogCategory.NETWORK, "Request failed", error = exception)
 
 **Config**: Set `BOSS_LOG_LEVEL` env var or `boss.log.level` system property (TRACE/DEBUG/INFO/WARN/ERROR)
 
-**Three modules apply the Compose compiler with no Compose code, on purpose** —
+**Three modules apply the Compose compiler with no Compose code, on purpose** -
 `plugin-logging`, `plugin-bookmark-types` and `plugin-workspace-types`.
 `boss-plugin-api` ships this same `ai.rever.boss.plugin.logging` package and *is* a Compose
 project, so its `ComponentLogger` carries the synthetic `$stable` field. This module's copy
 shadows it parent-first inside plugin classloaders, so a plugin that merely holds a
-`ComponentLogger` **property** emits `getstatic ComponentLogger.$stable` — which links against
+`ComponentLogger` **property** emits `getstatic ComponentLogger.$stable` - which links against
 the api jar at build time and is missing at runtime. `BinaryCompatibilityValidator` then rejects
 the *entire* plugin and the host disables it as binary incompatible. That made secret-manager
 1.2.6 and 1.2.7 unloadable on every host. `$stable` was verified (javap, member by member) to be
@@ -132,7 +149,7 @@ the only public difference between the two copies, so emitting it here makes the
 and repairs already-built plugins with no api release.
 
 Scope: diffing every api package the host also bundles found the field missing from **15 classes
-across those three modules** — `ComponentLogger`/`BossLogger`/`LogEntry`/`BossLoggerConfig`/
+across those three modules** - `ComponentLogger`/`BossLogger`/`LogEntry`/`BossLoggerConfig`/
 `LogSanitizer`, `Bookmark`/`BookmarkCollection`/`FavoriteWorkspace`/`WorkspacePanelTarget`, and
 `LayoutWorkspace`/`TabConfig`/`PanelConfig`/`SplitConfig`/`BreadcrumbConfig`/`WorkspaceSerializer`.
 Only `ComponentLogger` had actually bitten us; the data types are more exposed, since plugins hold
@@ -143,20 +160,20 @@ generated field does not, so the published POM stays clean). The other two alrea
 `implementation` for `@Immutable`, so only the compiler plugin was added there.
 
 `LoggingStableFieldTest`, `BookmarkStableFieldTest` and `WorkspaceStableFieldTest` pin this, and
-each module's publish task depends on its own `desktopTest` — co-location alone does *not* put a
+each module's publish task depends on its own `desktopTest` - co-location alone does *not* put a
 test on the publish path. Do not delete them to make a build pass.
 
 The guard is **not** universal: `release.yml` runs only `createDistributable`/`packageDmg`/
 `packageMsi`/`packageDeb`, so app **packaging** never runs these tests. Merges are gated (PR CI
 runs `./gradlew build` → `check` → `allTests`; note a bare `./gradlew test` does *not* cover them,
 because a `jvm("desktop")` target registers `desktopTest`, not `test`), and the Maven publish path
-is now gated — packaging relies on those.
+is now gated - packaging relies on those.
 
 **Publish `plugin-bookmark-types` and `plugin-workspace-types` together.** bookmark-types has
 `implementation(projects.pluginPlatform.pluginWorkspaceTypes)`, so its POM pins the sibling at the
 current project version. `publish-maven-central.yml` takes a free-form `packages` input, and
 dispatching bookmark-types alone would ship a POM requiring a `plugin-workspace-types` version that
-does not exist on Central. `all` is safe — workspace-types publishes first. BossConsole#81 tracks the
+does not exist on Central. `all` is safe - workspace-types publishes first. BossConsole#81 tracks the
 durable guard: diffing public members against the api jar `plugin-api-core` already downloads,
 covering all eight duplicated packages rather than this one field.
 
@@ -187,13 +204,13 @@ covering all eight duplicated packages rather than this one field.
 App registers `boss://` protocol for authentication callbacks from external browsers.
 
 Because the scheme is registered with the OS, a `boss://` link is not evidence
-that the operator asked for anything — any program that can ask the OS to open a
+that the operator asked for anything - any program that can ask the OS to open a
 URL produces the same input. Entry points therefore tag each link with a
 `DeepLinkOrigin`:
 
-- `OPERATOR_CLI` — BOSS's own CLI parsed it out of this process's `argv`
+- `OPERATOR_CLI` - BOSS's own CLI parsed it out of this process's `argv`
   (`createBossCLI`), i.e. arguments passed to the BOSS executable directly.
-- `EXTERNAL` — the OS URL-open handler, a `boss://` argument from the registered
+- `EXTERNAL` - the OS URL-open handler, a `boss://` argument from the registered
   protocol handler, or a forward over the single-instance channel that said so.
   Also the default for an unstated origin, so a new caller that forgets to say
   gets the cautious handling.
@@ -201,8 +218,8 @@ URL produces the same input. Entry points therefore tag each link with a
 Only `boss://terminal?command=` consults it today: an `OPERATOR_CLI` command runs
 as before, anything else is shown to the operator for confirmation first (the
 `boss` shell shim converts to a `boss://` URL and opens it via the OS, so its
-`terminal -c` still works, with one confirmation). Other hosts — including
-`boss://plugin?id=…&action=…` — are unchanged.
+`terminal -c` still works, with one confirmation). Other hosts - including
+`boss://plugin?id=…&action=…` - are unchanged.
 
 **Single-instance channel**: `SingleInstanceManager` publishes
 `~/.boss/run/single-instance` (owner-only) with the channel endpoint and a token

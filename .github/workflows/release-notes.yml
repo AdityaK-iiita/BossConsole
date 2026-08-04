@@ -136,6 +136,10 @@ jobs:
             - Use conventional commit scopes: browser, terminal, tabs, panel, etc.
             - Link PR numbers: (#123)
             - Omit empty sections
+            - Never use an em-dash. Write a spaced hyphen ( - ) instead. These
+              notes are also pushed to app_releases.release_notes and rendered by
+              the in-app update dialog, and this prompt is the project's largest
+              single source of prose, so an em-dash here spreads everywhere.
 
       # Substituted here rather than asked for in the prompt. "The two bodies
       # cannot drift" is only true if nothing can paraphrase, reflow or

@@ -4,7 +4,7 @@
   render the original BOSS Console email. Keep "bossterm://auth/verify" in lockstep with the
   redirect edge function and config.toml additional_redirect_urls. PRODUCTION: paste this file
   into Supabase Dashboard -> Auth -> Email Templates -> Magic Link.
-  (Go-template comment + trailing trim so NOTHING renders before <!DOCTYPE html> — avoids
+  (Go-template comment + trailing trim so NOTHING renders before <!DOCTYPE html> - avoids
   pushing mail clients into quirks mode.)
 */}}{{ $bossterm := eq .RedirectTo "bossterm://auth/verify" -}}
 <!DOCTYPE html>

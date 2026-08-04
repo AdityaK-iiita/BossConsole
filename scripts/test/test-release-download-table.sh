@@ -80,6 +80,11 @@ check "no unresolved shell expansion left in output" "$(grep -c '\${' "$TD/full"
 check "no backticks inside any link label" \
   "$(grep -oE '\[[^]]*\]\(' "$TD/full" | grep -c '`' || true)" "0"
 
+# This output is committed into docs/release-notes and pushed to
+# app_releases.release_notes, so it is the largest single generator of prose in
+# the project. House style is a spaced hyphen, not an em-dash.
+check "emits no em-dashes" "$(grep -c -- '—' "$TD/full" || true)" "0"
+
 echo "== --repo threading (sync-release rewrites private -> public) =="
 run "$TD/priv" --version 9.4.0 --repo risa-labs-inc/BossConsole >/dev/null
 sed 's|risa-labs-inc/BossConsole|risa-labs-inc/BossConsole-Releases|g' "$TD/priv" > "$TD/pub"

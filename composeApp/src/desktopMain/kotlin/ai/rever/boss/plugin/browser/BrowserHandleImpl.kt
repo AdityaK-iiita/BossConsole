@@ -152,7 +152,7 @@ internal fun ContextMenuTarget.toContextMenuInfo(
         // the comment above refuses for http URLs. One line makes it reportable.
         contextMenuLogger.debug(
             LogCategory.BROWSER,
-            "Inline image source too large for a context menu — reporting no image",
+            "Inline image source too large for a context menu - reporting no image",
             mapOf("length" to srcUrl.length.toString(), "cap" to MAX_INLINE_IMAGE_URL_LENGTH.toString()),
         )
     }

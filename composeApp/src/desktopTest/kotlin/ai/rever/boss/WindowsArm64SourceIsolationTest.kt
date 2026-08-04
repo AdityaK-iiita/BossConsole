@@ -84,7 +84,7 @@ class WindowsArm64SourceIsolationTest {
 
         // Deliberately not a skip: a guard that silently passes when it can't see the tree
         // is how this kind of check rots into decoration.
-        assertTrue(scanned.size > 100, "only ${scanned.size} files scanned — the walk is not seeing the source")
+        assertTrue(scanned.size > 100, "only ${scanned.size} files scanned - the walk is not seeing the source")
 
         val offenders =
             scanned
@@ -150,7 +150,7 @@ class WindowsArm64SourceIsolationTest {
                 .map { it.removePrefix("**").removeSuffix("**") }
                 .toSet()
 
-        assertTrue(declared.isNotEmpty(), "found no kotlin.exclude(...) entries — the parse is wrong, not the build")
+        assertTrue(declared.isNotEmpty(), "found no kotlin.exclude(...) entries - the parse is wrong, not the build")
         assertEquals(
             (desktopMainExclusions + desktopTestExclusions + unconditionalExclusions).toSet(),
             declared,

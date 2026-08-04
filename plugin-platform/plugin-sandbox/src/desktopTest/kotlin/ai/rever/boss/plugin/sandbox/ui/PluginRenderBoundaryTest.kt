@@ -170,7 +170,7 @@ class PluginRenderBoundaryTest {
 
         assertNotNull(
             captured.get(),
-            "duplicate keys did not throw here — if Compose stopped treating this as an error " +
+            "duplicate keys did not throw here - if Compose stopped treating this as an error " +
                 "this test needs rewriting, but the boundary is still what contains it",
         )
         assertTrue(siblingDrew.get(), "the rest of the window stopped rendering when the plugin crashed")
@@ -282,7 +282,7 @@ class PluginRenderBoundaryTest {
         assertNotNull(escaped, "an OutOfMemoryError must propagate, not be contained")
         assertTrue(
             generateSequence(escaped) { it.cause }.any { it === fatal },
-            "something else failed — the OutOfMemoryError itself did not propagate",
+            "something else failed - the OutOfMemoryError itself did not propagate",
         )
     }
 

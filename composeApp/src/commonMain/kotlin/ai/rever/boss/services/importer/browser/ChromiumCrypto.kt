@@ -73,7 +73,7 @@ internal object ChromiumCrypto {
 
             BrowserDetector.isWindows -> {
                 throw UnsupportedPlatformException(
-                    "Importing saved passwords from Chromium browsers isn't supported on Windows yet — " +
+                    "Importing saved passwords from Chromium browsers isn't supported on Windows yet - " +
                         "the key is sealed with DPAPI. Export a CSV from the browser instead.",
                 )
             }
@@ -127,7 +127,7 @@ internal object ChromiumCrypto {
                 if (result.stderr.contains("User canceled", ignoreCase = true)) {
                     "Keychain access was denied, so $browserName's passwords can't be read."
                 } else {
-                    "$browserName's encryption key isn't in the keychain — it may never have saved a password."
+                    "$browserName's encryption key isn't in the keychain - it may never have saved a password."
                 },
             )
         }

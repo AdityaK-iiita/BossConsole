@@ -25,7 +25,7 @@ data class BrowserProfile(
 ) {
     /** What to show in the picker. */
     val displayName: String
-        get() = if (profileName.isNullOrBlank()) browserName else "$browserName — $profileName"
+        get() = if (profileName.isNullOrBlank()) browserName else "$browserName - $profileName"
 
     /** Stable identity for selection state. */
     val id: String get() = "$browserName:${profileName.orEmpty()}"

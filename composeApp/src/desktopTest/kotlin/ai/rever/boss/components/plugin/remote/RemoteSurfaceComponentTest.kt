@@ -70,11 +70,11 @@ class RemoteSurfaceComponentTest {
 
         registry.register(TAB, PROCESS).accepted()
         assertIs<SurfaceStream.Bound>(registry.openStream(TAB))
-        tab.updateTitle("Notebook — running")
+        tab.updateTitle("Notebook - running")
         tab.setLoading(true)
 
         assertTrue(tab.connected.value)
-        assertEquals("Notebook — running", tab.title.value)
+        assertEquals("Notebook - running", tab.title.value)
         assertTrue(tab.isLoading.value)
     }
 

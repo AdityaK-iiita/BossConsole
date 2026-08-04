@@ -595,7 +595,7 @@ class DynamicPluginManager(
                 if (installed != null && candidate != null && candidate > installed) {
                     logger.info(
                         LogCategory.SYSTEM,
-                        "Newer api plugin installed — hot-swapping the API layer",
+                        "Newer api plugin installed - hot-swapping the API layer",
                         mapOf(
                             "from" to installed.toString(),
                             "to" to candidate.toString(),
@@ -1469,7 +1469,7 @@ class DynamicPluginManager(
                     }
                     logger.info(
                         LogCategory.SYSTEM,
-                        "Persisted JAR path stale — loading relocated jar",
+                        "Persisted JAR path stale - loading relocated jar",
                         mapOf(
                             "pluginId" to entry.pluginId,
                             "staleJarPath" to entry.jarPath,

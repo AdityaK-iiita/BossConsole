@@ -49,6 +49,29 @@ jobs:
         # deterministic and does not consume credentials.
         run: bash scripts/test/test-jxbrowser-autorelease.sh
 
+      - name: ✍️ No new em-dashes in prose
+        # House style is a spaced hyphen. Scoped to ADDED lines on purpose: the
+        # sweep left code comments alone by design, so a whole-tree check would
+        # fail forever. Comparing against the merge base means a PR is judged on
+        # what it introduces, not on what it inherited.
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          BASE="${{ github.event.pull_request.base.sha }}"
+
+          # Prose and string literals only; code comments are out of scope, and
+          # *.kt is excluded wholesale because a diff cannot tell a comment from
+          # a literal. The generator's own test covers the release-notes path.
+          ADDED=$(git diff "$BASE"...HEAD -- '*.md' '*.html' \
+                  | grep -E '^\+' | grep -v '^+++' | grep -- '—' || true)
+
+          if [[ -n "$ADDED" ]]; then
+            echo "::error::Added lines contain an em-dash. Use a spaced hyphen ( - ) instead."
+            printf '%s\n' "$ADDED" | head -20
+            exit 1
+          fi
+          echo "✅ no em-dashes added"
+
       - name: 🧪 Release download table tests
         # Generates the Downloads section of every release body, which also
         # becomes app_releases.release_notes and is rendered by the in-app update

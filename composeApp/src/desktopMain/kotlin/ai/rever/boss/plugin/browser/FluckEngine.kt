@@ -1078,7 +1078,7 @@ object FluckEngine {
         if (envIsFalse("BOSS_BROWSER_PREWARM")) return
         val profileDir = BossDirectories.resolve(BrowserSettings.currentProfile)
         if (!profileDir.exists()) {
-            logger.debug(LogCategory.BROWSER, "Skipping engine pre-warm — no browser profile on this machine yet")
+            logger.debug(LogCategory.BROWSER, "Skipping engine pre-warm - no browser profile on this machine yet")
             return
         }
         Thread({

@@ -82,7 +82,7 @@ private fun containRenderFault(
 ) {
     logger.error(
         LogCategory.UI,
-        "Unattributed render exception — contained, window kept alive",
+        "Unattributed render exception - contained, window kept alive",
         mapOf(
             "errorType" to throwable.javaClass.simpleName,
             "recentFailures" to policy.recentFailureCount().toString(),
@@ -670,7 +670,7 @@ fun main(args: Array<String>) {
                                 WindowExceptionRoute.Escalate -> {
                                     logger.error(
                                         LogCategory.UI,
-                                        "Render exception is not containable — escalating to the default handler",
+                                        "Render exception is not containable - escalating to the default handler",
                                         mapOf(
                                             "errorType" to throwable.javaClass.simpleName,
                                             "recentFailures" to renderCrashPolicy.recentFailureCount().toString(),

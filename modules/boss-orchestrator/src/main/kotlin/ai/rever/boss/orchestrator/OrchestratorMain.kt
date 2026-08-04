@@ -83,7 +83,7 @@ fun main() {
             if (aiRepair.enabled) {
                 val repairConfig = aiRepairConfigFromEnvironment()
                 logger.warn(
-                    "AI repair ENABLED (endpoint={}, model={}, source root={}) — " +
+                    "AI repair ENABLED (endpoint={}, model={}, source root={}) - " +
                         "crash source files will be sent off this machine",
                     repairConfig.endpoint,
                     repairConfig.model,
@@ -92,7 +92,7 @@ fun main() {
                 HttpAiRepairClient(repairConfig)
             } else {
                 logger.info(
-                    "AI repair disabled (opt-in={}, root named={}, key present={}) — no source leaves this machine",
+                    "AI repair disabled (opt-in={}, root named={}, key present={}) - no source leaves this machine",
                     System.getenv("BOSS_AI_REPAIR") ?: "unset",
                     System.getenv("BOSS_REPAIR_PROJECT_ROOT") != null,
                     !repairApiKey.isNullOrBlank(),

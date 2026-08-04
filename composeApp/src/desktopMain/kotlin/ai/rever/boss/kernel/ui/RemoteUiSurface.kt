@@ -180,7 +180,7 @@ class RemoteUiSurface internal constructor(
      */
     internal fun events(): Flow<UIEvent> {
         check(eventsTaken.compareAndSet(false, true)) {
-            "surface '$surfaceId' already has an event consumer — one StreamUI call per surface"
+            "surface '$surfaceId' already has an event consumer - one StreamUI call per surface"
         }
         return outgoing.consumeAsFlow().onEach { buffered.decrementAndGet() }
     }
@@ -206,7 +206,7 @@ class RemoteUiSurface internal constructor(
             if (total == 1L || total % SHED_LOG_INTERVAL == 0L) {
                 logger.warn(
                     LogCategory.UI,
-                    "Plugin appears not to be reading its UI events — shedding the oldest",
+                    "Plugin appears not to be reading its UI events - shedding the oldest",
                     mapOf("surfaceId" to surfaceId, "processId" to processId, "shedApprox" to total),
                 )
             }
@@ -298,7 +298,7 @@ class RemoteUiSurface internal constructor(
             // A diff is meaningless without the tree it was computed against, and the protocol has no way to
             // ask for a resync — so say so instead of inventing an empty base. Throttled, because a plugin
             // that only ever sends diffs would otherwise log one per update forever.
-            noteMalformed("Dropping a widget diff for a surface with no tree — the plugin must send one first")
+            noteMalformed("Dropping a widget diff for a surface with no tree - the plugin must send one first")
             return
         }
         val stale = diff.baseVersion != 0L && diff.baseVersion != base.version
@@ -310,7 +310,7 @@ class RemoteUiSurface internal constructor(
         if ((stale || decoded.skipped > 0) && diverged.compareAndSet(false, true)) {
             logger.warn(
                 LogCategory.UI,
-                "Widget diff cannot be applied faithfully — this surface's tree may now diverge from the " +
+                "Widget diff cannot be applied faithfully - this surface's tree may now diverge from the " +
                     "plugin's until it sends a full tree",
                 mapOf(
                     "surfaceId" to surfaceId,

@@ -214,7 +214,7 @@ class PluginUIServiceBridge(
                 broken = true
                 logger.warn(
                     LogCategory.UI,
-                    "Plugin widget-update stream ended abnormally — closing the surface",
+                    "Plugin widget-update stream ended abnormally - closing the surface",
                     mapOf("surfaceId" to surface?.surfaceId, "error" to cause.message),
                 )
                 // Whatever the reason — a dead wire, or a failure applying an update — this pump has
@@ -264,7 +264,7 @@ class PluginUIServiceBridge(
         if (occurrences != 1L && occurrences % STRAY_LOG_INTERVAL != 0L) return
         logger.warn(
             LogCategory.UI,
-            "Ignoring a WidgetUpdate for a surface this stream is not bound to — " +
+            "Ignoring a WidgetUpdate for a surface this stream is not bound to - " +
                 "use one StreamUI call per surface",
             mapOf(
                 "streamSurfaceId" to streamSurfaceId,

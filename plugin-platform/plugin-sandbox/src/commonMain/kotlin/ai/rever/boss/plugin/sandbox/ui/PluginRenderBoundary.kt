@@ -133,7 +133,7 @@ internal fun PluginRenderBoundary(
 
         logger.error(
             LogCategory.UI,
-            "Plugin crashed during $phase — containing it and rebuilding the panel",
+            "Plugin crashed during $phase - containing it and rebuilding the panel",
             mapOf(
                 "pluginId" to pluginId,
                 "phase" to phase,

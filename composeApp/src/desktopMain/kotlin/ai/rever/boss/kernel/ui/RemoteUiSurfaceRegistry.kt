@@ -192,7 +192,7 @@ class RemoteUiSurfaceRegistry {
             if (surfaces.replace(surfaceId, blocker, created)) {
                 logger.info(
                     LogCategory.UI,
-                    "Reclaimed an abandoned UI surface for its own process — treating it as a respawn",
+                    "Reclaimed an abandoned UI surface for its own process - treating it as a respawn",
                     mapOf("surfaceId" to surfaceId, "processId" to created.processId),
                 )
                 // No `announceDestroyed`: `abandoned` requires `!blocker.streaming`, and a surface is
@@ -244,7 +244,7 @@ class RemoteUiSurfaceRegistry {
         val surface = surfaces[surfaceId]
         return when {
             surface == null -> {
-                SurfaceStream.Unregistered("surface_id '$surfaceId' is not registered — call RegisterUI first")
+                SurfaceStream.Unregistered("surface_id '$surfaceId' is not registered - call RegisterUI first")
             }
 
             !surface.claimStream() -> {
@@ -306,7 +306,7 @@ class RemoteUiSurfaceRegistry {
             // follow-up discovering it.
             logger.warn(
                 LogCategory.UI,
-                "A second component attached to a surface already being rendered — the first is detached",
+                "A second component attached to a surface already being rendered - the first is detached",
                 mapOf("surfaceId" to surfaceId),
             )
             displaced.onConnectionChanged(false)
