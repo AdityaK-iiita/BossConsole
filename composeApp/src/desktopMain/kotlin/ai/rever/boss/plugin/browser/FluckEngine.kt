@@ -1151,6 +1151,34 @@ object FluckEngine {
 
         val chromiumDir = getChromiumDir()
 
+        // Refuse a mismatched engine with a message that names the cause.
+        //
+        // Left to JxBrowser this surfaces as `UnsatisfiedLinkError: Can't load
+        // library: .../Versions/<x>/Libraries/libtoolkit.dylib` — a path and no
+        // explanation, which cost a full debugging session to trace the first time.
+        // Startup checks the installed version before booting anything, so in the
+        // normal flow this never fires; it exists because that ordering is a
+        // convention a future edit can silently break, and when it does break the
+        // failure should say what is wrong rather than where a file was missing.
+        chromiumVersionMismatch(chromiumDir)?.let { reason ->
+            // The path is logged rather than folded into the message: the message
+            // reaches classifyError, which substring-matches it to choose a remedy.
+            logger.error(
+                LogCategory.BROWSER,
+                "Refusing to start a mismatched browser engine",
+                mapOf("engineDir" to chromiumDir.toString(), "reason" to reason),
+            )
+            // Record before throwing. initializationError is otherwise only set in
+            // createEngineWithProfile's catch, which this throw precedes — so
+            // initError stayed null, getBrowserState swallowed the exception, and
+            // the tab rendered "Could not initialize browser ... window not ready"
+            // instead of the message written here. Assigning it also arms the
+            // attemptCount short-circuit for this failure.
+            val error = IllegalStateException(reason)
+            initializationError = error
+            throw error
+        }
+
         // Create directories if they don't exist
         chromiumDir.toFile().mkdirs()
 
@@ -1184,6 +1212,93 @@ object FluckEngine {
             "BOSS-branded Chromium not found. Please restart the app to trigger auto-download, " +
                 "or manually install to ~/.boss/boss-chromium/",
         )
+    }
+
+    /**
+     * Why the engine at [chromiumDir] cannot serve this build's JxBrowser, or null
+     * if it can.
+     *
+     * JxBrowser loads its native toolkit from
+     * `<executable>.app/Contents/Frameworks/Chromium Framework.framework/Versions/<chromium>/Libraries/`,
+     * where `<chromium>` is [com.teamdev.jxbrowser.VersionInfo.chromiumVersion] — a
+     * value compiled into the jar. So the engine on disk has to carry exactly the
+     * Chromium build this jar was made against; anything else fails at `System.load`
+     * no matter how well-formed the directory is.
+     *
+     * macOS only: the `Versions/<chromium>` layout is specific to the framework
+     * bundle. Elsewhere this makes no claim rather than guessing.
+     */
+    internal fun chromiumVersionMismatch(chromiumDir: java.nio.file.Path): String? =
+        frameworkVersionsDir(chromiumDir)?.let { chromiumMismatchMessage(it) }
+
+    /**
+     * The mismatch message for an already-located `Versions` directory, or null when
+     * it carries the required build.
+     *
+     * Split from the filesystem/OS probing above so the comparison — the part that
+     * decides whether an engine boots — is exercised on every CI leg rather than
+     * only the macOS one.
+     *
+     * Deliberately omits the engine path. This string reaches [classifyError], which
+     * substring-matches the message for "host", "connect", "license" and friends to
+     * pick a remedy; a home directory containing any of those would be classified as
+     * a network or licensing failure and shown the wrong advice. The path is logged
+     * at the throw site instead.
+     */
+    internal fun chromiumMismatchMessage(versionsDir: java.io.File): String? {
+        val required =
+            com.teamdev.jxbrowser.VersionInfo
+                .chromiumVersion()
+        return if (versionsDir.resolve(required).isDirectory) {
+            null
+        } else {
+            val present =
+                versionsDir
+                    .listFiles()
+                    ?.filter { it.isDirectory && it.name != "Current" }
+                    ?.joinToString(", ") { it.name }
+                    ?.ifEmpty { "none" }
+                    ?: "none"
+            "Installed browser engine does not match this build of BOSS. " +
+                "JxBrowser ${com.teamdev.jxbrowser.VersionInfo.version()} needs Chromium $required, " +
+                "but the installed engine provides: $present. " +
+                "Delete the boss-chromium folder in your BOSS data directory and restart " +
+                "to re-download the matching engine."
+        }
+    }
+
+    /**
+     * The framework's `Versions` directory, or null when this isn't a layout we model.
+     *
+     * Every "can't tell" answer is null: refusing to boot on a guess would be a worse
+     * failure than the cryptic error this exists to replace.
+     */
+    private fun frameworkVersionsDir(chromiumDir: java.nio.file.Path): java.io.File? {
+        val isMac =
+            System
+                .getProperty("os.name")
+                .orEmpty()
+                .lowercase()
+                .contains("mac")
+        val executableName =
+            if (!isMac) {
+                null
+            } else {
+                runCatching {
+                    chromiumDir
+                        .resolve("executable.name")
+                        .toFile()
+                        .readText()
+                        .trim()
+                }.getOrNull()
+                    ?.takeIf { it.isNotEmpty() }
+            }
+        return executableName
+            ?.let {
+                chromiumDir
+                    .resolve("$it.app/Contents/Frameworks/Chromium Framework.framework/Versions")
+                    .toFile()
+            }?.takeIf { it.isDirectory }
     }
 
     /**
