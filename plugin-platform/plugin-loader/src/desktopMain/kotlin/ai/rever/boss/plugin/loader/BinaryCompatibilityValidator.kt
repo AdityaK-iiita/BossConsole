@@ -343,7 +343,7 @@ object BinaryCompatibilityValidator {
      */
     internal fun hintFor(fieldName: String): String =
         if (fieldName == "\u0024stable") {
-            " (Compose stability field — the host and boss-plugin-api copies of this class have " +
+            " (Compose stability field - the host and boss-plugin-api copies of this class have " +
                 "diverged: one was compiled with the Compose compiler and one was not. Fix the " +
                 "duplicated class, not the plugin.)"
         } else {

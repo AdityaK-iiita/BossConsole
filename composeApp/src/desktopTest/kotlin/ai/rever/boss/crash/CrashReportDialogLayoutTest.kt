@@ -227,7 +227,7 @@ class CrashReportDialogLayoutTest {
         val gap = footerTop - contentBottom
         assertTrue(
             gap < MAX_FOOTER_GAP,
-            "Footer should follow the content when it fits, but sat ${gap.value}dp below it — " +
+            "Footer should follow the content when it fits, but sat ${gap.value}dp below it - " +
                 "the body is claiming space it does not need (regression to plain weight(1f)?)",
         )
     }
@@ -400,7 +400,7 @@ class CrashReportDialogLayoutTest {
         val delta = ruleBottom - bodyBottom
         assertTrue(
             abs(delta.value) <= RULE_OVERLAY_TOLERANCE.value,
-            "rule ends ${delta.value}dp from the body's bottom edge — expected it flush with it; " +
+            "rule ends ${delta.value}dp from the body's bottom edge - expected it flush with it; " +
                 "below means a sibling consuming layout height, above means it is not at the edge",
         )
     }

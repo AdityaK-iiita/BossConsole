@@ -270,9 +270,9 @@ object SelfHealingSettingsManager {
             _currentSettings.value =
                 json.decodeFromString(SelfHealingSettingsData.serializer(), settingsFile.readText())
         } catch (e: SerializationException) {
-            logger.warn(LogCategory.SYSTEM, "Unreadable self-healing settings — using defaults", error = e)
+            logger.warn(LogCategory.SYSTEM, "Unreadable self-healing settings - using defaults", error = e)
         } catch (e: IOException) {
-            logger.warn(LogCategory.SYSTEM, "Could not load self-healing settings — using defaults", error = e)
+            logger.warn(LogCategory.SYSTEM, "Could not load self-healing settings - using defaults", error = e)
         }
     }
 

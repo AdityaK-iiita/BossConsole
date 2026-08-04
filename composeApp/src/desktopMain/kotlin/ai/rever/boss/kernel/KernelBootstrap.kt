@@ -237,7 +237,7 @@ class KernelBootstrap(
      */
     fun initialize() {
         if (mode == ProcessMode.MONOLITH) {
-            logger.info("Running in MONOLITH mode — microkernel infrastructure disabled")
+            logger.info("Running in MONOLITH mode - microkernel infrastructure disabled")
             return
         }
 
@@ -381,7 +381,7 @@ class KernelBootstrap(
         }
 
         logger.info(
-            "Repair advice for {}: strategy={} approval={} — {}",
+            "Repair advice for {}: strategy={} approval={} - {}",
             failure.processId,
             action.strategy,
             action.requiresUserApproval,
@@ -433,7 +433,7 @@ class KernelBootstrap(
             withTimeoutOrNull(REPAIR_ADVICE_TIMEOUT_MS) { stub.reportFailure(report) }
                 ?: run {
                     logger.warn(
-                        "Orchestrator did not answer within {}ms for {} — recovering without advice",
+                        "Orchestrator did not answer within {}ms for {} - recovering without advice",
                         REPAIR_ADVICE_TIMEOUT_MS,
                         failure.processId,
                     )
@@ -441,7 +441,7 @@ class KernelBootstrap(
                 }
         } catch (e: Exception) {
             logger.warn(
-                "Could not reach the orchestrator for {} ({}) — recovering without advice",
+                "Could not reach the orchestrator for {} ({}) - recovering without advice",
                 failure.processId,
                 e.message,
             )
@@ -706,7 +706,7 @@ class KernelBootstrap(
             }
         } else {
             logger.info(
-                "Service JAR not found for {} at {} — skipping spawn (build fat JARs first)",
+                "Service JAR not found for {} at {} - skipping spawn (build fat JARs first)",
                 config.processId,
                 jarPath,
             )

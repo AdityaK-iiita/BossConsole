@@ -50,7 +50,7 @@ This document outlines how to set up code signing certificates and configure Git
 #### `MACOS_PROVISIONING_PROFILE_B64`
 - **Format**: Base64-encoded `.provisionprofile` file
 - **Description**: Apple Developer ID provisioning profile for the branded
-  browser's Touch ID keychain entitlement. Not committed to the repo — the
+  browser's Touch ID keychain entitlement. Not committed to the repo - the
   chromium-branding workflow restores it from this secret. Optional: without
   it, Touch ID signing is skipped.
 - **How to generate**: `base64 -i boss-browser.provisionprofile | pbcopy`

@@ -206,7 +206,7 @@ class ChromiumVersionMismatchTest {
         } else {
             assertNull(
                 FluckEngine.chromiumVersionMismatch(stale),
-                "Off macOS the predicate cannot tell — which is exactly why the cache " +
+                "Off macOS the predicate cannot tell - which is exactly why the cache " +
                     "candidate must be gated on isChromiumInstalled() instead",
             )
         }

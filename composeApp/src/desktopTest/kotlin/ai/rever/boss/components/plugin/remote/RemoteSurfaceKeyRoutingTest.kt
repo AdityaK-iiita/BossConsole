@@ -54,7 +54,7 @@ class RemoteSurfaceKeyRoutingTest {
 
         assertNotNull(
             KeymapMatcher(preset).match(event, ShortcutContext.GLOBAL),
-            "the host keymap must still claim ${binding.displayString()} — otherwise this asserts nothing",
+            "the host keymap must still claim ${binding.displayString()} - otherwise this asserts nothing",
         )
         assertNull(
             event.toForwardedKey(KeymapMatcher(preset)),
@@ -162,7 +162,7 @@ class RemoteSurfaceKeyRoutingTest {
         val event = keyDown(AwtKeyEvent.VK_T, primary = true)
 
         assertNull(event.toForwardedKey(enabled), "enabled, the host claims it")
-        assertNotNull(event.toForwardedKey(disabled), "disabled, the host does not act on it — the plugin may have it")
+        assertNotNull(event.toForwardedKey(disabled), "disabled, the host does not act on it - the plugin may have it")
     }
 
     /**

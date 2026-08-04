@@ -220,7 +220,7 @@ Deno.test("open issue with same signature gets a comment, not a duplicate", asyn
   }
 })
 
-Deno.test("closed issue does not swallow the report — a new issue is created", async () => {
+Deno.test("closed issue does not swallow the report - a new issue is created", async () => {
   const stub = stubFetch({
     existingIssues: [{
       number: 7,
@@ -447,7 +447,7 @@ Deno.test("rotating the leftmost XFF entry does not evade the rate limit", async
   }
 })
 
-Deno.test("allowRequest window slides — old entries expire", () => {
+Deno.test("allowRequest window slides - old entries expire", () => {
   resetRateLimiter()
   const base = 1_000_000_000
   for (let i = 0; i < 20; i++) assert(allowRequest("ip-a", base + i))

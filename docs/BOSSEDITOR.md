@@ -6,7 +6,7 @@ BossEditor is the code editor library providing IDE-like editor features in BOSS
 **Maven Artifact**: `com.risaboss:bosseditor-compose-desktop`
 **Dependency**: **Not a host dependency.** The `editor-tab` plugin bundles
 BossEditor (and its `kotlin-compiler-embeddable` PSI stack) privately inside its
-own JAR — the same arrangement as BossTerm inside `terminal-tab`. The plugin's
+own JAR - the same arrangement as BossTerm inside `terminal-tab`. The plugin's
 classloader resolves `ai.rever.bosseditor.*` child-first from the plugin JAR
 while sharing the host's Compose runtime via parent delegation. Bumping
 BossEditor only requires re-releasing the plugin, not BossConsole.

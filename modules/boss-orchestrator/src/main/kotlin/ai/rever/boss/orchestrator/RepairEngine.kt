@@ -148,7 +148,7 @@ class RepairEngine(
             }
 
             RepairStrategy.REPAIR_STRATEGY_PATCH_CONFIG -> {
-                logger.info("Config patch for process {} — consulting AI client", processId)
+                logger.info("Config patch for process {} - consulting AI client", processId)
 
                 val aiProposal =
                     aiClient?.proposeConfigFix(
@@ -167,7 +167,7 @@ class RepairEngine(
             }
 
             RepairStrategy.REPAIR_STRATEGY_PATCH_SOURCE -> {
-                logger.info("Source patch for process {} — consulting AI client", processId)
+                logger.info("Source patch for process {} - consulting AI client", processId)
 
                 val sourceFiles = readSourceFiles(manifest)
                 val aiProposal =
@@ -180,7 +180,7 @@ class RepairEngine(
 
                 val diff =
                     aiProposal?.toSummary()
-                        ?: "// AI analysis unavailable — manual review required for: ${diagnostic.rootCause}"
+                        ?: "// AI analysis unavailable - manual review required for: ${diagnostic.rootCause}"
 
                 RepairOutcome.CodeFixProposed(processId, diff)
             }
@@ -260,7 +260,7 @@ class RepairEngine(
             when {
                 confined == null -> {
                     logger.warn(
-                        "Manifest source file {} is outside the roots {} this process reads from — dropped",
+                        "Manifest source file {} is outside the roots {} this process reads from - dropped",
                         declaredPath,
                         sourceRoots.rootPaths().ifEmpty { listOf("(none)") },
                     )

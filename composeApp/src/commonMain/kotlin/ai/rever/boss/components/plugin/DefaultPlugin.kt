@@ -345,7 +345,7 @@ class DefaultPlugin(
         if (oopSpawner != null) {
             logger.info(LogCategory.SYSTEM, "OutOfProcessPluginSpawner created successfully")
         } else {
-            logger.warn(LogCategory.SYSTEM, "OutOfProcessPluginSpawner is null — OOP plugins will run in-process")
+            logger.warn(LogCategory.SYSTEM, "OutOfProcessPluginSpawner is null - OOP plugins will run in-process")
         }
 
         val manager =
@@ -1135,7 +1135,7 @@ class DefaultPlugin(
             val getInstance = companionCls.getMethod("getInstance")
             val kernelBootstrap =
                 getInstance.invoke(companion) ?: run {
-                    logger.info(LogCategory.SYSTEM, "KernelBootstrap not yet initialized — skipping service registration")
+                    logger.info(LogCategory.SYSTEM, "KernelBootstrap not yet initialized - skipping service registration")
                     return
                 }
 
@@ -1187,7 +1187,7 @@ class DefaultPlugin(
             // registered, so every OOP plugin loses its providers. Loud on purpose.
             logger.error(
                 LogCategory.SYSTEM,
-                "KernelBootstrap.registerPluginServices signature drifted — no out-of-process " +
+                "KernelBootstrap.registerPluginServices signature drifted - no out-of-process " +
                     "plugin gRPC services were registered; fix the reflective lookup in DefaultPlugin",
                 error = e,
             )

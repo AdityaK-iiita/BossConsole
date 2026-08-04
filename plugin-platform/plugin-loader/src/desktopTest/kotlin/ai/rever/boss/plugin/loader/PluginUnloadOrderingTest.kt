@@ -85,7 +85,7 @@ class PluginUnloadOrderingTest {
             assertEquals(
                 ClassLoaderState.ACTIVE,
                 UnloadOrderProbe.stateAtDispose,
-                "dispose() must run before the classloader is marked for unload — the refusal " +
+                "dispose() must run before the classloader is marked for unload - the refusal " +
                     "in PluginClassLoader.loadClassChildFirst assumes it",
             )
         }

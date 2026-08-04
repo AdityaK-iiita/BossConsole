@@ -2,7 +2,7 @@
 
 Host-side plugin platform (SDK + loader/runtime) that lets BOSS load and run
 plugins. This directory holds the **infrastructure**, not the plugins
-themselves — shippable plugins live in the separate `boss_plugins` repo.
+themselves - shippable plugins live in the separate `boss_plugins` repo.
 
 ## Architecture
 

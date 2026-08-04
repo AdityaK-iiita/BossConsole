@@ -79,7 +79,7 @@ class PluginInstallService(
                     if (plugin.id == ai.rever.boss.components.plugin.MicrokernelRuntime.PLUGIN_ID) {
                         logger.info(
                             LogCategory.SYSTEM,
-                            "Wizard skipping microkernel runtime — auto-managed by host",
+                            "Wizard skipping microkernel runtime - auto-managed by host",
                             mapOf(
                                 "pluginId" to plugin.id,
                             ),

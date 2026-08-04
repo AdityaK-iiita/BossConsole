@@ -155,7 +155,7 @@ class HttpAiRepairClient(
         errorMessage: String,
     ): SourceFixProposal? {
         if (apiKey.isBlank()) {
-            logger.warn("AI_REPAIR_API_KEY not set — skipping AI source-fix proposal")
+            logger.warn("AI_REPAIR_API_KEY not set - skipping AI source-fix proposal")
             return null
         }
 
@@ -182,7 +182,7 @@ class HttpAiRepairClient(
                 }
                 appendLine()
                 appendLine(
-                    "Respond with ONLY a valid JSON object — no markdown, no explanation outside JSON:" +
+                    "Respond with ONLY a valid JSON object - no markdown, no explanation outside JSON:" +
                         """{"explanation":"<why this fix works>","patches":[{"filePath":"<path>","description":"<what changed>","originalSnippet":"<exact lines to replace>","patchedSnippet":"<replacement lines>"}]}""",
                 )
                 appendLine("Return an empty patches array if no code change is needed.")
@@ -204,7 +204,7 @@ class HttpAiRepairClient(
         errorMessage: String,
     ): ConfigFixProposal? {
         if (apiKey.isBlank()) {
-            logger.warn("AI_REPAIR_API_KEY not set — skipping AI config-fix proposal")
+            logger.warn("AI_REPAIR_API_KEY not set - skipping AI config-fix proposal")
             return null
         }
 
@@ -218,7 +218,7 @@ class HttpAiRepairClient(
                 suggestedFix?.let { appendLine("Initial Suggestion: $it") }
                 appendLine()
                 appendLine(
-                    "Respond with ONLY a valid JSON object — no markdown:" +
+                    "Respond with ONLY a valid JSON object - no markdown:" +
                         """{"explanation":"<reasoning>","configChanges":{"KEY":"value"}}""",
                 )
                 appendLine("Return an empty configChanges object if no configuration change is needed.")

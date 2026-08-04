@@ -606,7 +606,7 @@
     <ID>MaxLineLength:DefaultPlugin.kt$DefaultKeyboardShortcutProvider$override fun getShortcutsByCategory(category: String): List&lt;KeyboardShortcutInfo&gt;</ID>
     <ID>MaxLineLength:DefaultPlugin.kt$DefaultPlugin$(dirsCls2.getMethod("getRootDir").invoke(dirsInst2) as java.io.File).absolutePath</ID>
     <ID>MaxLineLength:DefaultPlugin.kt$DefaultPlugin$// Skip microkernel runtime — it's a classpath dependency for OOP plugins, not a loadable plugin</ID>
-    <ID>MaxLineLength:DefaultPlugin.kt$DefaultPlugin$logger.info(LogCategory.SYSTEM, "KernelBootstrap not yet initialized — skipping service registration")</ID>
+    <ID>MaxLineLength:DefaultPlugin.kt$DefaultPlugin$logger.info(LogCategory.SYSTEM, "KernelBootstrap not yet initialized - skipping service registration")</ID>
     <ID>MaxLineLength:DefaultPlugin.kt$DefaultPlugin$logger.info(LogCategory.SYSTEM, "OOP spawner: BOSS_MODE resolved", mapOf("bossMode" to (bossMode ?: "null")))</ID>
     <ID>MaxLineLength:DefaultPlugin.kt$DefaultPlugin$logger.warn(LogCategory.SYSTEM, "OOP spawner: ConfigLoader failed", mapOf("error" to e.toString()))</ID>
     <ID>MaxLineLength:DefaultPlugin.kt$DefaultPlugin$logger.warn(LogCategory.SYSTEM, "OOP spawner: kernel addr failed", mapOf("error" to e.toString()))</ID>
@@ -652,7 +652,7 @@
     <ID>MaxLineLength:DownloadServiceBridge.kt$DownloadServiceBridge$override suspend fun pauseDownload(request: DownloadIdRequest): OperationResult</ID>
     <ID>MaxLineLength:DownloadSettings.kt$downloadSettingsLogger.debug(LogCategory.BROWSER, "Could not read XDG user-dirs config", mapOf("error" to (e.message ?: "Unknown")))</ID>
     <ID>MaxLineLength:DraggableActionButton.kt$// Only update state if the position actually changed to avoid redundant recompositions/effect triggers</ID>
-    <ID>MaxLineLength:EditableKeymapSettings.kt$description = spec.displayName + (spec.description.takeIf { it.isNotBlank() }?.let { " — $it" } ?: "")</ID>
+    <ID>MaxLineLength:EditableKeymapSettings.kt$description = spec.displayName + (spec.description.takeIf { it.isNotBlank() }?.let { " - $it" } ?: "")</ID>
     <ID>MaxLineLength:EmailAuthService.kt$EmailAuthService$logger.warn(LogCategory.AUTH, "Magic link sending failed", mapOf("exceptionType" to e.javaClass.simpleName), error = e)</ID>
     <ID>MaxLineLength:EmptyContentScreen.kt$Text("Welcome to BOSS", color = BossTheme.colors.textPrimary, fontSize = 28.sp, fontWeight = FontWeight.Bold)</ID>
     <ID>MaxLineLength:EvolverContractTest.kt$EvolverContractTest$private</ID>

@@ -113,7 +113,7 @@ object BossThemes {
         BossAppTheme(
             id = "operator",
             name = "Operator",
-            blurb = "Amber signal on ink — the default",
+            blurb = "Amber signal on ink - the default",
             isLight = false,
             colors = BossDarkColorScheme,
             material = darkMaterial(BossDarkColorScheme),

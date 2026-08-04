@@ -80,7 +80,7 @@ class PluginRenderRecoveryTest {
         assertEquals(setOf("plugin.a"), outcome.plugins)
         assertTrue(
             PluginCrashRegistry.hasCrashed("plugin.a"),
-            "quarantine has to record the crash — that is what swaps the panel to its fallback " +
+            "quarantine has to record the crash - that is what swaps the panel to its fallback " +
                 "and stops the plugin rendering, which is what actually ends the loop",
         )
     }

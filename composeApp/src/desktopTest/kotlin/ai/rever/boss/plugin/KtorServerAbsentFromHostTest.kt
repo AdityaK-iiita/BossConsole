@@ -63,7 +63,7 @@ class KtorServerAbsentFromHostTest {
             "ktor-server is back on the host classpath via ${offenders.joinToString()}. Find the " +
                 "new transitive path with `./gradlew :composeApp:dependencyInsight --configuration " +
                 "desktopRuntimeClasspath --dependency <artifact>` and add it to the exclusion block " +
-                "in composeApp/build.gradle.kts — or, if the host genuinely needs a ktor server " +
+                "in composeApp/build.gradle.kts - or, if the host genuinely needs a ktor server " +
                 "now, delete that block and this test together.",
         )
     }

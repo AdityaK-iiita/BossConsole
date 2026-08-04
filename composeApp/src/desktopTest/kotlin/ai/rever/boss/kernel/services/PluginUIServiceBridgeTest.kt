@@ -226,7 +226,7 @@ class PluginUIServiceBridgeTest {
 
             awaitTrue { host.connections.lastOrNull() == false }
             assertNull(registry.surfaceOf(PANEL), "a dead stream must release the surface id for a respawn")
-            assertTrue(host.trees.isNotEmpty(), "the last tree stays on screen — disconnected, not blank")
+            assertTrue(host.trees.isNotEmpty(), "the last tree stays on screen - disconnected, not blank")
         }
 
     @Test
