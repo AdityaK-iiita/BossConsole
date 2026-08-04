@@ -441,13 +441,49 @@ fun main(args: Array<String>) {
     // engine holds files inside it.
     ChromiumAutoDownloader.promotePendingInstall()
 
-    val chromiumNeedsDownload = !ChromiumAutoDownloader.isChromiumInstalled()
-    if (chromiumNeedsDownload) {
-        logger.info(
-            LogCategory.SYSTEM,
-            "Installed browser engine missing or mismatched - will prompt for download",
-            mapOf("required" to ChromiumAutoDownloader.effectiveVersion),
-        )
+    // Ask the question we are about to act on: will an engine actually boot?
+    //
+    // isChromiumInstalled() answers a narrower one — "does the *cache* hold the
+    // right engine?" — which is the right input for deciding whether to download,
+    // but wrong for deciding whether to boot. FluckEngine prefers a bundled engine
+    // from the app image and only falls back to the cache, so a release that
+    // bundles one could pass the cache check and still boot something else, or fail
+    // it and skip the pre-warm despite a perfectly good bundled engine
+    // (BossConsole#121). resolveEngineDir applies the same priority order and the
+    // same version check the boot will.
+    // One read of the cache's health, shared by the resolver and the decision so
+    // the two can never disagree about it.
+    val cacheHealthy = ChromiumAutoDownloader.isChromiumInstalled()
+    val hasUsableEngine =
+        ai.rever.boss.plugin.browser.FluckEngine
+            .hasUsableEngine(cacheHealthy)
+    val engineAction =
+        ai.rever.boss.plugin.browser.FluckEngine
+            .engineStartupAction(hasUsableEngine, cacheHealthy)
+
+    val chromiumNeedsDownload =
+        engineAction == ai.rever.boss.plugin.browser.FluckEngine.EngineStartupAction.Download
+    when (engineAction) {
+        ai.rever.boss.plugin.browser.FluckEngine.EngineStartupAction.BootAndReport -> {
+            logger.error(
+                LogCategory.SYSTEM,
+                "Installed engine is healthy and stamped with the required version but is still " +
+                    "unusable - the published archive does not match this build; not re-downloading",
+                mapOf("required" to ChromiumAutoDownloader.effectiveVersion),
+            )
+        }
+
+        ai.rever.boss.plugin.browser.FluckEngine.EngineStartupAction.Download -> {
+            logger.info(
+                LogCategory.SYSTEM,
+                "No usable browser engine - will prompt for download",
+                mapOf("required" to ChromiumAutoDownloader.effectiveVersion),
+            )
+        }
+
+        ai.rever.boss.plugin.browser.FluckEngine.EngineStartupAction.Boot -> {
+            Unit
+        }
     }
 
     // Pre-warm the browser engine off the UI thread so the first browser tab
@@ -457,7 +493,11 @@ fun main(args: Array<String>) {
     // Skipped when the engine needs downloading: pre-warming against a mismatched
     // directory cannot succeed, and its only effect is to raise the very error
     // the download is about to fix.
-    if (!chromiumNeedsDownload) {
+    // Gated on hasUsableEngine, not on !chromiumNeedsDownload: in the
+    // BootAndReport case there is no usable engine AND no download, so the latter
+    // would fire a guaranteed-futile boot that burns an attempt and sets an error
+    // — exactly what the comment above says pre-warming must not do.
+    if (hasUsableEngine) {
         try {
             ai.rever.boss.plugin.browser.FluckEngine
                 .prewarmInBackground()
