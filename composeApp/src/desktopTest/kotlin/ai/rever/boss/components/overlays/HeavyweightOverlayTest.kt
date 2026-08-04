@@ -1,6 +1,7 @@
 package ai.rever.boss.components.overlays
 
 import ai.rever.boss.plugin.browser.parseTopInsetDp
+import ai.rever.boss.plugin.browser.shouldAllowPinch
 import ai.rever.boss.plugin.browser.shouldRetainSurface
 import androidx.compose.ui.unit.IntOffset
 import com.teamdev.jxbrowser.engine.RenderingMode
@@ -101,10 +102,92 @@ class HeavyweightOverlayTest {
 
     @Test
     fun `surfaces are retained only under HARDWARE_ACCELERATED`() {
-        // OFF_SCREEN must keep the original close-on-hide lifecycle: it is the macOS/Linux default
-        // and retention there would change behaviour on platforms this work never measured.
+        // OFF_SCREEN keeps the original close-on-hide lifecycle: an off-screen surface is a cheap
+        // CPU bitmap, so rebuilding it on tab re-entry costs nothing worth retaining native
+        // resources for.
         assertTrue(shouldRetainSurface(RenderingMode.HARDWARE_ACCELERATED))
         assertFalse(shouldRetainSurface(RenderingMode.OFF_SCREEN))
+    }
+
+    // --- pinch gating ---
+
+    /**
+     * The regression this guards is silent: under HARDWARE the browser is a foreign native window,
+     * so Compose never reports the pointer entering it and the old hover gate rejected every pinch
+     * with nothing but a debug line. Asserted as "hover alone is not enough", not just "geometry
+     * works", because a fix that ORed the two signals would pass a geometry-only test while still
+     * letting a background split zoom on a stale hover flag.
+     */
+    @Test
+    fun `under HARDWARE the pinch gate uses geometry, and hover alone is never enough`() {
+        assertTrue(
+            shouldAllowPinch(
+                RenderingMode.HARDWARE_ACCELERATED,
+                isValid = true,
+                pointerOverComposeView = false,
+                pointerInsideBounds = true,
+            ),
+        )
+        // The old gate's inputs, which HARDWARE can produce indefinitely: hover true is not a
+        // licence to zoom when the pointer is demonstrably elsewhere.
+        assertFalse(
+            shouldAllowPinch(
+                RenderingMode.HARDWARE_ACCELERATED,
+                isValid = true,
+                pointerOverComposeView = true,
+                pointerInsideBounds = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `an undeterminable pointer position refuses the pinch rather than guessing`() {
+        // Pre-layout, no window, or headless. A pinch that does nothing is recoverable by pinching
+        // again; one that zooms an unpointed browser in another split is not something the user
+        // asked for and may not even notice.
+        for (hover in listOf(true, false)) {
+            assertFalse(
+                shouldAllowPinch(
+                    RenderingMode.HARDWARE_ACCELERATED,
+                    isValid = true,
+                    pointerOverComposeView = hover,
+                    pointerInsideBounds = null,
+                ),
+                "expected no zoom with an unknown pointer (hover=$hover)",
+            )
+        }
+    }
+
+    @Test
+    fun `OFF_SCREEN keeps hover, so the platforms that already worked cannot regress`() {
+        assertTrue(
+            shouldAllowPinch(
+                RenderingMode.OFF_SCREEN,
+                isValid = true,
+                pointerOverComposeView = true,
+                pointerInsideBounds = null,
+            ),
+        )
+        // Geometry must not be able to override an accurate hover signal here — an OFF_SCREEN view
+        // really is a component, and its hover is the authoritative answer.
+        assertFalse(
+            shouldAllowPinch(
+                RenderingMode.OFF_SCREEN,
+                isValid = true,
+                pointerOverComposeView = false,
+                pointerInsideBounds = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `a disposed handle never zooms, whatever the pointer says`() {
+        for (mode in listOf(RenderingMode.HARDWARE_ACCELERATED, RenderingMode.OFF_SCREEN)) {
+            assertFalse(
+                shouldAllowPinch(mode, isValid = false, pointerOverComposeView = true, pointerInsideBounds = true),
+                "expected no zoom on an invalid handle in $mode",
+            )
+        }
     }
 
     // --- overlay routing ---

@@ -43,18 +43,20 @@ object JxBrowserConfig {
         ) ?: "https://www.risalabs.ai"
 
     /**
-     * How the embedded Chromium hands its frames to Compose. **Windows defaults
-     * to HARDWARE_ACCELERATED; macOS and Linux stay on OFF_SCREEN.**
+     * How the embedded Chromium hands its frames to Compose. **HARDWARE_ACCELERATED
+     * on every platform**, with OFF_SCREEN reachable per install.
      *
-     * OFF_SCREEN is the mode Compose overlays are built around: HARDWARE_ACCELERATED
-     * renders into a foreign native window owned by Chromium's GPU process, which
-     * composites against the Compose scene rather than inside it, so Compose overlays
-     * (menus, dialogs, toasts) can be drawn under browser content. That is why every
-     * platform used to pin OFF_SCREEN.
+     * OFF_SCREEN is the mode Compose overlays were originally built around:
+     * HARDWARE_ACCELERATED renders into a foreign native window owned by Chromium's
+     * GPU process, which composites against the Compose scene rather than inside it,
+     * so an ordinary Compose overlay (menu, dialog, toast) is drawn *under* browser
+     * content. That is why every platform used to pin OFF_SCREEN, and it is now
+     * handled rather than avoided — see `OverlayConfig` and the heavyweight overlay
+     * renderers, which activate off this value.
      *
-     * On Windows it is also where the performance goes. Measured on Windows 11 /
-     * Chromium 150 / Core Ultra 7 155H (2026-07-31), fluck tab vs Edge 150 on
-     * Speedometer 3.1 — same engine generation:
+     * Windows moved first, on throughput. Measured on Windows 11 / Chromium 150 /
+     * Core Ultra 7 155H (2026-07-31), fluck tab vs Edge 150 on Speedometer 3.1 —
+     * same engine generation:
      *
      *  - fluck 7.5-11.5 against Edge's 24.7, and the deficit is UNIFORM across all
      *    206 metrics (Sync 3.0x, Async 4.8x, median per-test 3.13x) with no suite
@@ -75,21 +77,44 @@ object JxBrowserConfig {
      *  - Switching to HARDWARE_ACCELERATED won 3 of 3 interleaved pairs for a median
      *    +47% (9.56->15.3, 10.8->15.9, 11.0->14.3).
      *
-     * macOS does not pay this and must not be changed: fluck measures 47.9 there,
-     * ahead of Chrome, because the off-screen surface can be shared with the GPU.
-     * Windows/D3D11 needs a real per-frame readback instead. Linux is unmeasured, so
-     * it keeps the old default rather than inheriting a Windows finding.
+     * **macOS and Linux now default to HARDWARE too, but for a different reason, and
+     * it is worth not confusing the two.** macOS does not have the Windows throughput
+     * problem at all: fluck measures 47.9 on Speedometer there, ahead of Chrome,
+     * because the off-screen surface can be shared with the GPU (Windows/D3D11 needs a
+     * real per-frame readback instead). What macOS pays on OFF_SCREEN is *power and
+     * memory*, which Speedometer does not measure. BossConsoleLite defaulted macOS to
+     * HARDWARE (`3fd5e36c`) and recorded a content-matched A/B over clean 94-sample
+     * idle windows (`6e637198`):
      *
-     * The Compose-overlay consequence is real and is handled, not ignored:
-     * BossConsoleLite defaulted to HARDWARE first and its Windows fleet hit three
-     * regressions — the browser surface sitting ~toolbar-height too high, Ctrl+R not
-     * reaching a focused page, and hover tooltips rendering behind the browser. The
-     * fixes are ported alongside this (see `OverlayConfig` and the heavyweight
-     * overlay renderers). Lite's own heavyweight popup/modal are still marked DRAFT
-     * there, so overlay behaviour in HARDWARE mode is improving rather than settled.
+     *  - idle CPU 0.59 -> 0.06 cores (~10x)
+     *  - RSS 3095 -> 1974 MB (-1.1 GB, -36%)
+     *  - peak CPU -14%, peak RSS -25%
      *
-     * Escape hatch, no rebuild needed: BOSS_RENDERING_MODE=OFF_SCREEN. The name
-     * matches Lite's so one setting means the same thing in both repos.
+     * So both readings are true: OFF_SCREEN is fast on macOS and expensive to sit
+     * idle in, and the fleet's complaints are about battery and RAM. Linux follows
+     * Lite (`f8d7c708`) and remains the least-measured of the three — the arm to run
+     * there is the power/memory one, not Speedometer (see benchmarks/speedometer/UNIX.md).
+     *
+     * Two macOS costs are accepted rather than solved:
+     *
+     *  - The two-finger swipe-back gesture stops working, because navigation gestures
+     *    are consumed by the native surface. Lite tracks this as a known follow-up.
+     *  - Every app overlay routes through a heavyweight Swing window instead of a
+     *    Compose Popup. That path exists because Windows needed it, and macOS is the
+     *    second platform to exercise it.
+     *
+     * Pinch-to-zoom is NOT on that list, and would have been: it is gated on Compose
+     * hover, which a heavyweight surface never reports. See `shouldAllowPinch` in
+     * BrowserHandleImpl — the gate is mode-aware so the gesture survives.
+     *
+     * Windows additionally hit three regressions Lite found first — the browser
+     * surface sitting ~toolbar-height too high, Ctrl+R not reaching a focused page,
+     * and hover tooltips rendering behind the browser. Those fixes shipped with the
+     * Windows flip and apply to every platform now.
+     *
+     * Escape hatch, no rebuild needed: BOSS_RENDERING_MODE=OFF_SCREEN, or the
+     * rendering-mode control in Settings > Browser Engine. The env-var name matches
+     * Lite's so one value means the same thing in both repos.
      */
     val renderingMode: com.teamdev.jxbrowser.engine.RenderingMode by lazy {
         // ConfigLoader, not getenv: matches Lite, and lets this be set by env var,
@@ -118,13 +143,21 @@ object JxBrowserConfig {
      * Pure part of [renderingMode], split out so the platform decision is testable
      * without an engine.
      *
-     * An explicit, recognized BOSS_RENDERING_MODE always wins — including forcing
-     * OFF_SCREEN back on Windows, which is the escape hatch if the overlay work
+     * An explicit, recognized BOSS_RENDERING_MODE always wins — which is now the only
+     * way to get OFF_SCREEN on any platform, and the escape hatch if the overlay work
      * above turns out to be incomplete on a given machine. Anything unrecognized
-     * (typo, blank, unset) falls back to the platform default rather than to a
-     * guess, so a mistyped value can never silently change how the browser
-     * composites. Spellings match Lite's so the same value works in both repos.
+     * (typo, blank, unset) falls back to the default rather than to a guess, so a
+     * mistyped value can never silently change how the browser composites. Spellings
+     * match Lite's so the same value works in both repos.
+     *
+     * [os] is no longer read — the default is uniform. It is kept as a parameter
+     * deliberately: a per-platform carve-out is a live possibility (macOS trades the
+     * swipe-back gesture for the power win, and Linux is the least-measured), and
+     * removing the parameter would mean re-threading it through every caller and test
+     * to reintroduce one. Unused here means "no platform disagrees today", not "this
+     * decision cannot be platform-specific".
      */
+    @Suppress("UNUSED_PARAMETER")
     internal fun resolveRenderingMode(
         raw: String?,
         os: String,
@@ -138,18 +171,11 @@ object JxBrowserConfig {
                 com.teamdev.jxbrowser.engine.RenderingMode.OFF_SCREEN
             }
 
-            // Windows only. macOS is measurably fine on OFF_SCREEN (and Lite reports
-            // HARDWARE costs it the two-finger swipe-back gesture), and Linux is
-            // unmeasured here, so neither inherits the Windows finding.
+            // Every platform. Windows for throughput (+47% on Speedometer), macOS and
+            // Linux for idle power and memory (~10x idle CPU, -1.1 GB RSS in Lite's
+            // A/B) — see the KDoc above for why those are different findings.
             else -> {
-                // "windows", not "win" — "darwin" contains "win". Unreachable with a HotSpot
-                // os.name of "Mac OS X", but it is a trap worth not leaving in a platform switch,
-                // and the rest of the repo matches on "windows".
-                if (os.contains("windows")) {
-                    com.teamdev.jxbrowser.engine.RenderingMode.HARDWARE_ACCELERATED
-                } else {
-                    com.teamdev.jxbrowser.engine.RenderingMode.OFF_SCREEN
-                }
+                com.teamdev.jxbrowser.engine.RenderingMode.HARDWARE_ACCELERATED
             }
         }
 
