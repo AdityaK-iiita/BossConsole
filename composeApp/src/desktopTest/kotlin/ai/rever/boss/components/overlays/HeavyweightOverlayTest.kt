@@ -1,8 +1,11 @@
 package ai.rever.boss.components.overlays
 
 import ai.rever.boss.plugin.browser.parseTopInsetDp
+import ai.rever.boss.plugin.browser.pointerInsideBounds
 import ai.rever.boss.plugin.browser.shouldAllowPinch
 import ai.rever.boss.plugin.browser.shouldRetainSurface
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.unit.IntOffset
 import com.teamdev.jxbrowser.engine.RenderingMode
 import kotlin.test.AfterTest
@@ -186,6 +189,50 @@ class HeavyweightOverlayTest {
             assertFalse(
                 shouldAllowPinch(mode, isValid = false, pointerOverComposeView = true, pointerInsideBounds = true),
                 "expected no zoom on an invalid handle in $mode",
+            )
+        }
+    }
+
+    /**
+     * The px-vs-dp conversion the pinch gate depends on.
+     *
+     * `boundsInWindow()` is DEVICE PIXELS; an AWT pointer through `convertPointFromScreen` is
+     * LOGICAL UNITS. They coincide only at density 1.0, so comparing them raw is correct on an
+     * unscaled external monitor and wrong by the density factor on a Retina panel — which is
+     * exactly the shape of bug no test on an unscaled CI runner would catch, hence the table.
+     */
+    @Test
+    fun `the pinch bounds test converts the pointer into pixel space`() {
+        // Browser occupies window px (0,100)-(2000,1300); at density 2 that is logical
+        // (0,50)-(1000,650), with a terminal split beneath it.
+        val browserPx = Rect(0f, 100f, 2000f, 1300f)
+
+        // The regression: logical (500,700) is over the TERMINAL, but compared raw it satisfies
+        // 700 < 1300 and 500 < 2000, so an unconverted gate would zoom a browser the pointer is
+        // not over — the one thing the gate exists to prevent.
+        assertFalse(pointerInsideBounds(browserPx, Offset(500f, 700f), density = 2f))
+        assertTrue(browserPx.contains(Offset(500f, 700f)), "raw compare would wrongly accept this")
+
+        // The mirror: genuinely inside, and an unconverted gate would refuse it.
+        val rightSplitPx = Rect(1400f, 100f, 2800f, 1300f)
+        assertTrue(pointerInsideBounds(rightSplitPx, Offset(720f, 300f), density = 2f))
+        assertFalse(rightSplitPx.contains(Offset(720f, 300f)), "raw compare would wrongly refuse this")
+    }
+
+    @Test
+    fun `pinch bounds hold at every common display scale`() {
+        val boundsPx = Rect(0f, 100f, 2000f, 1300f)
+        // The same physical point, expressed in each scale's logical units, must give one answer.
+        for (density in listOf(1f, 1.25f, 1.5f, 2f)) {
+            val insideLogical = Offset(500f / density, 700f / density)
+            assertTrue(
+                pointerInsideBounds(boundsPx, insideLogical, density),
+                "expected inside at density $density",
+            )
+            val outsideLogical = Offset(500f / density, 1400f / density)
+            assertFalse(
+                pointerInsideBounds(boundsPx, outsideLogical, density),
+                "expected outside at density $density",
             )
         }
     }

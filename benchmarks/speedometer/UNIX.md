@@ -12,7 +12,7 @@ On Windows, OFF_SCREEN cost throughput: 7.5–11.5 on Speedometer 3.1 against Ed
 HARDWARE_ACCELERATED.
 
 **macOS never had that problem.** It measures 47.9 on OFF_SCREEN, ahead of Chrome,
-because the off-screen surface can be shared with the GPU — Windows/D3D11 needs a
+because the off-screen surface can be shared with the GPU - Windows/D3D11 needs a
 real per-frame readback instead. So a Speedometer sweep on macOS is expected to come
 out roughly flat between the two modes, and that flat result is not evidence against
 HARDWARE. It is evidence that Speedometer is the wrong instrument here.
@@ -24,8 +24,8 @@ over content-matched, clean 94-sample idle windows (`6e637198`):
 |---|---:|---:|---|
 | idle CPU | 0.59 cores | 0.06 cores | **~10x less** |
 | RSS | 3095 MB | 1974 MB | **−1.1 GB (−36%)** |
-| peak CPU | — | — | −14% |
-| peak RSS | — | — | −25% |
+| peak CPU | n/a | n/a | −14% |
+| peak RSS | n/a | n/a | −25% |
 
 Linux is the least-measured of the three. It follows Lite's default (`f8d7c708`), and
 the arm to run there is the power/memory one too.
@@ -42,13 +42,13 @@ So: **two harnesses, and on macOS the second one is the one that matters.**
 `WINDOWS.md` documents this at length and it is not a theoretical worry. On that
 machine a sequential A-then-B comparison read 18.9 against 21.2 and looked like a 10%
 regression; re-running the same two builds **alternately** reversed the sign to +10%.
-A single unchanged build produced 18.8, 21.1, 21.2, 22.8 and 23.8 in one session — a
+A single unchanged build produced 18.8, 21.1, 21.2, 22.8 and 23.8 in one session - a
 27% spread on identical bytes, driven by ambient load.
 
 Consequences, both baked into the scripts:
 
 - Arms alternate. `run-paired-rendering.sh` never groups them.
-- The result is the **median of per-pair ratios**, never a ratio of medians — the
+- The result is the **median of per-pair ratios**, never a ratio of medians - the
   latter averages away a pair whose two arms disagreed. Both the median and the
   win count are printed, because "+5%, won 2 of 3" and "+5%, won 3 of 3" are
   different claims.
@@ -64,7 +64,7 @@ cd benchmarks/speedometer/unix
 ```
 
 Each arm launches a **fresh** BOSS, because the rendering mode and the Chromium
-switches are both read once at engine creation — reusing a process would silently
+switches are both read once at engine creation - reusing a process would silently
 measure the previous arm. The instance is dev-mode (`~/.boss_debug`), so it cannot
 disturb your own `~/.boss` install even while that one is running, and cleanup matches
 on the worktree's own binary path so it can never kill your BOSS.
@@ -79,8 +79,8 @@ Two things the scripts do that are easy to leave out and invalidate the run:
   exit, including Ctrl+C.
 - **The window is raised and maximized, and it is found by executable path.**
   Speedometer paces on `requestAnimationFrame`, which Chromium throttles in a window
-  the OS reports hidden. Your own BOSS is almost certainly running — that is why this
-  harness uses dev mode — and it is *also* called "BOSS", so matching the window by
+  the OS reports hidden. Your own BOSS is almost certainly running - that is why this
+  harness uses dev mode - and it is *also* called "BOSS", so matching the window by
   process name resolves to whichever the OS lists first. That failure is silent and
   doubly bad: it moves your window, and it leaves the benchmark window unraised, so the
   arm scores throttled garbage while appearing to work. On macOS the launched pid is not
@@ -92,9 +92,9 @@ Two things the scripts do that are easy to leave out and invalidate the run:
 
 Note also that **`screencapture` returns an all-black image rather than an error when
 Screen Recording permission is missing**, so a screenshot is not a way to check the
-browser is compositing — the file gets written and the exit code is 0 either way.
+browser is compositing - the file gets written and the exit code is 0 either way.
 
-Scoring reuses `win/SpeedometerCdp.java` unchanged — single-file Java on
+Scoring reuses `win/SpeedometerCdp.java` unchanged - single-file Java on
 `java.net.http`, no platform code. Its `--attach` mode is the only way to score a
 fluck tab, which lives inside the BOSS process and cannot be spawned like a browser
 binary. One implementation reading the score from Speedometer's own DOM on every
@@ -112,14 +112,14 @@ python3 scripts/perf-timeline.py osr /tmp/osr.csv &
 BOSS_RENDERING_MODE=OFF_SCREEN <launch BOSS>     # load a page, then leave it alone
 touch /tmp/osr.csv.stop
 
-# Arm 2 — the SAME page, the same exercise, the same idle duration
+# Arm 2 - the SAME page, the same exercise, the same idle duration
 python3 scripts/perf-timeline.py hwa /tmp/hwa.csv &
 BOSS_RENDERING_MODE=HARDWARE_ACCELERATED <launch BOSS>
 touch /tmp/hwa.csv.stop
 ```
 
 Compare the `STEADY (last 25s of active)` lines. The two arms must be **content
-matched** — same page, loaded and left idle — because a moment of scrolling in one arm
+matched** - same page, loaded and left idle - because a moment of scrolling in one arm
 and not the other swamps the difference being measured. Pass a worktree path as the
 third argument to isolate one build while your own BOSS keeps running.
 
@@ -133,5 +133,5 @@ separate terminal app, or point the marker at a different build.
 
 Nothing recorded on this repo's hardware yet. The macOS and Linux defaults currently
 rest on Lite's measurements, cited above and in `JxBrowserConfig.renderingMode`.
-Record results here as they land, with the machine, the date, and both arms — a score
+Record results here as they land, with the machine, the date, and both arms - a score
 with no machine attached is not reusable, as the Windows spread above shows.

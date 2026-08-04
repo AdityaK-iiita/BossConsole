@@ -24,6 +24,7 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.teamdev.jxbrowser.browser.Browser
 import com.teamdev.jxbrowser.browser.callback.CreatePopupCallback
@@ -242,7 +243,15 @@ internal class BrowserHandleImpl(
     // This view's bounds in Compose-root coordinates, refreshed on every layout pass.
     // The HARDWARE_ACCELERATED substitute for hover: Compose knows where the view IS
     // even when it never learns the pointer entered it. Null until first layout.
+    //
+    // IN DEVICE PIXELS. Pairs with [browserViewDensity]; see [pointerInsideBounds].
     @Volatile private var browserViewBoundsInWindow: androidx.compose.ui.geometry.Rect? = null
+
+    // Density for converting an AWT pointer into the pixel space the bounds above are measured
+    // in. Refreshed from composition rather than read once, because it changes when a window is
+    // dragged between a Retina panel and an external display — a stale value would misplace the
+    // gate by exactly that ratio.
+    @Volatile private var browserViewDensity: Float = 1f
 
     // The AWT window the pinch listener and the browser surface are both bound to,
     // needed to put the screen-space pointer into the same coordinate space as
@@ -266,24 +275,26 @@ internal class BrowserHandleImpl(
     private fun pointerInsideBrowserView(): Boolean? {
         val bounds = browserViewBoundsInWindow
         val window = gestureHostWindow
-        val pointer =
-            if (bounds != null && window != null) {
+        if (bounds == null || window == null) return null
+        return try {
+            // Read INSIDE the try, unlike before: getPointerInfo throws HeadlessException rather
+            // than returning null in a headless JVM, so reading it outside made the KDoc's promise
+            // of "null when there is no pointer" false in exactly the case it names.
+            val pointer =
                 java.awt.MouseInfo
                     .getPointerInfo()
                     ?.location
-            } else {
-                null
-            }
-        if (bounds == null || window == null || pointer == null) return null
-        return try {
             val origin = (window as? javax.swing.RootPaneContainer)?.contentPane ?: window
             // convertPointFromScreen requires a showing component. Checked rather than relied on
             // because a window mid-teardown is an ordinary state here, not an error.
-            if (origin.isShowing) {
+            if (pointer != null && origin.isShowing) {
                 javax.swing.SwingUtilities.convertPointFromScreen(pointer, origin)
-                bounds.contains(
-                    androidx.compose.ui.geometry
-                        .Offset(pointer.x.toFloat(), pointer.y.toFloat()),
+                pointerInsideBounds(
+                    boundsPx = bounds,
+                    pointerLogical =
+                        androidx.compose.ui.geometry
+                            .Offset(pointer.x.toFloat(), pointer.y.toFloat()),
+                    density = browserViewDensity,
                 )
             } else {
                 null
@@ -2035,6 +2046,10 @@ internal class BrowserHandleImpl(
                 }
             }
 
+        // Read in composition, not once: LocalDensity follows the window across displays, and the
+        // pinch gate compares AWT logical units against pixel bounds using it.
+        val viewDensity = LocalDensity.current.density
+
         // Render the browser view if available with mouse button handling
         viewState?.let { state ->
             BrowserView(
@@ -2049,6 +2064,10 @@ internal class BrowserHandleImpl(
                         // scrolled half out of the window does not claim the hidden half.
                         .onGloballyPositioned { coords ->
                             browserViewBoundsInWindow = coords.boundsInWindow()
+                            // Captured with the bounds, from the same layout pass, so the two can
+                            // never describe different displays after a window is dragged between
+                            // monitors. See pointerInsideBounds for why the pairing is required.
+                            browserViewDensity = viewDensity
                         }
                         // Hover tracking that gates the window-wide pinch gesture listener to
                         // this view under OFF_SCREEN (see the DisposableEffect above). Never
@@ -2293,6 +2312,37 @@ internal fun shouldRetainSurface(mode: com.teamdev.jxbrowser.engine.RenderingMod
  * Pure so the decision is pinned by tests; the impure pointer read stays at the call
  * site (see `pointerInsideBrowserView`).
  */
+
+/**
+ * Whether an AWT pointer falls inside a Compose-measured rect, given the display density.
+ *
+ * **The two inputs are in different coordinate SCALES and this function exists to reconcile
+ * them.** `LayoutCoordinates.boundsInWindow()` reports DEVICE PIXELS;
+ * `MouseInfo.getPointerInfo()` through `SwingUtilities.convertPointFromScreen` reports AWT
+ * LOGICAL UNITS, which equal dp in Compose Desktop. They coincide only at density 1.0, so a
+ * naive `bounds.contains(pointer)` is correct on an unscaled external monitor and wrong by the
+ * density factor on the laptop panel — 2x on Retina, 1.5x at 150% Windows scaling.
+ *
+ * Concretely, at density 2.0 with the browser occupying window px `(0,100)-(2000,1300)`
+ * (logical `(0,50)-(1000,650)`) and a terminal split beneath it: a pointer at logical
+ * `(500,700)` is over the TERMINAL, but compared raw it satisfies both `700 < 1300` and
+ * `500 < 2000` and the gate opens — zooming a browser the pointer is not over, which is the
+ * one thing the gate is for. The mirror case refuses a pinch that is genuinely inside a
+ * right-hand split.
+ *
+ * The same trap is documented for the overlay work in `HeavyweightPopup` ("onGloballyPositioned
+ * reports PIXELS, while the window bounds and the offsets are AWT logical units"), which is
+ * where the convention of naming the space in the parameter name comes from.
+ *
+ * Pure, so the density cases are a table test rather than something only a Retina machine
+ * could catch.
+ */
+internal fun pointerInsideBounds(
+    boundsPx: androidx.compose.ui.geometry.Rect,
+    pointerLogical: androidx.compose.ui.geometry.Offset,
+    density: Float,
+): Boolean = boundsPx.contains(pointerLogical * density)
+
 internal fun shouldAllowPinch(
     mode: com.teamdev.jxbrowser.engine.RenderingMode,
     isValid: Boolean,

@@ -7,9 +7,6 @@ import ai.rever.boss.components.settings.shared.SettingsInfoRow
 import ai.rever.boss.components.settings.shared.SettingsNumberInput
 import ai.rever.boss.components.settings.shared.SettingsSection
 import ai.rever.boss.components.settings.shared.SettingsTextArea
-import ai.rever.boss.components.settings.shared.SettingsTheme.SurfaceColor
-import ai.rever.boss.components.settings.shared.SettingsTheme.TextMuted
-import ai.rever.boss.components.settings.shared.SettingsTheme.TextSecondary
 import ai.rever.boss.components.settings.shared.SettingsToggle
 import ai.rever.boss.config.ChromiumFlagKeys
 import ai.rever.boss.config.ChromiumFlagsSettings
@@ -18,32 +15,19 @@ import ai.rever.boss.config.JxBrowserConfig
 import ai.rever.boss.plugin.browser.FluckEngine
 import ai.rever.boss.utils.ApplicationRestarter
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /**
  * Settings > Browser Engine: the Chromium flags the embedded engine launches with.
@@ -159,6 +143,38 @@ fun ChromiumFlagsSections() {
 }
 
 /**
+ * Whether restarting would actually apply anything, i.e. any published key resolves differently
+ * from what this process booted with once the environment has had its say.
+ *
+ * The naive `settings != bootSettings` offers a restart whenever the stored object differs - even
+ * for a key an environment variable owns, where the next launch resolves to exactly what is
+ * running now and the user loses their session for nothing.
+ */
+private fun restartWouldChangeAnything(settings: ChromiumFlagsSettings): Boolean {
+    val boot = ChromiumFlagsSettingsManager.bootSettings
+    if (settings == boot) return false
+    // Settings-only fields have no config key, so previewValue cannot speak for them; any change
+    // to one is a real change. Published keys are compared as the next launch would resolve them.
+    val publishedDiffers =
+        ChromiumFlagKeys.PUBLISHED.any { key ->
+            ChromiumFlagsSettingsManager.previewValue(settings, key) !=
+                ChromiumFlagsSettingsManager.previewValue(boot, key)
+        }
+    val settingsOnlyDiffers =
+        settings.copy(
+            renderingMode = boot.renderingMode,
+            skikoRenderApi = boot.skikoRenderApi,
+            topInsetDp = boot.topInsetDp,
+            browserPrewarm = boot.browserPrewarm,
+            rendererProcessLimit = boot.rendererProcessLimit,
+            enableSkiaGraphite = boot.enableSkiaGraphite,
+            disableSandbox = boot.disableSandbox,
+            extraSwitches = boot.extraSwitches,
+        ) != boot
+    return publishedDiffers || settingsOnlyDiffers
+}
+
+/**
  * Restart and reset, the two actions that act on the screen as a whole.
  *
  * The restart row appears only when the current settings differ from the ones this process
@@ -171,7 +187,10 @@ private fun ApplySection(
     onReset: () -> Unit,
 ) {
     SettingsSection(title = "Apply") {
-        if (settings != ChromiumFlagsSettingsManager.bootSettings) {
+        // Only rows the environment does NOT own can change anything on restart. Comparing the
+        // whole object offered a restart for a row an env var overrides, where restarting is a
+        // lost session for no effect.
+        if (restartWouldChangeAnything(settings)) {
             SettingsButtonRow(
                 label = "Changes are waiting for a restart",
                 buttonText = "Restart BOSS",
@@ -273,7 +292,7 @@ private fun RenderingSection(
             description =
                 skikoEnvNote
                     ?: "The BOSS interface's own backend, separate from the browser's. Leave on Auto " +
-                    "unless you are diagnosing a machine with no working GPU — pinning a backend " +
+                    "unless you are diagnosing a machine with no working GPU - pinning a backend " +
                     "that cannot initialise prevents the app from starting.",
         )
 
@@ -332,7 +351,7 @@ private fun PerformanceSection(
             description =
                 capEnvNote
                     ?: "0 means no limit. Capping this saves memory in many-tab sessions by making " +
-                    "tabs share renderer processes — which also means one crashing page can take " +
+                    "tabs share renderer processes - which also means one crashing page can take " +
                     "its neighbours with it.",
         )
 
@@ -393,7 +412,7 @@ private fun PlatformPerformanceRows(
                                 "pages render oddly."
                         } else {
                             "Off by default in off-screen rendering, where it is known to blank the " +
-                                "page — frames never reach the app surface. It switches on by itself " +
+                                "page - frames never reach the app surface. It switches on by itself " +
                                 "if you return to hardware rendering."
                         },
             )
@@ -406,7 +425,7 @@ private fun PlatformPerformanceRows(
                 checked = settings.enableVaapi ?: true,
                 onCheckedChange = { save(settings.copy(enableVaapi = it.takeIf { v -> !v })) },
                 description =
-                    "On by default. Turn it off if video is glitching or failing to play — VA-API " +
+                    "On by default. Turn it off if video is glitching or failing to play - VA-API " +
                         "needs a working driver, and forcing it on a broken one is worse than software decode.",
             )
         }

@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -110,10 +111,15 @@ data class ChromiumFlagsSettings(
     /**
      * The value to publish for [key], or null to publish nothing.
      *
-     * A `when` over the key rather than a map built per call, so adding a field to this
-     * class without adding it here is a compile-time `when` that no longer covers
-     * [ChromiumFlagKeys.PUBLISHED] — caught by ChromiumFlagsSettingsTest rather than by
-     * a user wondering why their setting does nothing.
+     * **There is no compile-time guarantee here, despite the `when`.** It matches on a
+     * `String` with an `else` branch, so adding a field to this class and forgetting to
+     * add it below compiles perfectly and publishes nothing — a Settings row that
+     * persists, reads back, and changes nothing. An earlier version of this doc claimed
+     * exhaustiveness; it was wrong, and the claim was worse than no claim because it
+     * discouraged looking for the guard that actually catches this.
+     *
+     * The real guard is in ChromiumFlagsSettingsTest, which derives the field count from
+     * the serializer descriptor rather than restating it, so a new field fails the suite.
      */
     internal fun publishedValue(key: String): String? =
         when (key) {
@@ -247,17 +253,78 @@ object ChromiumFlagsSettingsManager {
         key: String,
     ): String? = System.getenv(key) ?: settings.publishedValue(key)
 
-    suspend fun updateSettings(settings: ChromiumFlagsSettings) =
+    /**
+     * Serialises the disk writes. This screen writes far more often than the version dropdown
+     * this persistence pattern was copied from: `SettingsNumberInput` fires on every keystroke
+     * that parses in range, so typing `8192` into the disk-cache field launches four coroutines
+     * in order and, unsynchronised, they can land out of order and persist `819`.
+     */
+    private val writeMutex = kotlinx.coroutines.sync.Mutex()
+
+    suspend fun updateSettings(settings: ChromiumFlagsSettings) {
+        // In-memory state first, on the CALLER's thread, so the UI and any subsequent read see
+        // the new value immediately and cannot observe a write that is still queued behind the
+        // mutex. Only the disk write is asynchronous.
+        _currentSettings.value = settings
         withContext(Dispatchers.IO) {
-            _currentSettings.value = settings
-            try {
-                settingsFile.parentFile?.mkdirs()
-                settingsFile.writeText(json.encodeToString(ChromiumFlagsSettings.serializer(), settings))
-                logger.debug(LogCategory.BROWSER, "Chromium flag settings saved")
-            } catch (e: Exception) {
-                logger.warn(LogCategory.BROWSER, "Error saving Chromium flag settings", error = e)
+            writeMutex.withLock {
+                try {
+                    settingsFile.parentFile?.mkdirs()
+                    // Temp + atomic rename, never a truncating write in place. A crash midway
+                    // through writeText leaves a truncated file, and loadSync answers a parse
+                    // failure with ChromiumFlagsSettings() — so an interrupted keystroke could
+                    // silently reset every flag the user had set, including the security ones.
+                    val temp = java.io.File(settingsFile.parentFile, "${settingsFile.name}.tmp")
+                    temp.writeText(json.encodeToString(ChromiumFlagsSettings.serializer(), settings))
+                    restrictToOwner(temp)
+                    java.nio.file.Files.move(
+                        temp.toPath(),
+                        settingsFile.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    )
+                    logger.debug(LogCategory.BROWSER, "Chromium flag settings saved")
+                } catch (e: Exception) {
+                    logger.warn(LogCategory.BROWSER, "Error saving Chromium flag settings", error = e)
+                }
             }
         }
+    }
+
+    /**
+     * Owner-only permissions, because of what this file can do on the next launch.
+     *
+     * Anything that can write it gets arbitrary Chromium switches and the sandbox opt-out applied
+     * at startup, with none of it passing through the confirmation dialogs. That makes it strictly
+     * more powerful than local.properties, which [ChromiumFlagsSettings.remoteDebuggingPort] is
+     * already careful to keep out of the DevTools path for the same class of reason — so leaving
+     * this at the default umask would have reasoned hard about the weaker surface and ignored the
+     * stronger one. `~/.boss/run/single-instance` is already owner-only; same treatment.
+     *
+     * Best-effort: a filesystem without POSIX permissions (a Windows share) must not stop the
+     * settings from saving, so a failure is logged and the write proceeds.
+     */
+    private fun restrictToOwner(file: java.io.File) {
+        try {
+            val perms =
+                java.nio.file.attribute.PosixFilePermissions
+                    .fromString("rw-------")
+            java.nio.file.Files
+                .setPosixFilePermissions(file.toPath(), perms)
+        } catch (e: UnsupportedOperationException) {
+            logger.debug(
+                LogCategory.BROWSER,
+                "Filesystem has no POSIX permissions - Chromium flag settings left at default",
+                mapOf("error" to e.toString()),
+            )
+        } catch (e: Exception) {
+            logger.warn(
+                LogCategory.BROWSER,
+                "Could not restrict Chromium flag settings to owner-only",
+                mapOf("error" to e.toString()),
+            )
+        }
+    }
 
     suspend fun resetToDefault() = updateSettings(ChromiumFlagsSettings())
 }

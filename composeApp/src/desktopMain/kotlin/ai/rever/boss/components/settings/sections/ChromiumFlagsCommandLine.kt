@@ -22,6 +22,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -60,7 +61,8 @@ internal fun EffectiveCommandLineSection(
 
     val nextLaunch = remember(settings, os, arch, inContainer) { nextLaunchSwitches(settings, os, arch, inContainer) }
 
-    val active = FluckEngine.lastAppliedSwitches
+    val active by FluckEngine.lastAppliedSwitchesFlow.collectAsState()
+    val diskCacheMb by FluckEngine.lastDiskCacheMbFlow.collectAsState()
 
     SettingsSection(
         title = "Effective Chromium command line",
@@ -77,20 +79,34 @@ internal fun EffectiveCommandLineSection(
         SwitchList(
             label = "After the next restart",
             switches = nextLaunch,
-            emptyNote = "No switches — every flag that produces one is turned off.",
+            emptyNote = "No switches - every flag that produces one is turned off.",
         )
         Spacer(modifier = Modifier.height(8.dp))
+        // Resolved the way the NEXT LAUNCH will resolve it: env first, then the setting. Reading
+        // `settings.renderingMode` directly promised a change that would not happen whenever the
+        // environment owned the key - in the one section whose stated purpose is that it does not
+        // lie. previewValue exists for exactly this.
+        val nextMode =
+            JxBrowserConfig.resolveRenderingMode(
+                ChromiumFlagsSettingsManager.previewValue(settings, ChromiumFlagKeys.RENDERING_MODE),
+                System.getProperty("os.name").orEmpty().lowercase(),
+            )
         SettingsInfoRow(
             label = "Rendering mode",
-            // The live value, latched for this process, not the pending setting — this block is
+            // The live value, latched for this process, not the pending setting - this block is
             // about what IS, and the preview above covers what will be.
             value = JxBrowserConfig.renderingMode.name,
-            description = if (settings.renderingMode != null) "Changes to $OFF_SCREEN_LABEL after a restart." else null,
+            description =
+                if (nextMode != JxBrowserConfig.renderingMode) {
+                    "Changes to ${nextMode.name} after a restart."
+                } else {
+                    null
+                },
         )
         Spacer(modifier = Modifier.height(8.dp))
         SettingsInfoRow(
             label = "HTTP disk cache",
-            value = FluckEngine.lastDiskCacheMb?.let { "$it MB" } ?: "not applied yet",
+            value = diskCacheMb?.let { "$it MB" } ?: "not applied yet",
             description = "Set through the JxBrowser API rather than a switch, so it does not appear above.",
         )
         if (inContainer) {

@@ -44,6 +44,7 @@ BOSS keeps running:
 Stop it by creating the sentinel file:  touch <csv_path>.stop
 """
 import os
+import platform
 import subprocess
 import sys
 import time
@@ -55,7 +56,13 @@ STOP = CSV + ".stop"
 # has no equivalent for a PACKAGED BOSS, which is what the benchmark harness launches, so
 # the default marker is the app binary path and a worktree path is the way to isolate one
 # build. Matching the main class instead would catch every BOSS on the machine at once.
-MARKER = sys.argv[3] if len(sys.argv) > 3 else "BOSS.app/Contents/MacOS/BOSS"
+#
+# Platform-derived, because the bundle layouts differ and this tool is documented for both:
+# macOS runs BOSS.app/Contents/MacOS/BOSS, Linux runs <dist>/BOSS/bin/BOSS. A hardcoded macOS
+# default matched nothing on Linux, which surfaced as "app never detected" against a docstring
+# and a UNIX.md example that both omit the argument.
+_DEFAULT_MARKERS = {"Darwin": "BOSS.app/Contents/MacOS/BOSS", "Linux": "/BOSS/bin/BOSS"}
+MARKER = sys.argv[3] if len(sys.argv) > 3 else _DEFAULT_MARKERS.get(platform.system(), "BOSS")
 
 STEADY_TAIL_SECONDS = 25
 

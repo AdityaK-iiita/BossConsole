@@ -146,7 +146,65 @@ class ChromiumFlagsSettingsTest {
         for (changed in changes) {
             assertFalse(changed.isDefault, "expected non-default: $changed")
         }
-        // One per field, so a field added to the class without a case here leaves the count short.
-        assertEquals(14, changes.size)
+        // DERIVED from the class, not restated. The previous version asserted `changes.size == 14`,
+        // which only checked the length of the list written directly above it — adding a field to
+        // ChromiumFlagsSettings left it at 14 and the test still passed, so the guard its own
+        // comment described did not exist.
+        assertEquals(
+            ChromiumFlagsSettings.serializer().descriptor.elementsCount,
+            changes.size,
+            "every field needs a case here; add one for the field you just added",
+        )
+    }
+
+    @Test
+    fun `every field either publishes a key or is documented as settings-only`() {
+        // The guard publishedValue's KDoc used to claim the compiler provided. It does not: the
+        // `when` is over a String with an `else`, so a new field silently publishes nothing and
+        // its Settings row becomes decorative. Deriving both sides from the class is what makes
+        // adding a field a failing test rather than a quiet no-op.
+        val fieldCount = ChromiumFlagsSettings.serializer().descriptor.elementsCount
+        val publishedCount = ChromiumFlagKeys.PUBLISHED.size
+        // The fields deliberately NOT published, each for a stated reason: four consumed directly
+        // by applyPerformanceSwitches, and the DevTools port kept out of ConfigLoader on purpose.
+        val settingsOnly =
+            listOf(
+                "diskCacheMb",
+                "noPings",
+                "disableDomainReliability",
+                "disableWinOcclusion",
+                "enableVaapi",
+                "remoteDebuggingPort",
+            )
+        assertEquals(
+            fieldCount,
+            publishedCount + settingsOnly.size,
+            "a new field must either be added to PUBLISHED + publishedValue, or listed here as settings-only",
+        )
+    }
+
+    @Test
+    fun `previewValue puts the environment ahead of the setting`() {
+        // The precedence the whole screen rests on, and the rule the command-line preview has to
+        // reproduce or it reports a next launch that will not happen.
+        val settings = ChromiumFlagsSettings(renderingMode = "OFF_SCREEN")
+        // No env var is set for this key in a test JVM, so the setting shows through.
+        assertEquals(
+            "OFF_SCREEN",
+            ChromiumFlagsSettingsManager.previewValue(settings, ChromiumFlagKeys.RENDERING_MODE),
+        )
+        // A key with no setting and no env resolves to nothing rather than to a guess.
+        assertNull(ChromiumFlagsSettingsManager.previewValue(ChromiumFlagsSettings(), ChromiumFlagKeys.RENDERING_MODE))
+        // And it never consults system properties, which hold THIS process's published boot
+        // values — reading them would make the preview echo the running session back at the user
+        // instead of showing what they just chose.
+        System.setProperty(ChromiumFlagKeys.SKIKO_RENDER_API, "METAL")
+        try {
+            assertNull(
+                ChromiumFlagsSettingsManager.previewValue(ChromiumFlagsSettings(), ChromiumFlagKeys.SKIKO_RENDER_API),
+            )
+        } finally {
+            System.clearProperty(ChromiumFlagKeys.SKIKO_RENDER_API)
+        }
     }
 }

@@ -277,6 +277,68 @@ class FluckEngineSwitchesTest {
         assertEquals(listOf("--disable-dev-shm-usage"), platformSpecific(container))
     }
 
+    /**
+     * The exact slip `SwitchToggles.from`'s own KDoc warns about, which nothing tested.
+     *
+     * The helper in this file builds `SwitchToggles(...)` positionally and never calls `from`, so a
+     * `?: false` where a `?: true` belongs — silently stripping `--no-pings` and VA-API from every
+     * user who never opened the Settings screen — passed the whole suite.
+     */
+    @Test
+    fun `from() maps a default settings object to the shipped defaults`() {
+        assertEquals(
+            FluckEngine.SwitchToggles(),
+            FluckEngine.SwitchToggles.from(
+                ai.rever.boss.config
+                    .ChromiumFlagsSettings(),
+            ),
+        )
+    }
+
+    @Test
+    fun `from() carries an explicit off through for each switch`() {
+        val allOff =
+            ai.rever.boss.config.ChromiumFlagsSettings(
+                noPings = false,
+                disableDomainReliability = false,
+                disableWinOcclusion = false,
+                enableVaapi = false,
+            )
+        assertEquals(
+            FluckEngine.SwitchToggles(noPings = false, domainReliability = false, winOcclusion = false, vaapi = false),
+            FluckEngine.SwitchToggles.from(allOff),
+        )
+    }
+
+    // --- gated switches: the extra-switches field must not route around a confirmation ---
+
+    @Test
+    fun `the extra-switches field refuses switches that have their own confirmed row`() {
+        // The text box reached the same end states as the sandbox and DevTools toggles, which are
+        // deliberately behind dialogs spelling out the exposure. A confirmation that can be
+        // sidestepped by typing is not a confirmation.
+        val (accepted, dropped) =
+            FluckEngine.partitionExtraSwitches(
+                "--no-sandbox --remote-debugging-port=9222 --disable-setuid-sandbox --harmless-flag",
+            )
+        assertEquals(listOf("--harmless-flag"), accepted)
+        // Refused entries land in `dropped`, which the UI already surfaces as "will be ignored" —
+        // so the refusal is visible rather than silent.
+        assertTrue("--no-sandbox" in dropped)
+        assertTrue("--remote-debugging-port=9222" in dropped, "must match with a value attached")
+        assertTrue("--disable-setuid-sandbox" in dropped)
+    }
+
+    @Test
+    fun `gating is narrow and does not pretend to sanitise switches in general`() {
+        // Deliberately NOT a general-purpose filter: the field is documented as unrestricted, and
+        // trying to make arbitrary Chromium switches safe is not a winnable game. It closes only
+        // the paths that bypass a gate this app itself put up.
+        val (accepted, _) =
+            FluckEngine.partitionExtraSwitches("--disable-web-security --proxy-server=http://x --load-extension=/tmp/e")
+        assertEquals(3, accepted.size)
+    }
+
     // --- disk cache ---
 
     @Test

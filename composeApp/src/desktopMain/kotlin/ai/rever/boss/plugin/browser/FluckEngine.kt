@@ -1057,8 +1057,42 @@ object FluckEngine {
      */
     internal fun partitionExtraSwitches(raw: String?): Pair<List<String>, List<String>> {
         val tokens = raw?.trim()?.split(WHITESPACE)?.filter { it.isNotEmpty() } ?: emptyList()
-        return tokens.partition { it.startsWith("--") }
+        return tokens.partition { it.startsWith("--") && !isGatedSwitch(it) }
     }
+
+    /**
+     * Switches that already have their own Settings row behind a confirmation dialog, and are
+     * therefore refused from the free-form extra-switches field.
+     *
+     * Without this the text box is a way around the two confirmations, not an escape hatch
+     * alongside them: `--no-sandbox` reaches the same place as the sandbox toggle, and
+     * `--remote-debugging-port=9222` reaches the same place as the DevTools port — a port that is
+     * deliberately kept out of ConfigLoader precisely so it cannot arrive by a quiet path. A
+     * confirmation the user can sidestep by typing is not a confirmation.
+     *
+     * Deliberately narrow. This is NOT an attempt to sanitise Chromium switches in general, which
+     * is not a winnable game (`--disable-web-security`, `--proxy-server`, `--load-extension` are
+     * all still accepted, and the field is documented as unrestricted). It closes only the paths
+     * that bypass a gate this app itself put up; anything else remains the operator's call.
+     *
+     * Prefix-matched on the switch name so `--no-sandbox` and `--remote-debugging-port=9222` are
+     * both caught, and refused entries surface in the UI's "will be ignored" list rather than
+     * being dropped silently.
+     */
+    internal fun isGatedSwitch(token: String): Boolean {
+        val name = token.substringBefore('=')
+        return name in GATED_SWITCHES
+    }
+
+    private val GATED_SWITCHES =
+        setOf(
+            "--no-sandbox",
+            "--disable-gpu-sandbox",
+            "--disable-setuid-sandbox",
+            "--remote-debugging-port",
+            "--remote-debugging-pipe",
+            "--remote-allow-origins",
+        )
 
     private val WHITESPACE = Regex("\\s+")
 
@@ -1837,7 +1871,7 @@ object FluckEngine {
         // unspecified when both are set.
         val diskCacheMb = diskCacheMb(flags.diskCacheMb)
         builder.diskCacheSize(diskCacheMb.toLong() * 1024 * 1024)
-        lastDiskCacheMb = diskCacheMb
+        _lastDiskCacheMb.value = diskCacheMb
 
         val (extras, dropped) =
             partitionExtraSwitches(
@@ -1903,7 +1937,7 @@ object FluckEngine {
                     ),
             )
         platformSwitches.forEach { builder.addSwitch(it) }
-        lastAppliedSwitches = platformSwitches
+        _lastAppliedSwitches.value = platformSwitches
     }
 
     /**
@@ -1915,11 +1949,15 @@ object FluckEngine {
      * line no running process ever had — under the heading "active". Empty/null until
      * the engine is first built, which is also true: nothing has been applied yet.
      */
-    @Volatile internal var lastAppliedSwitches: List<String> = emptyList()
-        private set
+    // StateFlow, not a plain @Volatile var: the Settings panel reads this during composition, and
+    // a bare var never invalidates — the "active this session" list stayed on its empty-state note
+    // until the user navigated away and back, which made that note ("open a browser tab to
+    // populate this") false in the one case it describes.
+    private val _lastAppliedSwitches = kotlinx.coroutines.flow.MutableStateFlow<List<String>>(emptyList())
+    internal val lastAppliedSwitchesFlow: kotlinx.coroutines.flow.StateFlow<List<String>> = _lastAppliedSwitches
 
-    @Volatile internal var lastDiskCacheMb: Int? = null
-        private set
+    private val _lastDiskCacheMb = kotlinx.coroutines.flow.MutableStateFlow<Int?>(null)
+    internal val lastDiskCacheMbFlow: kotlinx.coroutines.flow.StateFlow<Int?> = _lastDiskCacheMb
 
     /**
      * Disk cache size in MB, clamped so a hand-edited settings file cannot hand Chromium
