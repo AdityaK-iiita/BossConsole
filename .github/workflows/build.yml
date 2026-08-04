@@ -24,6 +24,11 @@ jobs:
     steps:
       - name: 📥 Checkout Repository
         uses: actions/checkout@v7
+        with:
+          # Full history: the em-dash guard below diffs against the PR base, and
+          # at the default depth of 1 that base is unreachable, so the diff fails
+          # and the guard passes every PR. Reproduced in a depth-1 clone.
+          fetch-depth: 0
 
       - name: 🧪 Release publish — TUS slice tests
         # Guards the byte-accurate chunk slicing in the release publish path
@@ -59,18 +64,28 @@ jobs:
           set -euo pipefail
           BASE="${{ github.event.pull_request.base.sha }}"
 
-          # Prose and string literals only; code comments are out of scope, and
-          # *.kt is excluded wholesale because a diff cannot tell a comment from
-          # a literal. The generator's own test covers the release-notes path.
-          ADDED=$(git diff "$BASE"...HEAD -- '*.md' '*.html' \
-                  | grep -E '^\+' | grep -v '^+++' | grep -- '—' || true)
+          # Assert the base is reachable BEFORE diffing. Without this the diff
+          # fails on a shallow checkout, grep sees empty input, and the trailing
+          # `|| true` turns the whole guard into a permanent pass. That is how
+          # the first version of this shipped, and a full local clone hid it.
+          if ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            echo "::error::base commit $BASE is unreachable; this job needs fetch-depth: 0"
+            exit 1
+          fi
+
+          # Prose only. *.kt is excluded because a diff cannot tell a comment
+          # from a literal, and comments are deliberately out of scope; literals
+          # are convention upheld by review. Matches U+2014 only, not en-dashes,
+          # which are used deliberately for ranges (28-34) and arrows.
+          DIFF=$(git diff "${BASE}...HEAD" -- '*.md' '*.html')
+          ADDED=$(printf '%s\n' "$DIFF" | grep -E '^\+' | grep -v '^+++' | grep -- '—' || true)
 
           if [[ -n "$ADDED" ]]; then
             echo "::error::Added lines contain an em-dash. Use a spaced hyphen ( - ) instead."
             printf '%s\n' "$ADDED" | head -20
             exit 1
           fi
-          echo "✅ no em-dashes added"
+          echo "✅ no em-dashes added ($(printf '%s\n' "$DIFF" | grep -cE '^\+' || true) added prose lines checked)"
 
       - name: 🧪 Release download table tests
         # Generates the Downloads section of every release body, which also

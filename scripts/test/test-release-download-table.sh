@@ -143,6 +143,9 @@ run "$TD/pre" --version 9.5.0-beta.1 --prerelease >/dev/null
 check "every always-latest link opts into pre-releases" \
   "$(grep -o 'latest-release?app=boss&download=[^)]*prerelease=true' "$TD/pre" | wc -l | tr -d ' ')" "9"
 check "and says so in the copy" "$(grep -c 'including pre-releases' "$TD/pre")" "1"
+# The pre-release branch emits its own copy, so asserting only the stable output
+# would leave half the generator unchecked.
+check "the pre-release copy emits no em-dashes either" "$(grep -c -- '—' "$TD/pre" || true)" "0"
 run "$TD/rel" --version 9.4.0 >/dev/null
 check "a stable release does not pass prerelease=true" "$(grep -c 'prerelease=true' "$TD/rel")" "0"
 check "and says newest stable" "$(grep -c 'newest stable release' "$TD/rel")" "1"

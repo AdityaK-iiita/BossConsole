@@ -111,12 +111,21 @@ left alone, so do not sweep them.
 (This paragraph names the character by codepoint rather than printing it, because
 the guard below would otherwise flag the rule that defines it.)
 
-This is enforced, not advisory. `build.yml` fails a PR that *adds* an em-dash to
-a doc or a string literal, and `test-release-download-table.sh` asserts the
-generated release-notes table emits none. The rule exists because generated text
-is the main source: `release-notes.yml` has Claude write every release's notes,
-and 343 of this repo's 549 doc em-dashes came from `docs/release-notes/`. The
-guard only looks at added lines, so legacy prose never breaks the build.
+What is actually gated, so nobody assumes more than exists:
+
+| Surface | Enforcement |
+|---|---|
+| `*.md`, `*.html` | `build.yml` fails a PR that **adds** one (added lines only, so legacy prose never blocks the build) |
+| the generated release-notes table | `test-release-download-table.sh` asserts its output has none, both the stable and pre-release copy |
+| string literals in code | **convention, upheld by review.** A diff cannot tell a comment from a literal, so `*.kt` is out of the guard |
+| code comments | out of scope entirely |
+
+The guard matches U+2014 only. En-dashes stay: they are used deliberately for
+ranges and arrows.
+
+The rule exists because generated text is the main source. `release-notes.yml`
+has Claude write every release's notes, and 343 of this repo's 549 doc em-dashes
+came from `docs/release-notes/`.
 
 ## Logging
 
