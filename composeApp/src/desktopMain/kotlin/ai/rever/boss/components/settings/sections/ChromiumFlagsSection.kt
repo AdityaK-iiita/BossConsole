@@ -373,16 +373,29 @@ private fun PlatformPerformanceRows(
         if (isMacAarch64) {
             Spacer(modifier = Modifier.height(8.dp))
             val graphiteEnvNote = envNote(ChromiumFlagKeys.SKIA_GRAPHITE)
+            // The default is not a constant — it follows the rendering mode, so the unset state
+            // has to be shown as whatever that mode resolves to rather than as a fixed false.
+            val graphiteDefault =
+                FluckEngine.resolveSkiaGraphite(null, JxBrowserConfig.renderingMode)
             SettingsToggle(
                 label = "Skia Graphite (Metal) raster backend",
-                checked = settings.enableSkiaGraphite ?: false,
-                onCheckedChange = { save(settings.copy(enableSkiaGraphite = it.takeIf { v -> v })) },
+                checked = settings.enableSkiaGraphite ?: graphiteDefault,
+                // Stores the explicit boolean rather than collapsing one side to null. With a
+                // mode-dependent default, "off" is a real choice that has to survive a switch back
+                // to hardware rendering — collapsing it would silently re-enable Graphite.
+                onCheckedChange = { save(settings.copy(enableSkiaGraphite = it)) },
                 enabled = graphiteEnvNote == null,
                 description =
                     graphiteEnvNote
-                        ?: "Off by default because it is known to break off-screen rendering on this " +
-                        "JxBrowser — pages load but the content area stays blank. Kept here to " +
-                        "re-test after an engine upgrade.",
+                        ?: if (graphiteDefault) {
+                            "On by default in hardware rendering: Chromium's Metal-native raster " +
+                                "backend, and what stable Chrome uses on Apple Silicon. Turn it off if " +
+                                "pages render oddly."
+                        } else {
+                            "Off by default in off-screen rendering, where it is known to blank the " +
+                                "page — frames never reach the app surface. It switches on by itself " +
+                                "if you return to hardware rendering."
+                        },
             )
         }
 

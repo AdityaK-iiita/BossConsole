@@ -170,9 +170,12 @@ private fun nextLaunchSwitches(
         FluckEngine.parseExtraSwitches(
             ChromiumFlagsSettingsManager.previewValue(settings, ChromiumFlagKeys.EXTRA_SWITCHES),
         )
+    // Same resolver the engine uses, so the preview shows the mode-dependent default rather
+    // than reading an unset value as "off".
     val graphite =
-        FluckEngine.isTruthyFlag(
+        FluckEngine.resolveSkiaGraphite(
             ChromiumFlagsSettingsManager.previewValue(settings, ChromiumFlagKeys.SKIA_GRAPHITE),
+            JxBrowserConfig.renderingMode,
         )
     return FluckEngine.performanceSwitchesFor(
         os = os,

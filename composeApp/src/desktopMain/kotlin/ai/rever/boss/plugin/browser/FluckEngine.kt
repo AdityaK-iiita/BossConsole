@@ -1890,7 +1890,17 @@ object FluckEngine {
                 extraSwitches = listOfNotNull(rendererCap) + extras,
                 // Graphite comes through ConfigLoader rather than off `flags` directly, because it
                 // is a published key: an operator's env var must keep outranking the setting.
-                toggles = SwitchToggles.from(flags).copy(skiaGraphite = configIsTrue(ChromiumFlagKeys.SKIA_GRAPHITE)),
+                // Graphite is resolved separately from the other toggles because its default
+                // depends on the rendering mode, not just on the setting. See resolveSkiaGraphite.
+                toggles =
+                    SwitchToggles.from(flags).copy(
+                        skiaGraphite =
+                            resolveSkiaGraphite(
+                                ai.rever.boss.config.ConfigLoader
+                                    .getConfig(ChromiumFlagKeys.SKIA_GRAPHITE),
+                                JxBrowserConfig.renderingMode,
+                            ),
+                    ),
             )
         platformSwitches.forEach { builder.addSwitch(it) }
         lastAppliedSwitches = platformSwitches
@@ -2006,16 +2016,12 @@ object FluckEngine {
             }
 
             os.contains("mac") -> {
-                // Skia Graphite (Metal-native raster backend) is default in
-                // stable Chrome on Apple Silicon — but in the EMBEDDED engine it
-                // breaks OFF_SCREEN rendering. Verified live on JxBrowser 9.3.0 /
-                // Chromium 150 / Apple Silicon (2026-07-13): with Graphite forced
-                // on, pages load (navigation, titles, favicons all fine) but
-                // frames never reach the Compose surface — blank content area;
-                // identical run with Graphite off renders normally. The OSR
-                // frame-export path evidently doesn't support Graphite yet, so
-                // it is OPT-IN only, for re-testing on future JxBrowser upgrades:
-                // BOSS_ENABLE_SKIA_GRAPHITE=true.
+                // Skia Graphite (Metal-native raster backend), Apple Silicon only.
+                // ON by default under HARDWARE_ACCELERATED and OFF under OFF_SCREEN —
+                // see resolveSkiaGraphite for why the default is mode-dependent, and
+                // for the live evidence that it blanks the OSR path specifically.
+                // Override either way with BOSS_ENABLE_SKIA_GRAPHITE or the Settings
+                // row; turning it OFF is now the override worth documenting.
                 if (arch.contains("aarch64") && toggles.skiaGraphite) {
                     switches += "--enable-features=SkiaGraphite"
                 }
@@ -2063,10 +2069,10 @@ object FluckEngine {
         val domainReliability: Boolean = true,
         val winOcclusion: Boolean = true,
         val vaapi: Boolean = true,
-        // The one toggle whose default is OFF, and the only one that is off because the feature is
-        // BROKEN rather than because it is a preference: Graphite blanks off-screen output on this
-        // JxBrowser. Grouped here anyway - it decides whether a switch is emitted, which is what
-        // this type is - but it is resolved from the settings with `?: false`, not `?: true`.
+        // The one toggle whose default is not a constant: it depends on the rendering mode, so
+        // it is resolved by resolveSkiaGraphite and passed in rather than defaulted here. The
+        // `false` is only what an unspecified copy() gets, which is the safe direction — the
+        // shipped behaviour before this became mode-aware.
         val skiaGraphite: Boolean = false,
     ) {
         companion object {
@@ -2077,10 +2083,48 @@ object FluckEngine {
                     domainReliability = flags.disableDomainReliability ?: true,
                     winOcclusion = flags.disableWinOcclusion ?: true,
                     vaapi = flags.enableVaapi ?: true,
-                    skiaGraphite = flags.enableSkiaGraphite ?: false,
+                    // NOT resolved here: its default needs the rendering mode, which this
+                    // settings-only view does not have. Callers overwrite it via
+                    // resolveSkiaGraphite; left at the safe `false` so a caller that forgets
+                    // under-enables rather than shipping a blank browser.
                 )
         }
     }
+
+    /**
+     * Whether to emit `--enable-features=SkiaGraphite`, given an explicit setting or env value
+     * and the rendering mode.
+     *
+     * **The default is ON under HARDWARE_ACCELERATED and OFF under OFF_SCREEN, and that split is
+     * the whole point of this function.** Graphite is Chromium's Metal-native raster backend and
+     * is default-on in stable Chrome on Apple Silicon, so it is the better backend where it works.
+     * The one place it is known NOT to work here is off-screen rendering: verified live on
+     * JxBrowser 9.3.0 / Chromium 150 / Apple Silicon (2026-07-13), pages loaded normally
+     * (navigation, titles, favicons all fine) but frames never reached the Compose surface —
+     * a blank content area.
+     *
+     * That failure was specific to the OSR frame-export path, which HARDWARE_ACCELERATED does not
+     * use at all: there, Chromium composites into its own native window and nothing has to be
+     * exported to Compose. So the recorded breakage does not apply to the mode macOS now runs in.
+     *
+     * Keeping OFF_SCREEN on the old default matters more than it looks. OFF_SCREEN is the
+     * documented escape hatch for anyone who cannot live with HARDWARE — the lost two-finger
+     * swipe-back gesture, say. Defaulting Graphite on unconditionally would hand exactly those
+     * users a BLANK BROWSER, making the escape hatch worse than the thing they were escaping.
+     *
+     * An explicit value always wins, either way, so a machine where Graphite misbehaves under
+     * HARDWARE can turn it off without a rebuild — and unlike the old opt-in, turning it *off*
+     * is now the override that needs saying.
+     */
+    internal fun resolveSkiaGraphite(
+        raw: String?,
+        mode: com.teamdev.jxbrowser.engine.RenderingMode,
+    ): Boolean =
+        when {
+            isTruthyFlag(raw) -> true
+            isFalsyFlag(raw) -> false
+            else -> mode == com.teamdev.jxbrowser.engine.RenderingMode.HARDWARE_ACCELERATED
+        }
 
     /** Pure part of the renderer-process cap, split out so the guard is unit-testable. */
     internal fun renderCapSwitch(raw: String?): String? =

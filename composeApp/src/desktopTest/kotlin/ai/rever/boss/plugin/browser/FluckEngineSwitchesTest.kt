@@ -1,5 +1,6 @@
 package ai.rever.boss.plugin.browser
 
+import com.teamdev.jxbrowser.engine.RenderingMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -135,17 +136,55 @@ class FluckEngineSwitchesTest {
     }
 
     @Test
-    fun `SkiaGraphite is opt-in only — it blanks OSR output on JxBrowser 9-3`() {
-        // Verified live 2026-07-13: Graphite-on produced blank browser content on
-        // Apple Silicon (frames never reached the Compose surface); Graphite-off
-        // rendered normally. Default must therefore be OFF.
+    fun `SkiaGraphite reaches the switch list only on Apple Silicon`() {
         assertEquals(emptyList(), platformSpecific(switchesFor("mac os x", arch = "aarch64")))
         assertEquals(
             listOf("--enable-features=SkiaGraphite"),
             platformSpecific(switchesFor("mac os x", arch = "aarch64", graphiteOptIn = true)),
         )
-        // Intel macs never get Graphite, even opted in.
+        // Intel macs never get Graphite, even when it is switched on. Graphite is Metal-only, so
+        // the arch guard is not a preference and must not be reachable from any setting.
         assertEquals(emptyList(), platformSpecific(switchesFor("mac os x", arch = "x86_64", graphiteOptIn = true)))
+    }
+
+    /**
+     * Graphite's default follows the RENDERING MODE, which is the part worth pinning.
+     *
+     * It is Chromium's Metal-native raster backend and default-on in stable Chrome on Apple
+     * Silicon, so it is the better backend where it works. The one place it is known not to work
+     * here is off-screen rendering — verified live 2026-07-13 on JxBrowser 9.3.0 / Chromium 150:
+     * pages loaded but frames never reached the Compose surface, leaving a blank content area.
+     * That failure is in the OSR frame-export path, which HARDWARE_ACCELERATED does not use.
+     *
+     * The OFF_SCREEN half is the half that protects someone. OFF_SCREEN is the documented escape
+     * hatch from HARDWARE; defaulting Graphite on there would hand exactly those users a blank
+     * browser, making the escape hatch worse than what they escaped.
+     */
+    @Test
+    fun `Graphite defaults on for hardware rendering and off for off-screen`() {
+        assertTrue(FluckEngine.resolveSkiaGraphite(null, RenderingMode.HARDWARE_ACCELERATED))
+        assertFalse(FluckEngine.resolveSkiaGraphite(null, RenderingMode.OFF_SCREEN))
+        for (unset in listOf(null, "", "   ", "maybe")) {
+            assertFalse(
+                FluckEngine.resolveSkiaGraphite(unset, RenderingMode.OFF_SCREEN),
+                "expected the off-screen default for '$unset'",
+            )
+        }
+    }
+
+    @Test
+    fun `an explicit Graphite value overrides the mode default in both directions`() {
+        // Turning it OFF under hardware is the override that matters now: it is the only recourse
+        // on a machine where Graphite misbehaves, and before this change it was unreachable
+        // because unset already meant off.
+        for (mode in listOf(RenderingMode.HARDWARE_ACCELERATED, RenderingMode.OFF_SCREEN)) {
+            for (on in listOf("true", "1", "yes", " ON ")) {
+                assertTrue(FluckEngine.resolveSkiaGraphite(on, mode), "expected '$on' to enable in $mode")
+            }
+            for (off in listOf("false", "0", "no", " OFF ")) {
+                assertFalse(FluckEngine.resolveSkiaGraphite(off, mode), "expected '$off' to disable in $mode")
+            }
+        }
     }
 
     @Test
