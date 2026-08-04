@@ -190,6 +190,30 @@ class HeavyweightOverlayTest {
         }
     }
 
+    // --- overlay window sizing ---
+
+    /**
+     * The overlay fallback must be an explicit rect, never `WindowPlacement.Maximized`.
+     *
+     * Chased while investigating an intermittent report of a grey wash over the whole window when
+     * opening a new tab. The New Tab dialog is a heavyweight modal under HARDWARE, and it draws a
+     * 40%-black scrim across whatever its window covers — so "could not measure the parent" turns
+     * a dialog into a full-screen wash. Maximizing an undecorated transparent window also routes
+     * through the platform zoom path, where macOS can bring it up opaque, so the fallback used to
+     * fail in two ways at once.
+     *
+     * Asserted on the pure size choice rather than by composing a Window, which needs a display.
+     */
+    @Test
+    fun `overlay falls back to the given screen rect, not to a zero or maximized window`() {
+        val screen = intArrayOf(0, 0, 2560, 1440)
+        assertEquals(screen.toList(), overlayRectOrScreen(null, screen).toList())
+        // A measured parent always wins, and is used verbatim — the scrim has to line up with the
+        // window exactly or it appears as a misplaced grey band.
+        val parent = intArrayOf(60, 40, 1400, 870)
+        assertEquals(parent.toList(), overlayRectOrScreen(parent, screen).toList())
+    }
+
     // --- overlay routing ---
 
     /**
