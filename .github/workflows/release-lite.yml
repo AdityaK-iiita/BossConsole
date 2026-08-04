@@ -264,6 +264,10 @@ jobs:
       - name: 🔍 Get JxBrowser Version
         run: |
           JXBROWSER_VERSION=$(grep '^jxbrowser = "' gradle/libs.versions.toml | sed 's/.*= "\(.*\)"/\1/')
+          if [[ -z "$JXBROWSER_VERSION" ]]; then
+            echo "::error::Could not extract jxbrowser version from gradle/libs.versions.toml"
+            exit 1
+          fi
           echo "JXBROWSER_VERSION=$JXBROWSER_VERSION" >> $GITHUB_ENV
 
       - name: 📥 Download Branded Chromium (macOS)
@@ -292,6 +296,12 @@ jobs:
             CHROMIUM_DIR="$APP_PATH/Contents/Resources/chromium"
             mkdir -p "$CHROMIUM_DIR"
             cp -r branded-chromium/* "$CHROMIUM_DIR/" 2>/dev/null || true
+
+            # Same stamp as release.yml. macOS-only here, so FluckEngine's framework
+            # probe already covers this bundle — but the resolver treats the stamp as
+            # authoritative when present, and leaving the one remaining bundling site
+            # unstamped is how the next reader concludes stamping is optional.
+            echo -n "$JXBROWSER_VERSION" > "$CHROMIUM_DIR/version.txt"
             rm -f "$CHROMIUM_DIR"/*.zip 2>/dev/null || true
           fi
 
@@ -382,6 +392,10 @@ jobs:
         shell: bash
         run: |
           JXBROWSER_VERSION=$(grep '^jxbrowser = "' gradle/libs.versions.toml | sed 's/.*= "\(.*\)"/\1/')
+          if [[ -z "$JXBROWSER_VERSION" ]]; then
+            echo "::error::Could not extract jxbrowser version from gradle/libs.versions.toml"
+            exit 1
+          fi
           echo "JXBROWSER_VERSION=$JXBROWSER_VERSION" >> $GITHUB_ENV
 
       - name: 📥 Download Branded Chromium (Windows)
@@ -408,6 +422,9 @@ jobs:
             mkdir -p "$APP_DIR/chromium"
             cp -r branded-chromium/* "$APP_DIR/chromium/" 2>/dev/null || true
             rm -f "$APP_DIR/chromium"/*.zip 2>/dev/null || true
+            # Same stamp as release.yml — the only cross-platform signal of which
+            # Chromium build this engine carries (BossConsole#123).
+            echo -n "$JXBROWSER_VERSION" > "$APP_DIR/chromium/version.txt"
           fi
 
       - name: 🏗️ Package Windows MSI
@@ -512,6 +529,10 @@ jobs:
       - name: 🔍 Get JxBrowser Version
         run: |
           JXBROWSER_VERSION=$(grep '^jxbrowser = "' gradle/libs.versions.toml | sed 's/.*= "\(.*\)"/\1/')
+          if [[ -z "$JXBROWSER_VERSION" ]]; then
+            echo "::error::Could not extract jxbrowser version from gradle/libs.versions.toml"
+            exit 1
+          fi
           echo "JXBROWSER_VERSION=$JXBROWSER_VERSION" >> $GITHUB_ENV
 
       - name: 📥 Download Branded Chromium (Linux)
@@ -535,6 +556,9 @@ jobs:
               mkdir -p "$APP_DIR/lib/chromium"
               cp -r branded-chromium/* "$APP_DIR/lib/chromium/" 2>/dev/null || true
               rm -f "$APP_DIR/lib/chromium"/*.zip 2>/dev/null || true
+              # Same stamp as release.yml — the only cross-platform signal of which
+              # Chromium build this engine carries (BossConsole#123).
+              echo -n "$JXBROWSER_VERSION" > "$APP_DIR/lib/chromium/version.txt"
             fi
           fi
 

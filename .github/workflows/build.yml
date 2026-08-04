@@ -37,6 +37,13 @@ jobs:
         # Apple is stubbed, so this runs on ubuntu with no credentials.
         run: bash scripts/test/test-notarize-dmg.sh
 
+      - name: 🧪 Bundled Chromium version stamp
+        # Release builds only run on publish, so nothing else exercises the
+        # bundling steps before they ship. version.txt is the only cross-platform
+        # signal of which Chromium build a bundled engine carries — without it an
+        # engine gets no version check at all off macOS (BossConsole#123).
+        run: bash scripts/test/test-bundled-chromium-stamp.sh
+
       - name: 🧪 JxBrowser auto-release detector tests
         # GitHub and Artifact Registry are stubbed so every decision path is
         # deterministic and does not consume credentials.

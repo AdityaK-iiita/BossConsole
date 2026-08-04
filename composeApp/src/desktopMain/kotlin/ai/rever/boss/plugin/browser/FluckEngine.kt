@@ -1195,11 +1195,11 @@ object FluckEngine {
      * reports "BOSS-branded Chromium not found", which is both wrong (it is
      * present, just stale) and names a folder that may not be the offending one.
      */
-    private fun noUsableEngineReason(): String {
-        // Derived from engineCandidates so the reason can never describe a
-        // different set than the one that was searched. cacheHealthy = true so a
-        // cache the resolver skipped can still be named in the diagnosis.
-        val present = engineCandidates(cacheHealthy = true).filter { isValidChromiumDir(it) }
+    internal fun noUsableEngineReason(locations: List<java.nio.file.Path> = engineLocations()): String {
+        // Derived from engineLocations, NOT engineCandidates: a diagnosis has to
+        // describe the engines that were rejected, and the candidate list has by
+        // definition already dropped them.
+        val present = locations.filter { isValidChromiumDir(it) }
 
         return present.firstNotNullOfOrNull { chromiumVersionMismatch(it) }
             ?: if (present.isNotEmpty()) {
@@ -1230,6 +1230,11 @@ object FluckEngine {
      * engine boot with the guard reporting everything fine (BossConsole#121).
      */
 
+    /** Paths already reported as stale, so the warning is not repeated per call. */
+    private val warnedStalePaths =
+        java.util.concurrent.ConcurrentHashMap
+            .newKeySet<String>()
+
     /** Whether the downloaded cache is well-formed and at the required version. */
     private fun cacheIsHealthy(): Boolean = ChromiumAutoDownloader.isChromiumInstalled()
 
@@ -1250,9 +1255,11 @@ object FluckEngine {
      * through the guard, pre-warm against the wrong engine, and bring back the
      * UnsatisfiedLinkError this whole line of work exists to prevent.
      *
-     * The bundled engine has no `version.txt` to check, but it ships inside the app
-     * image and so is consistent with the jar by construction; on macOS the
-     * framework check covers it anyway.
+     * The bundled engine is checked by [bundledStampIsAcceptable] instead. It gets a
+     * `version.txt` of its own, written by every bundling site in `release.yml`, so
+     * the same cross-platform signal covers both candidates. Before that stamp
+     * existed this paragraph claimed the bundled engine was "consistent with the jar
+     * by construction" — the assumption BossConsole#123 disproved.
      *
      * Parameters are injectable purely so the rule is testable — the real values
      * come from `java.home` and the user's home directory, which a test cannot
@@ -1262,7 +1269,63 @@ object FluckEngine {
         bundled: java.nio.file.Path? = getBundledChromiumPath(),
         cache: java.nio.file.Path = BossDirectories.resolve("boss-chromium").toPath(),
         cacheHealthy: Boolean = cacheIsHealthy(),
-    ): List<java.nio.file.Path> = listOfNotNull(bundled, cache.takeIf { cacheHealthy })
+        required: String = ChromiumAutoDownloader.effectiveVersion,
+    ): List<java.nio.file.Path> =
+        listOfNotNull(
+            bundled?.takeIf { bundledStampIsAcceptable(it, required) },
+            cache.takeIf { cacheHealthy },
+        )
+
+    /**
+     * Every place an engine may live, unfiltered.
+     *
+     * Separate from [engineCandidates] because the diagnosis needs to see engines
+     * the selection rule *rejected* — that is the whole point of a diagnosis. With
+     * both derived from the filtered list, a stale bundled engine was excluded and
+     * the reason fell through to "BOSS-branded Chromium not found" while it sat
+     * right there, reintroducing exactly the wrong-message problem #122 removed.
+     */
+    internal fun engineLocations(
+        bundled: java.nio.file.Path? = getBundledChromiumPath(),
+        cache: java.nio.file.Path = BossDirectories.resolve("boss-chromium").toPath(),
+    ): List<java.nio.file.Path> = listOfNotNull(bundled, cache)
+
+    /**
+     * Whether a bundled engine's version stamp permits using it.
+     *
+     * Deliberately more lenient than the cache's check, and the asymmetry is the
+     * point. The cache is written by us, so a *missing* `version.txt` there means a
+     * broken extraction and `isChromiumInstalled()` rejects it. A bundled engine is
+     * copied in at packaging time and older app images predate stamping entirely,
+     * so a missing stamp here means "can't tell" and is allowed through — the same
+     * fail-open rule the framework probe uses.
+     *
+     * What this does catch is a stamp that is *present and wrong*, which is the only
+     * signal available off macOS: `frameworkVersionsDir` returns null there, so
+     * without this a mis-built release ships a stale bundled engine that wins first
+     * priority, is never checked, and cannot be repaired by a download — the
+     * download writes to the cache, which the resolver then never reaches
+     * (BossConsole#123).
+     */
+    private fun bundledStampIsAcceptable(
+        bundled: java.nio.file.Path,
+        required: String = ChromiumAutoDownloader.effectiveVersion,
+    ): Boolean {
+        val stamped = ChromiumAutoDownloader.installedVersionAt(bundled)
+        val acceptable = stamped == null || stamped == required
+        // Once per path: engineCandidates is called from hasUsableEngine at startup,
+        // from getChromiumDir on every initializeEngine attempt (which retries), and
+        // from the diagnosis — so a stale bundle otherwise logs the same WARN several
+        // times a launch and reads like several distinct faults during triage.
+        if (!acceptable && warnedStalePaths.add(bundled.toString())) {
+            logger.warn(
+                LogCategory.BROWSER,
+                "Ignoring bundled browser engine stamped with a different version",
+                mapOf("stamped" to (stamped ?: "none"), "required" to required),
+            )
+        }
+        return acceptable
+    }
 
     /**
      * The first candidate that is well-formed and carries the required Chromium build.

@@ -29,6 +29,14 @@ import kotlin.test.assertTrue
  * boots.
  */
 class ChromiumVersionMismatchTest {
+    /**
+     * A fixed required version. Reading ChromiumAutoDownloader.effectiveVersion
+     * here would force BrowserEngineSettingsManager's init, which reads — and on a
+     * redundant pin rewrites — the developer's real ~/.boss config. Tests must not
+     * mutate real user state.
+     */
+    private val requiredVersion = "9.9.9-test"
+
     private val temps = mutableListOf<File>()
     private val isMac =
         System
@@ -269,6 +277,187 @@ class ChromiumVersionMismatchTest {
         assertEquals(
             FluckEngine.EngineStartupAction.Boot,
             FluckEngine.engineStartupAction(hasUsableEngine = true, cacheHealthy = true),
+        )
+    }
+
+    /** Writes a version stamp into [dir], as packaging and the downloader both do. */
+    private fun stamp(
+        dir: java.nio.file.Path,
+        version: String,
+    ) = File(dir.toFile(), "version.txt").writeText(version)
+
+    @Test
+    fun `a bundled engine stamped with a different version is not a candidate`() {
+        // The #123 fix. Off macOS the framework probe makes no claim, so before
+        // packaging wrote a stamp a stale BUNDLED engine won first priority with no
+        // check at all — and could not be repaired, because the download writes to
+        // the cache the resolver then never reached. Runs on every leg: the stamp is
+        // the only cross-platform version signal, which is the whole point.
+        val bundled = engineBundle(VersionInfo.chromiumVersion())
+        stamp(bundled, "0.0.0-not-this-build")
+
+        assertEquals(
+            emptyList(),
+            FluckEngine.engineCandidates(
+                bundled = bundled,
+                cache = bundled,
+                cacheHealthy = false,
+                required = requiredVersion,
+            ),
+            "A bundled engine stamped for a different build must be skipped",
+        )
+    }
+
+    @Test
+    fun `a bundled engine stamped with the required version is kept`() {
+        val bundled = engineBundle(VersionInfo.chromiumVersion())
+        stamp(bundled, requiredVersion)
+
+        assertEquals(
+            listOf(bundled),
+            FluckEngine.engineCandidates(
+                bundled = bundled,
+                cache = bundled,
+                cacheHealthy = false,
+                required = requiredVersion,
+            ),
+        )
+    }
+
+    @Test
+    fun `an unstamped bundled engine is still allowed through`() {
+        // Deliberately more lenient than the cache, which treats a missing stamp as
+        // a broken extraction. App images built before packaging stamped carry no
+        // version.txt, and refusing those would make every such user re-download
+        // for no reason — so "can't tell" stays fail-open, matching the framework
+        // probe's rule.
+        val bundled = engineBundle(VersionInfo.chromiumVersion())
+
+        assertEquals(
+            listOf(bundled),
+            FluckEngine.engineCandidates(
+                bundled = bundled,
+                cache = bundled,
+                cacheHealthy = false,
+                required = requiredVersion,
+            ),
+        )
+    }
+
+    @Test
+    fun `the diagnosis can still see an engine the selection rule rejected`() {
+        // engineLocations is deliberately unfiltered. Deriving the "no usable
+        // engine" reason from the candidate list instead would hide a stale
+        // bundled engine and report "not found" while it sat right there — the
+        // wrong-message problem #122 removed, reintroduced for the bundled case.
+        val bundled = engineBundle(VersionInfo.chromiumVersion())
+        stamp(bundled, "0.0.0-not-this-build")
+        val cache = engineBundle(VersionInfo.chromiumVersion())
+
+        assertEquals(
+            emptyList(),
+            FluckEngine.engineCandidates(
+                bundled = bundled,
+                cache = cache,
+                cacheHealthy = false,
+                required = requiredVersion,
+            ),
+            "precondition: the stale bundled engine is rejected as a candidate",
+        )
+        assertEquals(
+            listOf(bundled, cache),
+            FluckEngine.engineLocations(bundled = bundled, cache = cache),
+            "but both remain visible to the diagnosis",
+        )
+    }
+
+    @Test
+    fun `a present-but-stale engine is never reported as not found`() {
+        // The defect this PR's own review caught: deriving the reason from the
+        // FILTERED candidate list hid a rejected bundled engine, so the user was
+        // told "BOSS-branded Chromium not found" while it sat right there. Asserts
+        // on the reason itself rather than on the helpers, because swapping which
+        // list it reads is invisible to a helper-level test — verified: it was.
+        val stale = engineBundle("150.0.7871.47")
+
+        val reason = FluckEngine.noUsableEngineReason(listOf(stale))
+
+        assertFalse(
+            reason.contains("not found"),
+            "An engine that is present and merely stale must not be reported as missing",
+        )
+        if (isMac) {
+            assertTrue(
+                reason.contains("150.0.7871.47"),
+                "On macOS the framework layout is readable, so name the build found",
+            )
+        }
+    }
+
+    @Test
+    fun `a genuinely absent engine is still reported as not found`() {
+        assertTrue(FluckEngine.noUsableEngineReason(emptyList()).contains("not found"))
+    }
+
+    @Test
+    fun `a stale-stamped bundled engine yields to the downloaded cache`() {
+        // The behaviour #123 is actually about, which the filter tests did not
+        // reach: they all passed cacheHealthy = false and asserted an empty list,
+        // so none showed the repair path working. Runs on every leg — the cache is
+        // gated on cacheHealthy, not on the macOS framework probe.
+        val bundled = engineBundle(VersionInfo.chromiumVersion())
+        stamp(bundled, "0.0.0-not-this-build")
+        val cache = engineBundle(VersionInfo.chromiumVersion())
+        stamp(cache, requiredVersion)
+
+        assertEquals(
+            listOf(cache),
+            FluckEngine.engineCandidates(
+                bundled = bundled,
+                cache = cache,
+                cacheHealthy = true,
+                required = requiredVersion,
+            ),
+            "A stale bundled engine must step aside so the downloaded cache can be used",
+        )
+    }
+
+    @Test
+    fun `a trailing newline in the stamp is tolerated`() {
+        // echo -n is tidy, not load-bearing: installedVersionAt trims. Pinning it
+        // means a future bundling site using plain echo does not silently produce a
+        // stamp that never matches.
+        val bundled = engineBundle(VersionInfo.chromiumVersion())
+        stamp(bundled, "$requiredVersion\n")
+
+        assertEquals(
+            listOf(bundled),
+            FluckEngine.engineCandidates(
+                bundled = bundled,
+                cache = bundled,
+                cacheHealthy = false,
+                required = requiredVersion,
+            ),
+        )
+    }
+
+    @Test
+    fun `a BOM-prefixed stamp is not accepted`() {
+        // Why the PowerShell site uses WriteAllText rather than Set-Content: U+FEFF
+        // is not Character.isWhitespace, so trim() does not remove it and the
+        // comparison fails. Without this the reason lives only in a workflow comment.
+        val bundled = engineBundle(VersionInfo.chromiumVersion())
+        stamp(bundled, "\uFEFF$requiredVersion")
+
+        assertEquals(
+            emptyList(),
+            FluckEngine.engineCandidates(
+                bundled = bundled,
+                cache = bundled,
+                cacheHealthy = false,
+                required = requiredVersion,
+            ),
+            "A BOM-prefixed stamp must not silently pass as a match",
         )
     }
 

@@ -460,6 +460,13 @@ jobs:
           # Extract JxBrowser version from libs.versions.toml for Chromium URL
           JXBROWSER_VERSION=$(grep '^jxbrowser = "' gradle/libs.versions.toml | sed 's/.*= "\(.*\)"/\1/')
           echo "JxBrowser version: $JXBROWSER_VERSION"
+          if [[ -z "$JXBROWSER_VERSION" ]]; then
+            echo "::error::Could not extract jxbrowser version from gradle/libs.versions.toml"
+            echo "  A silent miss here writes an EMPTY version.txt into the bundled engine,"
+            echo "  which the app reads as 'no stamp' and lets through unchecked - reverting"
+            echo "  to the state BossConsole#123 fixed, on a fully green release build."
+            exit 1
+          fi
           echo "JXBROWSER_VERSION=$JXBROWSER_VERSION" >> $GITHUB_ENV
 
       - name: 📥 Download Branded Chromium (macOS)
@@ -519,6 +526,14 @@ jobs:
             # Copy branded Chromium files (excluding the zip)
             cp -r branded-chromium/* "$CHROMIUM_DIR/" 2>/dev/null || true
             rm -f "$CHROMIUM_DIR"/*.zip 2>/dev/null || true
+
+            # Stamp the version the app expects. version.txt is otherwise written
+            # only by ChromiumAutoDownloader, so a bundled engine carried none and
+            # got no version check at all off macOS, where the framework-layout
+            # probe makes no claim (BossConsole#123). Without it a mis-built
+            # release ships a stale bundled engine that wins first priority and
+            # cannot be repaired by a download.
+            echo -n "$JXBROWSER_VERSION" > "$CHROMIUM_DIR/version.txt"
 
             echo "✅ Branded Chromium bundled at: $CHROMIUM_DIR"
             ls -la "$CHROMIUM_DIR"
@@ -691,6 +706,13 @@ jobs:
           # Extract JxBrowser version from libs.versions.toml for Chromium URL
           JXBROWSER_VERSION=$(grep '^jxbrowser = "' gradle/libs.versions.toml | sed 's/.*= "\(.*\)"/\1/')
           echo "JxBrowser version: $JXBROWSER_VERSION"
+          if [[ -z "$JXBROWSER_VERSION" ]]; then
+            echo "::error::Could not extract jxbrowser version from gradle/libs.versions.toml"
+            echo "  A silent miss here writes an EMPTY version.txt into the bundled engine,"
+            echo "  which the app reads as 'no stamp' and lets through unchecked - reverting"
+            echo "  to the state BossConsole#123 fixed, on a fully green release build."
+            exit 1
+          fi
           echo "JXBROWSER_VERSION=$JXBROWSER_VERSION" >> $GITHUB_ENV
 
       - name: 📥 Download Branded Chromium (Linux)
@@ -727,6 +749,14 @@ jobs:
             mkdir -p "$CHROMIUM_DIR"
             cp -r branded-chromium/* "$CHROMIUM_DIR/" 2>/dev/null || true
             rm -f "$CHROMIUM_DIR"/*.zip 2>/dev/null || true
+
+            # Stamp the version the app expects. version.txt is otherwise written
+            # only by ChromiumAutoDownloader, so a bundled engine carried none and
+            # got no version check at all off macOS, where the framework-layout
+            # probe makes no claim (BossConsole#123). Without it a mis-built
+            # release ships a stale bundled engine that wins first priority and
+            # cannot be repaired by a download.
+            echo -n "$JXBROWSER_VERSION" > "$CHROMIUM_DIR/version.txt"
 
             echo "✅ Chromium bundled into app structure"
             ls -la "$CHROMIUM_DIR"
@@ -877,6 +907,13 @@ jobs:
           # Extract JxBrowser version from libs.versions.toml for Chromium URL
           JXBROWSER_VERSION=$(grep '^jxbrowser = "' gradle/libs.versions.toml | sed 's/.*= "\(.*\)"/\1/')
           echo "JxBrowser version: $JXBROWSER_VERSION"
+          if [[ -z "$JXBROWSER_VERSION" ]]; then
+            echo "::error::Could not extract jxbrowser version from gradle/libs.versions.toml"
+            echo "  A silent miss here writes an EMPTY version.txt into the bundled engine,"
+            echo "  which the app reads as 'no stamp' and lets through unchecked - reverting"
+            echo "  to the state BossConsole#123 fixed, on a fully green release build."
+            exit 1
+          fi
           echo "JXBROWSER_VERSION=$JXBROWSER_VERSION" >> $GITHUB_ENV
 
       - name: 📥 Download Branded Chromium (Linux ARM64)
@@ -913,6 +950,14 @@ jobs:
             mkdir -p "$CHROMIUM_DIR"
             cp -r branded-chromium/* "$CHROMIUM_DIR/" 2>/dev/null || true
             rm -f "$CHROMIUM_DIR"/*.zip 2>/dev/null || true
+
+            # Stamp the version the app expects. version.txt is otherwise written
+            # only by ChromiumAutoDownloader, so a bundled engine carried none and
+            # got no version check at all off macOS, where the framework-layout
+            # probe makes no claim (BossConsole#123). Without it a mis-built
+            # release ships a stale bundled engine that wins first priority and
+            # cannot be repaired by a download.
+            echo -n "$JXBROWSER_VERSION" > "$CHROMIUM_DIR/version.txt"
 
             echo "✅ Chromium bundled into app structure"
             ls -la "$CHROMIUM_DIR"
@@ -1048,6 +1093,13 @@ jobs:
           # Extract JxBrowser version from libs.versions.toml for Chromium URL
           JXBROWSER_VERSION=$(grep '^jxbrowser = "' gradle/libs.versions.toml | sed 's/.*= "\(.*\)"/\1/')
           echo "JxBrowser version: $JXBROWSER_VERSION"
+          if [[ -z "$JXBROWSER_VERSION" ]]; then
+            echo "::error::Could not extract jxbrowser version from gradle/libs.versions.toml"
+            echo "  A silent miss here writes an EMPTY version.txt into the bundled engine,"
+            echo "  which the app reads as 'no stamp' and lets through unchecked - reverting"
+            echo "  to the state BossConsole#123 fixed, on a fully green release build."
+            exit 1
+          fi
           echo "JXBROWSER_VERSION=$JXBROWSER_VERSION" >> $GITHUB_ENV
 
       - name: 📥 Download Branded Chromium (Windows)
@@ -1092,6 +1144,14 @@ jobs:
             # Copy branded Chromium files
             cp -r branded-chromium/* "$CHROMIUM_DIR/" 2>/dev/null || true
             rm -f "$CHROMIUM_DIR"/*.zip 2>/dev/null || true
+
+            # Stamp the version the app expects. version.txt is otherwise written
+            # only by ChromiumAutoDownloader, so a bundled engine carried none and
+            # got no version check at all off macOS, where the framework-layout
+            # probe makes no claim (BossConsole#123). Without it a mis-built
+            # release ships a stale bundled engine that wins first priority and
+            # cannot be repaired by a download.
+            echo -n "$JXBROWSER_VERSION" > "$CHROMIUM_DIR/version.txt"
 
             echo "✅ Branded Chromium bundled at: $CHROMIUM_DIR"
             ls -la "$CHROMIUM_DIR"
@@ -1317,6 +1377,9 @@ jobs:
             $JXBROWSER_VERSION = $matches[1]
             Write-Host "JxBrowser version: $JXBROWSER_VERSION"
             "JXBROWSER_VERSION=$JXBROWSER_VERSION" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          } else {
+            Write-Error "Could not extract jxbrowser version from gradle/libs.versions.toml - an empty stamp would silently disable the bundled-engine version check (BossConsole#123)"
+            exit 1
           }
 
       - name: 📥 Download Branded Chromium (Windows ARM64)
@@ -1354,6 +1417,10 @@ jobs:
             New-Item -ItemType Directory -Force -Path $CHROMIUM_DIR | Out-Null
             Copy-Item -Path 'branded-chromium/*' -Destination $CHROMIUM_DIR -Recurse -Force -ErrorAction SilentlyContinue
             Remove-Item -Path "$CHROMIUM_DIR/*.zip" -Force -ErrorAction SilentlyContinue
+            # Stamp the version the app expects — see the POSIX bundling steps.
+            # No BOM and no trailing newline: the reader trims, but Set-Content
+            # would prepend a UTF-8 BOM that a plain string compare would fail on.
+            [System.IO.File]::WriteAllText("$CHROMIUM_DIR/version.txt", $env:JXBROWSER_VERSION)
             Write-Host "Branded Chromium bundled at: $CHROMIUM_DIR"
             Get-ChildItem $CHROMIUM_DIR
           } else {
