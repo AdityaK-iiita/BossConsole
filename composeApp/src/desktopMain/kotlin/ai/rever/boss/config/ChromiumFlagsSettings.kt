@@ -145,7 +145,12 @@ data class ChromiumFlagsSettings(
  */
 object ChromiumFlagsSettingsManager {
     private val logger = BossLogger.forComponent("ChromiumFlagsSettingsManager")
-    private val settingsFile = BossDirectories.resolve("chromium-flags.json")
+
+    // `internal var` purely so tests can redirect it. updateSettings persists on every call, so a
+    // test exercising it against the default path writes the developer's (and CI's) real
+    // ~/.boss/chromium-flags.json - a test that mutates the machine it runs on. Production never
+    // reassigns this.
+    internal var settingsFile = BossDirectories.resolve("chromium-flags.json")
     private val json =
         Json {
             prettyPrint = true
@@ -255,7 +260,7 @@ object ChromiumFlagsSettingsManager {
     internal fun previewValue(
         settings: ChromiumFlagsSettings,
         key: String,
-    ): String? = System.getenv(key) ?: settings.publishedValue(key)
+    ): String? = envOverride(key) ?: settings.publishedValue(key)
 
     /**
      * Serialises the disk writes. This screen writes far more often than the version dropdown
@@ -293,6 +298,7 @@ object ChromiumFlagsSettingsManager {
                     val toPersist = _currentSettings.value
                     createOwnerOnly(temp)
                     temp.writeText(json.encodeToString(ChromiumFlagsSettings.serializer(), toPersist))
+                    restrictAfterWrite(temp)
                     java.nio.file.Files.move(
                         temp.toPath(),
                         settingsFile.toPath(),
@@ -347,6 +353,40 @@ object ChromiumFlagsSettingsManager {
             logger.warn(
                 LogCategory.BROWSER,
                 "Could not create Chromium flag settings owner-only",
+                mapOf("error" to e.toString()),
+            )
+        }
+    }
+
+    /**
+     * Restrict [file] after the fact, as a fallback for [createOwnerOnly].
+     *
+     * Creating the file with its permissions closes the write window, but it also became the ONLY
+     * mechanism - so any failure there left the file at the default umask with nothing but a log
+     * line, which is weaker than the chmod-after-write it replaced. Belt and braces: create
+     * restricted, then confirm restricted. Cheap, and the failure mode it guards is a file that
+     * can turn off the Chromium sandbox being world-readable.
+     */
+    private fun restrictAfterWrite(file: java.io.File) {
+        try {
+            java.nio.file.Files
+                .setPosixFilePermissions(
+                    file.toPath(),
+                    java.nio.file.attribute.PosixFilePermissions
+                        .fromString("rw-------"),
+                )
+        } catch (e: UnsupportedOperationException) {
+            // Non-POSIX filesystem. createOwnerOnly already reported it, so this is debug rather
+            // than a second warning for the same cause - but it is logged, not swallowed.
+            logger.debug(
+                LogCategory.BROWSER,
+                "Filesystem has no POSIX permissions - fallback restrict skipped",
+                mapOf("error" to e.toString()),
+            )
+        } catch (e: Exception) {
+            logger.warn(
+                LogCategory.BROWSER,
+                "Could not restrict Chromium flag settings to owner-only",
                 mapOf("error" to e.toString()),
             )
         }

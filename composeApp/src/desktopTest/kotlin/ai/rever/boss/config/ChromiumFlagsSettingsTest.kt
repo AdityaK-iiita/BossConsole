@@ -1,6 +1,7 @@
 package ai.rever.boss.config
 
 import ai.rever.boss.components.settings.sections.restartWouldChangeAnything
+import kotlinx.coroutines.launch
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -239,23 +240,52 @@ class ChromiumFlagsSettingsTest {
         }
     }
 
+    /**
+     * Two concurrent edits must both survive.
+     *
+     * The point of taking a transform is that the callback receives the value AT APPLY TIME rather
+     * than the snapshot the caller composed against, so a second edit builds on the first instead
+     * of overwriting it. The production call sites all read their parameter
+     * (`save { current -> current.copy(...) }`), which is what makes that hold.
+     *
+     * Written twice before it was right: an earlier version awaited the two calls in order, so
+     * nothing raced and it would have passed against the very bug it exists for; the version after
+     * that had both transforms IGNORE their parameter and close over one snapshot, which is the
+     * bug itself rather than the fix, and it failed. Both mistakes are easy to make here, hence
+     * the note.
+     *
+     * Redirects the manager's file: updateSettings persists on every call, and against the default
+     * path this test writes the developer's and CI's real ~/.boss/chromium-flags.json.
+     */
     @Test
-    fun `updateSettings applies a transform to the value current at the time it runs`() =
-        kotlinx.coroutines.runBlocking {
-            // The lost update this replaced: both callers used to compute copy() from the same
-            // snapshot, so the second silently discarded the first. Two transforms touching
-            // DIFFERENT fields must both survive.
-            val before = ChromiumFlagsSettingsManager.currentSettings.value
-            try {
-                ChromiumFlagsSettingsManager.updateSettings { it.copy(diskCacheMb = 111) }
-                ChromiumFlagsSettingsManager.updateSettings { it.copy(rendererProcessLimit = 7) }
-                val after = ChromiumFlagsSettingsManager.currentSettings.value
-                assertEquals(111, after.diskCacheMb)
-                assertEquals(7, after.rendererProcessLimit, "the second edit must not discard the first")
-            } finally {
-                ChromiumFlagsSettingsManager.updateSettings { before }
+    fun `concurrent edits to different fields both survive`() {
+        val realFile = ChromiumFlagsSettingsManager.settingsFile
+        val temp = java.io.File.createTempFile("chromium-flags-test", ".json")
+        temp.deleteOnExit()
+        ChromiumFlagsSettingsManager.settingsFile = temp
+        val before = ChromiumFlagsSettingsManager.currentSettings.value
+        try {
+            kotlinx.coroutines.runBlocking {
+                val a =
+                    launch {
+                        ChromiumFlagsSettingsManager.updateSettings { it.copy(diskCacheMb = 111) }
+                    }
+                val b =
+                    launch {
+                        ChromiumFlagsSettingsManager.updateSettings { it.copy(rendererProcessLimit = 7) }
+                    }
+                a.join()
+                b.join()
             }
+            val after = ChromiumFlagsSettingsManager.currentSettings.value
+            assertEquals(111, after.diskCacheMb, "the second edit discarded the first")
+            assertEquals(7, after.rendererProcessLimit, "the first edit discarded the second")
+        } finally {
+            kotlinx.coroutines.runBlocking { ChromiumFlagsSettingsManager.updateSettings { before } }
+            ChromiumFlagsSettingsManager.settingsFile = realFile
+            temp.delete()
         }
+    }
 
     @Test
     fun `previewValue puts the environment ahead of the setting`() {
