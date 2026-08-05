@@ -15,6 +15,7 @@ import ai.rever.boss.ipc.services.StateServiceImpl
 import ai.rever.boss.kernel.services.*
 import ai.rever.boss.kernel.ui.RemoteUiSurfaceRegistry
 import ai.rever.boss.plugin.api.*
+import ai.rever.boss.process.ManagedProcess
 import ai.rever.boss.process.ProcessConfig
 import ai.rever.boss.process.ProcessFailure
 import ai.rever.boss.process.ProcessMode
@@ -92,48 +93,121 @@ private fun resolveServiceJar(
 private val reapLogger = LoggerFactory.getLogger("KernelReaper")
 
 /**
+ * True while [reapChildren] is running, so recovery paths know to stand down.
+ *
+ * Stopping supervision closes the *detection* path but not the *action* path: the failure collector
+ * runs on the kernel's own scope, which a reap deliberately does not cancel, and a `handleFailure`
+ * already in flight can sit for the orchestrator-advice timeout and then respawn a child *after* the
+ * reap took its snapshot. A shared flow with buffered failures can also deliver one after the
+ * cancel. Either way the exiting host gains a child nothing will reap.
+ */
+@Volatile
+private var reaping = false
+
+/** Whether a reap is in progress. Recovery must not spawn anything while this is true. */
+internal fun isReaping(): Boolean = reaping
+
+/**
  * Stop supervising children, then kill every registered one inside [gracePeriodMs] total.
  *
- * Supervision goes first because each [ManagedProcess.destroy] below is indistinguishable from a
- * crash to the monitor, whose failure handler respawns - reaping while it still watches can hand an
- * exiting host a fresh generation of children to strand.
+ * Supervision goes first because each kill below is indistinguishable from a crash to the monitor,
+ * whose failure handler respawns - reaping while it still watches can hand an exiting host a fresh
+ * generation of children to strand. [reaping] covers the in-flight remainder.
  *
- * The kills are issued to everything up front and then awaited against a single shared deadline,
- * rather than destroy-then-wait per process. Per-process waiting made exit cost scale with the
- * cohort - N plugins meant up to 2N seconds - and the OS caps how long a shutdown hook may run, so
- * a hook cut off partway down the list stranded the tail. That is the orphan symptom this whole
- * change exists to remove, arriving by a different route.
+ * Kills are issued to everything up front and then awaited against a single deadline set *before*
+ * the first one goes out, rather than destroy-then-wait per process. Per-process waiting made exit
+ * cost scale with the cohort - N plugins meant up to 2N seconds - and the OS caps how long a
+ * shutdown hook may run, so a hook cut off partway down the list stranded the tail. That is the
+ * orphan symptom this whole change exists to remove, arriving by a different route.
+ *
+ * The kills go through [Process] directly rather than `ManagedProcess.destroy()`, which shuts the
+ * child's IPC channel down first and blocks up to 5s per child awaiting termination. Done inside the
+ * destroy loop that is a serial, unbounded cost ahead of the deadline - the very thing the deadline
+ * exists to bound. Channels are closed without waiting once the children are gone.
+ *
+ * The remaining budget is divided among the children still being waited on, so one hung child cannot
+ * consume the whole grace period and send everything behind it straight to a forced kill.
  */
 internal fun reapChildren(
     monitor: ProcessMonitor?,
     registry: ProcessRegistry?,
     gracePeriodMs: Long = 3_000,
 ) {
-    runCatching { monitor?.stopSupervision() }
+    reaping = true
+    try {
+        runCatching { monitor?.stopSupervision() }
 
-    val children = registry?.getAllProcesses().orEmpty()
-    if (children.isEmpty()) return
+        val children = registry?.getAllProcesses().orEmpty()
+        if (children.isEmpty()) return
 
-    reapLogger.info("Reaping {} child process(es)", children.size)
-    children.forEach { runCatching { it.destroy() } }
+        reapLogger.info("Reaping {} child process(es)", children.size)
+        val deadline = System.currentTimeMillis() + gracePeriodMs
+        children.forEach { runCatching { it.process.destroy() } }
 
-    val deadline = System.currentTimeMillis() + gracePeriodMs
-    children.forEach { child ->
-        val budget = deadline - System.currentTimeMillis()
-        if (budget <= 0) return@forEach
-        try {
-            child.process.waitFor(budget, TimeUnit.MILLISECONDS)
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
-            return@forEach
-        } catch (_: Exception) {
-            // Fall through to the force-kill pass.
+        children.forEachIndexed { index, child ->
+            val remainingChildren = children.size - index
+            val remainingBudget = deadline - System.currentTimeMillis()
+            if (remainingBudget <= 0) return@forEachIndexed
+            val share = (remainingBudget / remainingChildren).coerceAtLeast(1)
+            try {
+                child.process.waitFor(share, TimeUnit.MILLISECONDS)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return@forEachIndexed
+            } catch (_: Exception) {
+                // Fall through to the force-kill pass.
+            }
         }
-    }
 
-    children.filter { it.isAlive }.forEach {
-        reapLogger.warn("Force-killing process: {}", it.config.processId)
-        runCatching { it.destroyForcibly() }
+        children.filter { it.isAlive }.forEach {
+            reapLogger.warn("Force-killing process: {}", it.config.processId)
+            runCatching { it.process.destroyForcibly() }
+        }
+
+        // Children are dead, so nothing is going to answer on these. Close them without waiting.
+        children.forEach { runCatching { it.ipcClient?.shutdown(timeoutMs = 0) } }
+    } finally {
+        reaping = false
+    }
+}
+
+private val recoveryLogger = LoggerFactory.getLogger("KernelRecovery")
+
+/**
+ * The process to bring back, or null when recovery should stand down.
+ *
+ * The reap check is the one that is easy to miss: a reap has already snapshotted the registry and is
+ * killing everything, so a respawn now registers a child *after* that snapshot and nothing will reap
+ * it - the orphan this whole change removes. Stopping supervision does not cover it, because the
+ * caller may have been parked awaiting orchestrator advice when the reap began.
+ */
+internal fun respawnCandidate(
+    registry: ProcessRegistry,
+    processId: String,
+): ManagedProcess? {
+    val process = registry.getProcess(processId)
+    return when {
+        isReaping() -> {
+            recoveryLogger.info("Not respawning {} - a reap is in progress", processId)
+            null
+        }
+
+        process == null -> {
+            null
+        }
+
+        registry.getRestartCount(processId) >= process.config.maxRestarts -> {
+            recoveryLogger.error(
+                "Process {} exceeded max restarts ({}), not respawning",
+                processId,
+                process.config.maxRestarts,
+            )
+            null
+        }
+
+        else -> {
+            process
+        }
     }
 }
 
@@ -516,16 +590,8 @@ class KernelBootstrap(
         processId: String,
         jvmArgsOverride: List<String>? = null,
     ) {
-        val process = registry.getProcess(processId) ?: return
+        val process = respawnCandidate(registry, processId) ?: return
         val restartCount = registry.getRestartCount(processId)
-        if (restartCount >= process.config.maxRestarts) {
-            logger.error(
-                "Process {} exceeded max restarts ({}), not respawning",
-                processId,
-                process.config.maxRestarts,
-            )
-            return
-        }
 
         val config =
             if (jvmArgsOverride != null) process.config.copy(jvmArgs = jvmArgsOverride) else process.config
@@ -779,22 +845,28 @@ class KernelBootstrap(
         wireEventBridges(IpcEventBridgeImpl(null, scope))
 
         // 2. Stop supervision and shut down every child against one shared deadline.
+        //
+        //    This drops the old PLUGIN -> APP -> ORCHESTRATOR -> SERVICE tier ordering. That
+        //    ordering bought nothing in practice: all four batches of SIGTERMs went out
+        //    back-to-back with no wait between tiers, so no tier was actually down before the next
+        //    was signalled. Reintroducing it would mean a wait per tier, and therefore an exit cost
+        //    that scales with the number of tiers.
         reapChildren(processMonitor, processRegistry)
 
-        // 6. Stop IPC server
+        // 3. Stop IPC server
         ipcServer?.stop()
 
-        // 6b. Close remote UI surfaces. The registry is process-wide and outlives this bootstrap, so a
+        // 4. Close remote UI surfaces. The registry is process-wide and outlives this bootstrap, so a
         // restart would otherwise come up still holding claims from processes that are now dead.
         RemoteUiSurfaceRegistry.shared.clear()
 
-        // 6c. Close the orchestrator channel. Nothing else owns it, so a mode switch or in-process
+        // 5. Close the orchestrator channel. Nothing else owns it, so a mode switch or in-process
         // restart would otherwise leak the channel and its threads.
         orchestratorClient?.second?.shutdown()
         orchestratorClient = null
         serviceAddresses.clear()
 
-        // 7. Cancel scope
+        // 6. Cancel scope
         scope.cancel()
 
         logger.info("KERNEL mode shut down complete")

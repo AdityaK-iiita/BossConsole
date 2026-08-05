@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.concurrent.TimeUnit
@@ -82,11 +83,12 @@ class ReapChildrenTest {
     private fun managed(
         id: String,
         process: Process,
+        type: ProcessType = ProcessType.PLUGIN,
     ) = ManagedProcess(
         config =
             ProcessConfig(
                 processId = id,
-                processType = ProcessType.PLUGIN,
+                processType = type,
                 displayName = id,
                 mainClass = "Main",
             ),
@@ -139,15 +141,113 @@ class ReapChildrenTest {
         val registry = ProcessRegistry()
         val scope = CoroutineScope(SupervisorJob())
         val monitor = ProcessMonitor(registry, scope)
-        registry.register("plugin-a", managed("plugin-a", FakeProcess(7)))
+        val failures = mutableListOf<String>()
+        scope.launch { monitor.failures.collect { failures += it.processId } }
+
+        // A SERVICE, because PLUGIN is exempt from supervision and so could not report a failure
+        // even if supervision were still running - the test would pass for the wrong reason.
+        registry.register("svc-a", managed("svc-a", FakeProcess(7), ProcessType.SERVICE))
         monitor.startGlobalMonitor(checkIntervalMs = 10)
+        Thread.sleep(100) // let the monitor attach before anything is killed
 
         reapChildren(monitor = monitor, registry = registry, gracePeriodMs = 50)
+        Thread.sleep(300) // give a surviving monitor time to notice and report
 
+        assertTrue(
+            failures.isEmpty(),
+            "the reap's own kills were reported as crashes, which is what triggers a respawn: $failures",
+        )
         // stopSupervision, not stopAll: the kernel passes its own scope in and still uses it after
         // reaping (the event bridge, the failure collector), so reaping must not cancel it.
         assertTrue(scope.isActive, "reapChildren must not cancel a scope it does not own")
         scope.cancel()
+    }
+
+    @Test
+    fun `recovery stands down while a reap is in progress`() {
+        // stopSupervision closes the detection path; this is the action path. A handleFailure parked
+        // awaiting orchestrator advice can outlive the cancel and respawn a child after the reap's
+        // snapshot, leaving the exiting host a child nothing reaps.
+        assertFalse(isReaping(), "no reap in flight at rest")
+
+        val registry = ProcessRegistry()
+        val observed = mutableListOf<Boolean>()
+        val slow =
+            object : Process() {
+                override fun getOutputStream(): OutputStream = OutputStream.nullOutputStream()
+
+                override fun getInputStream(): InputStream = InputStream.nullInputStream()
+
+                override fun getErrorStream(): InputStream = InputStream.nullInputStream()
+
+                override fun waitFor(): Int = 0
+
+                override fun waitFor(
+                    timeout: Long,
+                    unit: TimeUnit,
+                ): Boolean {
+                    observed += isReaping()
+                    return true
+                }
+
+                override fun exitValue(): Int = 0
+
+                override fun destroy() = Unit
+
+                override fun isAlive(): Boolean = false
+
+                override fun pid(): Long = 4242
+            }
+        registry.register("plugin-slow", managed("plugin-slow", slow))
+
+        reapChildren(monitor = null, registry = registry, gracePeriodMs = 100)
+
+        assertEquals(listOf(true), observed, "isReaping() must be true for the duration of the reap")
+        assertFalse(isReaping(), "and false again afterwards")
+    }
+
+    @Test
+    fun `recovery refuses to respawn during a reap`() {
+        val registry = ProcessRegistry()
+        val alive = FakeProcess(31, ignoreDestroys = Int.MAX_VALUE)
+        registry.register("svc-x", managed("svc-x", alive, ProcessType.SERVICE))
+
+        // Outside a reap it is a respawn candidate...
+        assertEquals("svc-x", respawnCandidate(registry, "svc-x")?.config?.processId)
+
+        // ...and during one it must not be, or the exiting host gains a child nothing reaps.
+        var candidateDuringReap: ManagedProcess? = null
+        val probe =
+            object : Process() {
+                override fun getOutputStream(): OutputStream = OutputStream.nullOutputStream()
+
+                override fun getInputStream(): InputStream = InputStream.nullInputStream()
+
+                override fun getErrorStream(): InputStream = InputStream.nullInputStream()
+
+                override fun waitFor(): Int = 0
+
+                override fun waitFor(
+                    timeout: Long,
+                    unit: TimeUnit,
+                ): Boolean {
+                    candidateDuringReap = respawnCandidate(registry, "svc-x")
+                    return true
+                }
+
+                override fun exitValue(): Int = 0
+
+                override fun destroy() = Unit
+
+                override fun isAlive(): Boolean = false
+
+                override fun pid(): Long = 32
+            }
+        registry.register("svc-probe", managed("svc-probe", probe, ProcessType.SERVICE))
+
+        reapChildren(monitor = null, registry = registry, gracePeriodMs = 100)
+
+        assertEquals(null, candidateDuringReap, "respawn must stand down while a reap is in progress")
     }
 
     @Test

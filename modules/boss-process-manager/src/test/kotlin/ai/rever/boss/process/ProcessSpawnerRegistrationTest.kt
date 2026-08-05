@@ -31,9 +31,12 @@ class ProcessSpawnerRegistrationTest {
     /**
      * A config that runs a real but trivially short-lived process.
      *
-     * `nativeImagePath` points at this JVM's own `java` binary, which exists and is executable on
-     * every platform CI runs on. Invoked with no arguments it prints usage and exits, so the test
-     * spawns something real without depending on a shell or a built fat JAR.
+     * `nativeImagePath` points at this JVM's own `java` binary. On POSIX that path exists and is
+     * executable, so the child runs natively and exits immediately after printing usage. On Windows
+     * `findJavaExecutable()` may yield a path without `.exe`, which fails `buildCommand`'s
+     * `exists()` check and falls back to JVM mode with the placeholder main class below - a real
+     * process is still spawned and still has to be registered, which is all these tests assert.
+     * Either way the test needs no shell and no built fat JAR.
      */
     private fun config(
         id: String,

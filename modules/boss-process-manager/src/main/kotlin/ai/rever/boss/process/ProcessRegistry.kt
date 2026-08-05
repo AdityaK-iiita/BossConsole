@@ -27,7 +27,20 @@ class ProcessRegistry {
         process: ManagedProcess,
         manifest: ProcessManifest? = null,
     ) {
-        processes[id] = process
+        val replaced = processes.put(id, process)
+        // Replacing a *dead* handle is normal - that is what a respawn does. Replacing a live one
+        // means two callers picked the same process id, and the evicted child becomes invisible to
+        // the shutdown hook while still running, i.e. an orphan. The known way to reach this is two
+        // windows spawning the same out-of-process plugin, since `plugin-<id>` carries no window
+        // discriminator while the registry is process-wide.
+        if (replaced != null && replaced !== process && replaced.isAlive) {
+            logger.warn(
+                "Registered id={} replaced a LIVE handle (pid={} -> {}); the evicted child will not be reaped",
+                id,
+                replaced.pid,
+                process.pid,
+            )
+        }
         manifest?.let { manifests[id] = it }
         _processCount.value = processes.size
         logger.info("Registered process: id={}, type={}, pid={}", id, process.config.processType, process.pid)

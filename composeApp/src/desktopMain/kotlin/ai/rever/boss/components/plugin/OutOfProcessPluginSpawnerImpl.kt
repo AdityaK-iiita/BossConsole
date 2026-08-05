@@ -352,15 +352,23 @@ class OutOfProcessPluginSpawnerImpl(
 }
 
 /**
- * Kernel-side process id for a plugin. Must stay in step with the `processId` that
- * [OutOfProcessPluginSpawnerImpl.spawn] puts in its [ProcessConfig] - the registry is keyed by it.
+ * Kernel-side process id for a plugin. The kernel registry is keyed by it.
+ *
+ * **Not window-scoped.** This spawner is per-window but the registry is process-wide, so two windows
+ * running the same out-of-process plugin produce the same id and the second registration evicts the
+ * first while its child is still alive - leaving that child unreapable on host exit. `terminate()` is
+ * unaffected (each spawner keeps its own [managedProcesses]), so this only bites at exit.
+ * [ProcessRegistry.register] logs a warning when it evicts a live handle, which is how this shows up.
+ * Putting the window id in here is the real fix and needs the child side to agree, since the runtime
+ * reports state under the process id it was given.
  */
 private fun processIdOf(pluginId: String): String = "plugin-$pluginId"
 
 /**
  * The kernel's process registry, or null when the kernel is not up.
  *
- * Resolved per call rather than cached: the spawner is constructed while KERNEL mode is still
- * bootstrapping, so a value captured at construction time would pin null forever.
+ * Resolved per call rather than cached, for symmetry with the other lookups. In practice it cannot
+ * be null here: `DefaultPlugin` obtains this spawner's [ProcessSpawner] *from*
+ * `KernelBootstrap.instance`, so the instance and its registry both exist before this class does.
  */
 private fun kernelRegistry(): ProcessRegistry? = KernelBootstrap.instance?.processRegistry
