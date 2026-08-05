@@ -1,5 +1,6 @@
 package ai.rever.boss.config
 
+import ai.rever.boss.components.settings.sections.restartWouldChangeAnything
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -181,6 +182,44 @@ class ChromiumFlagsSettingsTest {
             publishedCount + settingsOnly.size,
             "a new field must either be added to PUBLISHED + publishedValue, or listed here as settings-only",
         )
+    }
+
+    /**
+     * Guards `restartWouldChangeAnything`'s OWN settings-only list.
+     *
+     * The field-count test above guards the enumeration written in *this file*. A seventh
+     * settings-only field would fail it, the author would add the name here, it would go green —
+     * and the `boot.copy(...)` in ChromiumFlagsSection would still enumerate six, so changing the
+     * new field would never raise the "Changes are waiting for a restart" row. Only asserting on
+     * the function itself covers that.
+     */
+    @Test
+    fun `changing any settings-only field is offered a restart`() {
+        val cases =
+            listOf(
+                "diskCacheMb" to ChromiumFlagsSettings(diskCacheMb = 128),
+                "noPings" to ChromiumFlagsSettings(noPings = false),
+                "disableDomainReliability" to ChromiumFlagsSettings(disableDomainReliability = false),
+                "disableWinOcclusion" to ChromiumFlagsSettings(disableWinOcclusion = false),
+                "enableVaapi" to ChromiumFlagsSettings(enableVaapi = false),
+                "remoteDebuggingPort" to ChromiumFlagsSettings(remoteDebuggingPort = 9222),
+            )
+        for ((name, changed) in cases) {
+            assertTrue(
+                restartWouldChangeAnything(changed),
+                "changing $name must offer a restart; is it missing from the copy() in ChromiumFlagsSection?",
+            )
+        }
+        // Same count as the other list, so the two cannot drift apart silently.
+        assertEquals(
+            ChromiumFlagsSettings.serializer().descriptor.elementsCount - ChromiumFlagKeys.PUBLISHED.size,
+            cases.size,
+        )
+    }
+
+    @Test
+    fun `an unchanged settings object is not offered a restart`() {
+        assertFalse(restartWouldChangeAnything(ChromiumFlagsSettingsManager.bootSettings))
     }
 
     @Test

@@ -14,7 +14,6 @@ import ai.rever.boss.config.ChromiumFlagsSettingsManager
 import ai.rever.boss.config.JxBrowserConfig
 import ai.rever.boss.plugin.browser.FluckEngine
 import ai.rever.boss.utils.ApplicationRestarter
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
@@ -150,7 +149,7 @@ fun ChromiumFlagsSections() {
  * for a key an environment variable owns, where the next launch resolves to exactly what is
  * running now and the user loses their session for nothing.
  */
-private fun restartWouldChangeAnything(settings: ChromiumFlagsSettings): Boolean {
+internal fun restartWouldChangeAnything(settings: ChromiumFlagsSettings): Boolean {
     val boot = ChromiumFlagsSettingsManager.bootSettings
     if (settings == boot) return false
     // Settings-only fields have no config key, so previewValue cannot speak for them; any change
@@ -193,9 +192,6 @@ private fun ApplySection(
     onReset: () -> Unit,
 ) {
     SettingsSection(title = "Apply") {
-        // Only rows the environment does NOT own can change anything on restart. Comparing the
-        // whole object offered a restart for a row an env var overrides, where restarting is a
-        // lost session for no effect.
         if (restartWouldChangeAnything(settings)) {
             SettingsButtonRow(
                 label = "Changes are waiting for a restart",

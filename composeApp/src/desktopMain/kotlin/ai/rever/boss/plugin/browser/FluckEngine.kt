@@ -1063,19 +1063,11 @@ object FluckEngine {
      * user's own setting — so this costs the Settings screen nothing. Precedence within the pair
      * matches ConfigLoader: environment first.
      */
-    private fun capabilityValue(name: String): String? = System.getenv(name) ?: System.getProperty(name)
+    private fun capabilityValue(name: String): String? =
+        System.getenv(name)?.takeIf { it.isNotBlank() }
+            ?: System.getProperty(name)?.takeIf { it.isNotBlank() }
 
     private fun capabilityIsTrue(name: String) = isTruthyFlag(capabilityValue(name))
-
-    /**
-     * Parse BOSS_CHROMIUM_EXTRA_SWITCHES: whitespace-separated, exactly like a
-     * Chromium command line. NOT comma-separated — commas are Chromium's own
-     * separator inside feature-list values (--enable-features=A,B), which must
-     * pass through intact. Entries must look like switches; values with embedded
-     * spaces are not supported. Returns (accepted switches, dropped tokens) from
-     * a single tokenization so the accept filter and the dropped-token warning
-     * can never diverge.
-     */
 
     /**
      * The outcome of parsing the extra-switches field, split three ways.
@@ -1091,6 +1083,15 @@ object FluckEngine {
         val gated: List<String> = emptyList(),
     )
 
+    /**
+     * Parse BOSS_CHROMIUM_EXTRA_SWITCHES: whitespace-separated, exactly like a
+     * Chromium command line. NOT comma-separated — commas are Chromium's own
+     * separator inside feature-list values (--enable-features=A,B), which must
+     * pass through intact. Entries must look like switches; values with embedded
+     * spaces are not supported. Returns (accepted switches, dropped tokens) from
+     * a single tokenization so the accept filter and the dropped-token warning
+     * can never diverge.
+     */
     internal fun partitionExtraSwitches(raw: String?): ExtraSwitches {
         val tokens = raw?.trim()?.split(WHITESPACE)?.filter { it.isNotEmpty() } ?: emptyList()
         return ExtraSwitches(
@@ -1120,7 +1121,11 @@ object FluckEngine {
      * being dropped silently.
      */
     internal fun isGatedSwitch(token: String): Boolean {
-        val name = token.substringBefore('=')
+        // Lowercased before matching. Chromium's own switch lookup is case-sensitive, so
+        // `--No-Sandbox` would not disable the sandbox and letting it through is harmless — but
+        // the cost of being wrong about that on some platform is an ungated capability, and the
+        // cost of being over-strict is refusing a switch spelling nobody uses.
+        val name = token.substringBefore('=').lowercase()
         return name in GATED_SWITCHES
     }
 
@@ -1902,7 +1907,12 @@ object FluckEngine {
         builder: EngineOptions.Builder,
         inContainer: Boolean,
     ) {
-        val flags = ai.rever.boss.config.ChromiumFlagsSettingsManager.currentSettings.value
+        // bootSettings, NOT currentSettings. Every other flag reaches the engine through the
+        // system properties published from bootSettings at startup, and the engine is built
+        // lazily on first browser use — so reading live settings let one boot mix values from two
+        // points in time, and let a setting take effect while the Apply section still said a
+        // restart was pending. Boot-scoped everywhere is the model the whole screen describes.
+        val flags = ai.rever.boss.config.ChromiumFlagsSettingsManager.bootSettings
 
         // Bigger fixed on-disk HTTP cache for faster repeat page loads. Chromium's
         // auto-sizing historically caps around ~320 MB; 512 MB comfortably exceeds
@@ -2254,9 +2264,12 @@ object FluckEngine {
      * and cookies — hence the warning below on every boot it is on.
      */
     private fun applyRemoteDebuggingPort(builder: EngineOptions.Builder) {
-        val fromEnv = System.getenv(ChromiumFlagKeys.REMOTE_DEBUGGING_PORT)
+        // Blank is treated as unset. `FOO= boss` exports an empty string, which is non-null, so a
+        // bare getenv let an empty variable win the elvis below and silently suppress a port the
+        // user had configured — reported as "not a port in 1024..65535" for a value they never set.
+        val fromEnv = System.getenv(ChromiumFlagKeys.REMOTE_DEBUGGING_PORT)?.takeIf { it.isNotBlank() }
         val fromSettings =
-            ai.rever.boss.config.ChromiumFlagsSettingsManager.currentSettings.value
+            ai.rever.boss.config.ChromiumFlagsSettingsManager.bootSettings
                 .remoteDebuggingPort
                 ?.toString()
         val source = if (fromEnv != null) "environment" else "settings"

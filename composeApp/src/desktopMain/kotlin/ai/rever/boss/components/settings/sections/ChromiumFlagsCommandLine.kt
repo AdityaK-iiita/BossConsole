@@ -158,18 +158,6 @@ private fun SwitchList(
 }
 
 /**
- * The switch list the next launch would produce from [settings].
- *
- * Built by calling the engine's own [FluckEngine.performanceSwitchesFor] with the same
- * resolution the engine applies, rather than by describing the switches again here — a
- * second description is a second thing to keep in sync, and the whole value of this panel
- * is that it does not lie.
- *
- * Values that have a config key go through [ChromiumFlagsSettingsManager.previewValue] so
- * an environment variable shows up as winning, exactly as it will at boot.
- */
-
-/**
  * The rendering mode the next launch will resolve to, env first then the setting.
  *
  * Shared so the preview, the Graphite default and the mode row cannot disagree about which mode
@@ -181,6 +169,17 @@ internal fun nextRenderingMode(settings: ChromiumFlagsSettings): com.teamdev.jxb
         System.getProperty("os.name").orEmpty().lowercase(),
     )
 
+/**
+ * The switch list the next launch would produce from [settings].
+ *
+ * Built by calling the engine's own [FluckEngine.performanceSwitchesFor] with the same
+ * resolution the engine applies, rather than by describing the switches again here — a
+ * second description is a second thing to keep in sync, and the whole value of this panel
+ * is that it does not lie.
+ *
+ * Values that have a config key go through [ChromiumFlagsSettingsManager.previewValue] so
+ * an environment variable shows up as winning, exactly as it will at boot.
+ */
 private fun nextLaunchSwitches(
     settings: ChromiumFlagsSettings,
     os: String,

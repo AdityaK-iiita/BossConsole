@@ -3,7 +3,7 @@ package ai.rever.boss.components.overlays
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
@@ -147,7 +147,9 @@ internal fun overlayRectOrScreen(
  */
 @Composable
 internal fun EnsureOverlayWindowTransparent(window: Window) {
-    DisposableEffect(window) {
+    // SideEffect, not DisposableEffect with an empty onDispose: there is nothing to undo when the
+    // window goes away, and an empty onDispose invites a reader to wonder what is missing.
+    SideEffect {
         runCatching {
             if (window.background?.alpha != 0) {
                 logger.warn(
@@ -166,6 +168,5 @@ internal fun EnsureOverlayWindowTransparent(window: Window) {
                 mapOf("error" to it.toString()),
             )
         }
-        onDispose {}
     }
 }

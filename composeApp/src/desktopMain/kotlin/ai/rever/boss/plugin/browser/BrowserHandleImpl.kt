@@ -2281,6 +2281,36 @@ internal fun shouldRetainSurface(mode: com.teamdev.jxbrowser.engine.RenderingMod
     mode == com.teamdev.jxbrowser.engine.RenderingMode.HARDWARE_ACCELERATED
 
 /**
+ * Whether an AWT pointer falls inside a Compose-measured rect, given the display density.
+ *
+ * **The two inputs are in different coordinate SCALES and this function exists to reconcile
+ * them.** `LayoutCoordinates.boundsInWindow()` reports DEVICE PIXELS;
+ * `MouseInfo.getPointerInfo()` through `SwingUtilities.convertPointFromScreen` reports AWT
+ * LOGICAL UNITS, which equal dp in Compose Desktop. They coincide only at density 1.0, so a
+ * naive `bounds.contains(pointer)` is correct on an unscaled external monitor and wrong by the
+ * density factor on the laptop panel — 2x on Retina, 1.5x at 150% Windows scaling.
+ *
+ * Concretely, at density 2.0 with the browser occupying window px `(0,100)-(2000,1300)`
+ * (logical `(0,50)-(1000,650)`) and a terminal split beneath it: a pointer at logical
+ * `(500,700)` is over the TERMINAL, but compared raw it satisfies both `700 < 1300` and
+ * `500 < 2000` and the gate opens — zooming a browser the pointer is not over, which is the
+ * one thing the gate is for. The mirror case refuses a pinch that is genuinely inside a
+ * right-hand split.
+ *
+ * The same trap is documented for the overlay work in `HeavyweightPopup` ("onGloballyPositioned
+ * reports PIXELS, while the window bounds and the offsets are AWT logical units"), which is
+ * where the convention of naming the space in the parameter name comes from.
+ *
+ * Pure, so the density cases are a table test rather than something only a Retina machine
+ * could catch.
+ */
+internal fun pointerInsideBounds(
+    boundsPx: androidx.compose.ui.geometry.Rect,
+    pointerLogical: androidx.compose.ui.geometry.Offset,
+    density: Float,
+): Boolean = boundsPx.contains(pointerLogical * density)
+
+/**
  * Whether a macOS pinch gesture should zoom THIS browser.
  *
  * The gesture listener is registered on the window's root pane, because Apple's
@@ -2312,37 +2342,6 @@ internal fun shouldRetainSurface(mode: com.teamdev.jxbrowser.engine.RenderingMod
  * Pure so the decision is pinned by tests; the impure pointer read stays at the call
  * site (see `pointerInsideBrowserView`).
  */
-
-/**
- * Whether an AWT pointer falls inside a Compose-measured rect, given the display density.
- *
- * **The two inputs are in different coordinate SCALES and this function exists to reconcile
- * them.** `LayoutCoordinates.boundsInWindow()` reports DEVICE PIXELS;
- * `MouseInfo.getPointerInfo()` through `SwingUtilities.convertPointFromScreen` reports AWT
- * LOGICAL UNITS, which equal dp in Compose Desktop. They coincide only at density 1.0, so a
- * naive `bounds.contains(pointer)` is correct on an unscaled external monitor and wrong by the
- * density factor on the laptop panel — 2x on Retina, 1.5x at 150% Windows scaling.
- *
- * Concretely, at density 2.0 with the browser occupying window px `(0,100)-(2000,1300)`
- * (logical `(0,50)-(1000,650)`) and a terminal split beneath it: a pointer at logical
- * `(500,700)` is over the TERMINAL, but compared raw it satisfies both `700 < 1300` and
- * `500 < 2000` and the gate opens — zooming a browser the pointer is not over, which is the
- * one thing the gate is for. The mirror case refuses a pinch that is genuinely inside a
- * right-hand split.
- *
- * The same trap is documented for the overlay work in `HeavyweightPopup` ("onGloballyPositioned
- * reports PIXELS, while the window bounds and the offsets are AWT logical units"), which is
- * where the convention of naming the space in the parameter name comes from.
- *
- * Pure, so the density cases are a table test rather than something only a Retina machine
- * could catch.
- */
-internal fun pointerInsideBounds(
-    boundsPx: androidx.compose.ui.geometry.Rect,
-    pointerLogical: androidx.compose.ui.geometry.Offset,
-    density: Float,
-): Boolean = boundsPx.contains(pointerLogical * density)
-
 internal fun shouldAllowPinch(
     mode: com.teamdev.jxbrowser.engine.RenderingMode,
     isValid: Boolean,
