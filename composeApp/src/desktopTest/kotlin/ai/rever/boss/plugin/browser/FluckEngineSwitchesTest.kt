@@ -1,5 +1,6 @@
 package ai.rever.boss.plugin.browser
 
+import com.teamdev.jxbrowser.engine.RenderingMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -72,7 +73,17 @@ class FluckEngineSwitchesTest {
         graphiteOptIn: Boolean = false,
         inContainer: Boolean = false,
         extras: List<String> = emptyList(),
-    ) = FluckEngine.performanceSwitchesFor(os, arch, graphiteOptIn, inContainer, extras)
+        noPings: Boolean = true,
+        domainReliability: Boolean = true,
+        winOcclusion: Boolean = true,
+        vaapi: Boolean = true,
+    ) = FluckEngine.performanceSwitchesFor(
+        os,
+        arch,
+        inContainer,
+        extras,
+        FluckEngine.SwitchToggles(noPings, domainReliability, winOcclusion, vaapi, graphiteOptIn),
+    )
 
     /**
      * Switches that are not platform-specific, so a per-platform assertion can say what that
@@ -125,17 +136,55 @@ class FluckEngineSwitchesTest {
     }
 
     @Test
-    fun `SkiaGraphite is opt-in only — it blanks OSR output on JxBrowser 9-3`() {
-        // Verified live 2026-07-13: Graphite-on produced blank browser content on
-        // Apple Silicon (frames never reached the Compose surface); Graphite-off
-        // rendered normally. Default must therefore be OFF.
+    fun `SkiaGraphite reaches the switch list only on Apple Silicon`() {
         assertEquals(emptyList(), platformSpecific(switchesFor("mac os x", arch = "aarch64")))
         assertEquals(
             listOf("--enable-features=SkiaGraphite"),
             platformSpecific(switchesFor("mac os x", arch = "aarch64", graphiteOptIn = true)),
         )
-        // Intel macs never get Graphite, even opted in.
+        // Intel macs never get Graphite, even when it is switched on. Graphite is Metal-only, so
+        // the arch guard is not a preference and must not be reachable from any setting.
         assertEquals(emptyList(), platformSpecific(switchesFor("mac os x", arch = "x86_64", graphiteOptIn = true)))
+    }
+
+    /**
+     * Graphite's default follows the RENDERING MODE, which is the part worth pinning.
+     *
+     * It is Chromium's Metal-native raster backend and default-on in stable Chrome on Apple
+     * Silicon, so it is the better backend where it works. The one place it is known not to work
+     * here is off-screen rendering — verified live 2026-07-13 on JxBrowser 9.3.0 / Chromium 150:
+     * pages loaded but frames never reached the Compose surface, leaving a blank content area.
+     * That failure is in the OSR frame-export path, which HARDWARE_ACCELERATED does not use.
+     *
+     * The OFF_SCREEN half is the half that protects someone. OFF_SCREEN is the documented escape
+     * hatch from HARDWARE; defaulting Graphite on there would hand exactly those users a blank
+     * browser, making the escape hatch worse than what they escaped.
+     */
+    @Test
+    fun `Graphite defaults on for hardware rendering and off for off-screen`() {
+        assertTrue(FluckEngine.resolveSkiaGraphite(null, RenderingMode.HARDWARE_ACCELERATED))
+        assertFalse(FluckEngine.resolveSkiaGraphite(null, RenderingMode.OFF_SCREEN))
+        for (unset in listOf(null, "", "   ", "maybe")) {
+            assertFalse(
+                FluckEngine.resolveSkiaGraphite(unset, RenderingMode.OFF_SCREEN),
+                "expected the off-screen default for '$unset'",
+            )
+        }
+    }
+
+    @Test
+    fun `an explicit Graphite value overrides the mode default in both directions`() {
+        // Turning it OFF under hardware is the override that matters now: it is the only recourse
+        // on a machine where Graphite misbehaves, and before this change it was unreachable
+        // because unset already meant off.
+        for (mode in listOf(RenderingMode.HARDWARE_ACCELERATED, RenderingMode.OFF_SCREEN)) {
+            for (on in listOf("true", "1", "yes", " ON ")) {
+                assertTrue(FluckEngine.resolveSkiaGraphite(on, mode), "expected '$on' to enable in $mode")
+            }
+            for (off in listOf("false", "0", "no", " OFF ")) {
+                assertFalse(FluckEngine.resolveSkiaGraphite(off, mode), "expected '$off' to disable in $mode")
+            }
+        }
     }
 
     @Test
@@ -157,9 +206,10 @@ class FluckEngineSwitchesTest {
 
     @Test
     fun `partitionExtraSwitches separates accepted switches from dropped tokens in one pass`() {
-        val (accepted, dropped) = FluckEngine.partitionExtraSwitches("--ok not-a-switch -single --also-ok")
-        assertEquals(listOf("--ok", "--also-ok"), accepted)
-        assertEquals(listOf("not-a-switch", "-single"), dropped)
+        val parsed = FluckEngine.partitionExtraSwitches("--ok not-a-switch -single --also-ok")
+        assertEquals(listOf("--ok", "--also-ok"), parsed.accepted)
+        assertEquals(listOf("not-a-switch", "-single"), parsed.malformed)
+        assertEquals(emptyList(), parsed.gated)
     }
 
     @Test
@@ -173,6 +223,139 @@ class FluckEngineSwitchesTest {
     fun `unknown platforms get no platform-specific switches`() {
         assertEquals(emptyList(), platformSpecific(switchesFor("freebsd")))
         assertEquals(emptyList(), platformSpecific(switchesFor("sunos", inContainer = true)))
+    }
+
+    // --- the Settings-driven toggles ---
+
+    /**
+     * The default arguments are the shipped behaviour, and that is the part worth pinning: these
+     * four became [ChromiumFlagsSettings] rows where null means "no opinion", so a caller that
+     * resolved null to `false` instead of `true` would quietly strip flags from every user who has
+     * never opened the Settings screen. A signature default of true makes that mistake impossible
+     * to make by omission; this test makes it impossible to make by editing the signature.
+     */
+    @Test
+    fun `omitting the toggles yields exactly the pre-Settings switch set`() {
+        assertEquals(
+            listOf("--no-pings", "--disable-domain-reliability", "--disable-features=CalculateNativeWinOcclusion"),
+            FluckEngine.performanceSwitchesFor("windows 11", "x86_64", inContainer = false),
+        )
+        assertEquals(
+            listOf(
+                "--no-pings",
+                "--disable-domain-reliability",
+                "--enable-features=VaapiVideoDecoder,VaapiVideoDecodeLinuxGL,VaapiVideoEncoder",
+            ),
+            FluckEngine.performanceSwitchesFor("linux", "x86_64", inContainer = false),
+        )
+    }
+
+    @Test
+    fun `each network-trimming switch can be turned off independently`() {
+        // Independently, not as a pair: they are two separate rows in Settings, and a user
+        // debugging one site's hyperlink auditing should not lose Domain Reliability trimming too.
+        // Asserted on "freebsd", which contributes no platform switches, so the whole result IS
+        // the universal set and an exact-list assertion catches an unexpected addition too.
+        assertEquals(listOf("--disable-domain-reliability"), switchesFor("freebsd", noPings = false))
+        assertEquals(listOf("--no-pings"), switchesFor("freebsd", domainReliability = false))
+        assertEquals(emptyList(), switchesFor("freebsd", noPings = false, domainReliability = false))
+    }
+
+    @Test
+    fun `the windows occlusion opt-out can be turned off, leaving the rest of windows intact`() {
+        val switches = switchesFor("windows 11", winOcclusion = false)
+        assertFalse("--disable-features=CalculateNativeWinOcclusion" in switches)
+        assertTrue("--no-pings" in switches, "turning off one switch must not drop the universal set")
+    }
+
+    @Test
+    fun `VA-API can be turned off for machines whose driver is broken, container mode included`() {
+        val desktop = switchesFor("linux", vaapi = false)
+        assertEquals(emptyList(), platformSpecific(desktop))
+        // The container switch is a separate concern and must survive: /dev/shm sizing has nothing
+        // to do with whether video decode is hardware-accelerated.
+        val container = switchesFor("linux", inContainer = true, vaapi = false)
+        assertEquals(listOf("--disable-dev-shm-usage"), platformSpecific(container))
+    }
+
+    /**
+     * The exact slip `SwitchToggles.from`'s own KDoc warns about, which nothing tested.
+     *
+     * The helper in this file builds `SwitchToggles(...)` positionally and never calls `from`, so a
+     * `?: false` where a `?: true` belongs — silently stripping `--no-pings` and VA-API from every
+     * user who never opened the Settings screen — passed the whole suite.
+     */
+    @Test
+    fun `from() maps a default settings object to the shipped defaults`() {
+        assertEquals(
+            FluckEngine.SwitchToggles(),
+            FluckEngine.SwitchToggles.from(
+                ai.rever.boss.config
+                    .ChromiumFlagsSettings(),
+            ),
+        )
+    }
+
+    @Test
+    fun `from() carries an explicit off through for each switch`() {
+        val allOff =
+            ai.rever.boss.config.ChromiumFlagsSettings(
+                noPings = false,
+                disableDomainReliability = false,
+                disableWinOcclusion = false,
+                enableVaapi = false,
+            )
+        assertEquals(
+            FluckEngine.SwitchToggles(noPings = false, domainReliability = false, winOcclusion = false, vaapi = false),
+            FluckEngine.SwitchToggles.from(allOff),
+        )
+    }
+
+    // --- gated switches: the extra-switches field must not route around a confirmation ---
+
+    @Test
+    fun `the extra-switches field refuses switches that have their own confirmed row`() {
+        // The text box reached the same end states as the sandbox and DevTools toggles, which are
+        // deliberately behind dialogs spelling out the exposure. A confirmation that can be
+        // sidestepped by typing is not a confirmation.
+        val parsed =
+            FluckEngine.partitionExtraSwitches(
+                "--no-sandbox --remote-debugging-port=9222 --disable-setuid-sandbox --harmless-flag",
+            )
+        assertEquals(listOf("--harmless-flag"), parsed.accepted)
+        // In `gated`, NOT `malformed`. They are well-formed switches refused for a different
+        // reason, and reporting them as "does not start with --" told the user something plainly
+        // false and sent them to fix a prefix that was never missing.
+        assertEquals(
+            listOf("--no-sandbox", "--remote-debugging-port=9222", "--disable-setuid-sandbox"),
+            parsed.gated,
+        )
+        assertEquals(emptyList(), parsed.malformed, "a gated switch is not a malformed one")
+    }
+
+    @Test
+    fun `gating is narrow and does not pretend to sanitise switches in general`() {
+        // Deliberately NOT a general-purpose filter: the field is documented as unrestricted, and
+        // trying to make arbitrary Chromium switches safe is not a winnable game. It closes only
+        // the paths that bypass a gate this app itself put up.
+        val parsed =
+            FluckEngine.partitionExtraSwitches("--disable-web-security --proxy-server=http://x --load-extension=/tmp/e")
+        assertEquals(3, parsed.accepted.size)
+        assertEquals(emptyList(), parsed.gated)
+    }
+
+    // --- disk cache ---
+
+    @Test
+    fun `disk cache falls back to the shipped size and clamps nonsense`() {
+        assertEquals(FluckEngine.DEFAULT_DISK_CACHE_MB, FluckEngine.diskCacheMb(null))
+        assertEquals(1024, FluckEngine.diskCacheMb(1024))
+        // 0 is the case that matters: JxBrowser/Chromium read a zero cache size as "size it
+        // yourself", so honouring a typed 0 as "no cache" would hand the user the several-hundred-MB
+        // auto-sized cache instead - the opposite of what they asked for.
+        assertEquals(1, FluckEngine.diskCacheMb(0))
+        assertEquals(1, FluckEngine.diskCacheMb(-500))
+        assertEquals(8192, FluckEngine.diskCacheMb(99_999_999))
     }
 
     @Test

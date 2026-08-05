@@ -1,7 +1,11 @@
 package ai.rever.boss.components.overlays
 
 import ai.rever.boss.plugin.browser.parseTopInsetDp
+import ai.rever.boss.plugin.browser.pointerInsideBounds
+import ai.rever.boss.plugin.browser.shouldAllowPinch
 import ai.rever.boss.plugin.browser.shouldRetainSurface
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.unit.IntOffset
 import com.teamdev.jxbrowser.engine.RenderingMode
 import kotlin.test.AfterTest
@@ -101,10 +105,160 @@ class HeavyweightOverlayTest {
 
     @Test
     fun `surfaces are retained only under HARDWARE_ACCELERATED`() {
-        // OFF_SCREEN must keep the original close-on-hide lifecycle: it is the macOS/Linux default
-        // and retention there would change behaviour on platforms this work never measured.
+        // OFF_SCREEN keeps the original close-on-hide lifecycle: an off-screen surface is a cheap
+        // CPU bitmap, so rebuilding it on tab re-entry costs nothing worth retaining native
+        // resources for.
         assertTrue(shouldRetainSurface(RenderingMode.HARDWARE_ACCELERATED))
         assertFalse(shouldRetainSurface(RenderingMode.OFF_SCREEN))
+    }
+
+    // --- pinch gating ---
+
+    /**
+     * The regression this guards is silent: under HARDWARE the browser is a foreign native window,
+     * so Compose never reports the pointer entering it and the old hover gate rejected every pinch
+     * with nothing but a debug line. Asserted as "hover alone is not enough", not just "geometry
+     * works", because a fix that ORed the two signals would pass a geometry-only test while still
+     * letting a background split zoom on a stale hover flag.
+     */
+    @Test
+    fun `under HARDWARE the pinch gate uses geometry, and hover alone is never enough`() {
+        assertTrue(
+            shouldAllowPinch(
+                RenderingMode.HARDWARE_ACCELERATED,
+                isValid = true,
+                pointerOverComposeView = false,
+                pointerInsideBounds = true,
+            ),
+        )
+        // The old gate's inputs, which HARDWARE can produce indefinitely: hover true is not a
+        // licence to zoom when the pointer is demonstrably elsewhere.
+        assertFalse(
+            shouldAllowPinch(
+                RenderingMode.HARDWARE_ACCELERATED,
+                isValid = true,
+                pointerOverComposeView = true,
+                pointerInsideBounds = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `an undeterminable pointer position refuses the pinch rather than guessing`() {
+        // Pre-layout, no window, or headless. A pinch that does nothing is recoverable by pinching
+        // again; one that zooms an unpointed browser in another split is not something the user
+        // asked for and may not even notice.
+        for (hover in listOf(true, false)) {
+            assertFalse(
+                shouldAllowPinch(
+                    RenderingMode.HARDWARE_ACCELERATED,
+                    isValid = true,
+                    pointerOverComposeView = hover,
+                    pointerInsideBounds = null,
+                ),
+                "expected no zoom with an unknown pointer (hover=$hover)",
+            )
+        }
+    }
+
+    @Test
+    fun `OFF_SCREEN keeps hover, so the platforms that already worked cannot regress`() {
+        assertTrue(
+            shouldAllowPinch(
+                RenderingMode.OFF_SCREEN,
+                isValid = true,
+                pointerOverComposeView = true,
+                pointerInsideBounds = null,
+            ),
+        )
+        // Geometry must not be able to override an accurate hover signal here — an OFF_SCREEN view
+        // really is a component, and its hover is the authoritative answer.
+        assertFalse(
+            shouldAllowPinch(
+                RenderingMode.OFF_SCREEN,
+                isValid = true,
+                pointerOverComposeView = false,
+                pointerInsideBounds = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `a disposed handle never zooms, whatever the pointer says`() {
+        for (mode in listOf(RenderingMode.HARDWARE_ACCELERATED, RenderingMode.OFF_SCREEN)) {
+            assertFalse(
+                shouldAllowPinch(mode, isValid = false, pointerOverComposeView = true, pointerInsideBounds = true),
+                "expected no zoom on an invalid handle in $mode",
+            )
+        }
+    }
+
+    /**
+     * The px-vs-dp conversion the pinch gate depends on.
+     *
+     * `boundsInWindow()` is DEVICE PIXELS; an AWT pointer through `convertPointFromScreen` is
+     * LOGICAL UNITS. They coincide only at density 1.0, so comparing them raw is correct on an
+     * unscaled external monitor and wrong by the density factor on a Retina panel — which is
+     * exactly the shape of bug no test on an unscaled CI runner would catch, hence the table.
+     */
+    @Test
+    fun `the pinch bounds test converts the pointer into pixel space`() {
+        // Browser occupies window px (0,100)-(2000,1300); at density 2 that is logical
+        // (0,50)-(1000,650), with a terminal split beneath it.
+        val browserPx = Rect(0f, 100f, 2000f, 1300f)
+
+        // The regression: logical (500,700) is over the TERMINAL, but compared raw it satisfies
+        // 700 < 1300 and 500 < 2000, so an unconverted gate would zoom a browser the pointer is
+        // not over — the one thing the gate exists to prevent.
+        assertFalse(pointerInsideBounds(browserPx, Offset(500f, 700f), density = 2f))
+        assertTrue(browserPx.contains(Offset(500f, 700f)), "raw compare would wrongly accept this")
+
+        // The mirror: genuinely inside, and an unconverted gate would refuse it.
+        val rightSplitPx = Rect(1400f, 100f, 2800f, 1300f)
+        assertTrue(pointerInsideBounds(rightSplitPx, Offset(720f, 300f), density = 2f))
+        assertFalse(rightSplitPx.contains(Offset(720f, 300f)), "raw compare would wrongly refuse this")
+    }
+
+    @Test
+    fun `pinch bounds hold at every common display scale`() {
+        val boundsPx = Rect(0f, 100f, 2000f, 1300f)
+        // The same physical point, expressed in each scale's logical units, must give one answer.
+        for (density in listOf(1f, 1.25f, 1.5f, 2f)) {
+            val insideLogical = Offset(500f / density, 700f / density)
+            assertTrue(
+                pointerInsideBounds(boundsPx, insideLogical, density),
+                "expected inside at density $density",
+            )
+            val outsideLogical = Offset(500f / density, 1400f / density)
+            assertFalse(
+                pointerInsideBounds(boundsPx, outsideLogical, density),
+                "expected outside at density $density",
+            )
+        }
+    }
+
+    // --- overlay window sizing ---
+
+    /**
+     * The overlay fallback must be an explicit rect, never `WindowPlacement.Maximized`.
+     *
+     * Chased while investigating an intermittent report of a grey wash over the whole window when
+     * opening a new tab. The New Tab dialog is a heavyweight modal under HARDWARE, and it draws a
+     * 40%-black scrim across whatever its window covers — so "could not measure the parent" turns
+     * a dialog into a full-screen wash. Maximizing an undecorated transparent window also routes
+     * through the platform zoom path, where macOS can bring it up opaque, so the fallback used to
+     * fail in two ways at once.
+     *
+     * Asserted on the pure size choice rather than by composing a Window, which needs a display.
+     */
+    @Test
+    fun `overlay falls back to the given screen rect, not to a zero or maximized window`() {
+        val screen = intArrayOf(0, 0, 2560, 1440)
+        assertEquals(screen.toList(), overlayRectOrScreen(null, screen).toList())
+        // A measured parent always wins, and is used verbatim — the scrim has to line up with the
+        // window exactly or it appears as a misplaced grey band.
+        val parent = intArrayOf(60, 40, 1400, 870)
+        assertEquals(parent.toList(), overlayRectOrScreen(parent, screen).toList())
     }
 
     // --- overlay routing ---

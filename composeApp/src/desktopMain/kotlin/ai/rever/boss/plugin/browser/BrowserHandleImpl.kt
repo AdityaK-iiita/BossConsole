@@ -22,6 +22,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.teamdev.jxbrowser.browser.Browser
 import com.teamdev.jxbrowser.browser.callback.CreatePopupCallback
@@ -232,17 +235,97 @@ internal class BrowserHandleImpl(
     // True while the pointer hovers this handle's rendered BrowserView. Gates the
     // window-wide macOS pinch listener so a pinch only zooms the browser under the
     // cursor, not one sitting in a background tab or another split.
+    //
+    // OFF_SCREEN only. Under HARDWARE_ACCELERATED this stays false forever — see
+    // [shouldAllowPinch] for why, and for what replaces it.
     @Volatile private var pointerOverBrowserView = false
 
-    // Runs a pinch-triggered zoom only when the pointer hovers this view and the
-    // handle is alive; logs suppressions since the hover flag depends on Compose
-    // Enter/Exit events reaching the view — a stuck flag would otherwise present
-    // as pinch silently not working (or zooming a non-hovered view).
+    // This view's bounds in Compose-root coordinates, refreshed on every layout pass.
+    // The HARDWARE_ACCELERATED substitute for hover: Compose knows where the view IS
+    // even when it never learns the pointer entered it. Null until first layout.
+    //
+    // IN DEVICE PIXELS. Pairs with [browserViewDensity]; see [pointerInsideBounds].
+    @Volatile private var browserViewBoundsInWindow: androidx.compose.ui.geometry.Rect? = null
+
+    // Density for converting an AWT pointer into the pixel space the bounds above are measured
+    // in. Refreshed from composition rather than read once, because it changes when a window is
+    // dragged between a Retina panel and an external display — a stale value would misplace the
+    // gate by exactly that ratio.
+    @Volatile private var browserViewDensity: Float = 1f
+
+    // The AWT window the pinch listener and the browser surface are both bound to,
+    // needed to put the screen-space pointer into the same coordinate space as
+    // [browserViewBoundsInWindow]. Set alongside the gesture registration.
+    @Volatile private var gestureHostWindow: Window? = null
+
+    /**
+     * Whether the pointer currently sits inside this view, decided by geometry rather
+     * than by hover events.
+     *
+     * Returns null when it cannot be determined — no layout yet, no window, or no
+     * pointer (headless, or the cursor left the display) — so the caller can tell
+     * "outside" apart from "unknown" instead of reading a bare false as a rejection.
+     *
+     * Coordinate spaces: Compose reports `boundsInWindow()` relative to the Compose
+     * root, which fills the window's content pane, so the pointer is converted into
+     * the CONTENT PANE and not the window. Converting to the window instead would be
+     * wrong by the title-bar height — enough to zoom while pointing just above the
+     * view and to refuse near its bottom edge.
+     */
+    private fun pointerInsideBrowserView(): Boolean? {
+        val bounds = browserViewBoundsInWindow
+        val window = gestureHostWindow
+        if (bounds == null || window == null) return null
+        return try {
+            // Read INSIDE the try, unlike before: getPointerInfo throws HeadlessException rather
+            // than returning null in a headless JVM, so reading it outside made the KDoc's promise
+            // of "null when there is no pointer" false in exactly the case it names.
+            val pointer =
+                java.awt.MouseInfo
+                    .getPointerInfo()
+                    ?.location
+            val origin = (window as? javax.swing.RootPaneContainer)?.contentPane ?: window
+            // convertPointFromScreen requires a showing component. Checked rather than relied on
+            // because a window mid-teardown is an ordinary state here, not an error.
+            if (pointer != null && origin.isShowing) {
+                javax.swing.SwingUtilities.convertPointFromScreen(pointer, origin)
+                pointerInsideBounds(
+                    boundsPx = bounds,
+                    pointerLogical =
+                        androidx.compose.ui.geometry
+                            .Offset(pointer.x.toFloat(), pointer.y.toFloat()),
+                    density = browserViewDensity,
+                )
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            // The component can stop showing between the check above and the call.
+            logger.debug(
+                LogCategory.BROWSER,
+                "Could not locate pointer relative to browser view",
+                mapOf("error" to e.toString()),
+            )
+            null
+        }
+    }
+
+    // Runs a pinch-triggered zoom only when the pointer is over this view and the
+    // handle is alive; logs suppressions with both inputs, because a wrong gate
+    // presents as pinch silently not working (or zooming a non-hovered view) and the
+    // two causes are indistinguishable from the outside.
     private inline fun gatedPinchZoom(
         direction: String,
         zoom: () -> Unit,
     ) {
-        if (pointerOverBrowserView && isValid) {
+        val geometric = pointerInsideBrowserView()
+        if (shouldAllowPinch(
+                mode = JxBrowserConfig.renderingMode,
+                isValid = isValid,
+                pointerOverComposeView = pointerOverBrowserView,
+                pointerInsideBounds = geometric,
+            )
+        ) {
             zoom()
         } else {
             logger.debug(
@@ -250,7 +333,10 @@ internal class BrowserHandleImpl(
                 "Pinch zoom suppressed",
                 mapOf(
                     "direction" to direction,
+                    "mode" to JxBrowserConfig.renderingMode.name,
                     "hovered" to pointerOverBrowserView.toString(),
+                    "pointerInsideBounds" to geometric.toString(),
+                    "bounds" to browserViewBoundsInWindow.toString(),
                     "valid" to isValid.toString(),
                 ),
             )
@@ -1890,6 +1976,10 @@ internal class BrowserHandleImpl(
                             )
                         if (gestureToken != null) {
                             gesturePane = rootPane
+                            // The gate needs this window to place the pointer in the same
+                            // coordinate space as the Compose bounds, so it is published only
+                            // once a listener actually exists to be gated.
+                            gestureHostWindow = awtWindow
                             logger.debug(LogCategory.BROWSER, "Added macOS pinch-to-zoom gesture handler")
                         }
                     }
@@ -1900,6 +1990,12 @@ internal class BrowserHandleImpl(
 
             onDispose {
                 pointerOverBrowserView = false
+                // Both gate inputs must go stale together with the listener they gate.
+                // A retained HARDWARE surface outlives this effect, so leaving stale
+                // bounds behind would let a pinch aimed at whatever now occupies that
+                // rectangle zoom a hidden tab.
+                browserViewBoundsInWindow = null
+                gestureHostWindow = null
                 val pane = gesturePane
                 val token = gestureToken
                 if (pane != null && token != null) {
@@ -1950,6 +2046,10 @@ internal class BrowserHandleImpl(
                 }
             }
 
+        // Read in composition, not once: LocalDensity follows the window across displays, and the
+        // pinch gate compares AWT logical units against pixel bounds using it.
+        val viewDensity = LocalDensity.current.density
+
         // Render the browser view if available with mouse button handling
         viewState?.let { state ->
             BrowserView(
@@ -1958,8 +2058,20 @@ internal class BrowserHandleImpl(
                     Modifier
                         .fillMaxSize()
                         .offset(y = hardwareTopInsetDp.dp)
-                        // Hover tracking that gates the window-wide pinch gesture
-                        // listener to this view (see the DisposableEffect above)
+                        // Where this view is, for the pinch gate under HARDWARE_ACCELERATED —
+                        // the only signal available there, since a foreign native surface means
+                        // Compose never reports the pointer entering. Clipped bounds, so a view
+                        // scrolled half out of the window does not claim the hidden half.
+                        .onGloballyPositioned { coords ->
+                            browserViewBoundsInWindow = coords.boundsInWindow()
+                            // Captured with the bounds, from the same layout pass, so the two can
+                            // never describe different displays after a window is dragged between
+                            // monitors. See pointerInsideBounds for why the pairing is required.
+                            browserViewDensity = viewDensity
+                        }
+                        // Hover tracking that gates the window-wide pinch gesture listener to
+                        // this view under OFF_SCREEN (see the DisposableEffect above). Never
+                        // fires under HARDWARE_ACCELERATED; see shouldAllowPinch.
                         .onPointerEvent(PointerEventType.Enter) { pointerOverBrowserView = true }
                         .onPointerEvent(PointerEventType.Exit) { pointerOverBrowserView = false }
                         .onPointerEvent(PointerEventType.Press) { event ->
@@ -2167,6 +2279,82 @@ internal class BrowserHandleImpl(
  */
 internal fun shouldRetainSurface(mode: com.teamdev.jxbrowser.engine.RenderingMode): Boolean =
     mode == com.teamdev.jxbrowser.engine.RenderingMode.HARDWARE_ACCELERATED
+
+/**
+ * Whether an AWT pointer falls inside a Compose-measured rect, given the display density.
+ *
+ * **The two inputs are in different coordinate SCALES and this function exists to reconcile
+ * them.** `LayoutCoordinates.boundsInWindow()` reports DEVICE PIXELS;
+ * `MouseInfo.getPointerInfo()` through `SwingUtilities.convertPointFromScreen` reports AWT
+ * LOGICAL UNITS, which equal dp in Compose Desktop. They coincide only at density 1.0, so a
+ * naive `bounds.contains(pointer)` is correct on an unscaled external monitor and wrong by the
+ * density factor on the laptop panel — 2x on Retina, 1.5x at 150% Windows scaling.
+ *
+ * Concretely, at density 2.0 with the browser occupying window px `(0,100)-(2000,1300)`
+ * (logical `(0,50)-(1000,650)`) and a terminal split beneath it: a pointer at logical
+ * `(500,700)` is over the TERMINAL, but compared raw it satisfies both `700 < 1300` and
+ * `500 < 2000` and the gate opens — zooming a browser the pointer is not over, which is the
+ * one thing the gate is for. The mirror case refuses a pinch that is genuinely inside a
+ * right-hand split.
+ *
+ * The same trap is documented for the overlay work in `HeavyweightPopup` ("onGloballyPositioned
+ * reports PIXELS, while the window bounds and the offsets are AWT logical units"), which is
+ * where the convention of naming the space in the parameter name comes from.
+ *
+ * Pure, so the density cases are a table test rather than something only a Retina machine
+ * could catch.
+ */
+internal fun pointerInsideBounds(
+    boundsPx: androidx.compose.ui.geometry.Rect,
+    pointerLogical: androidx.compose.ui.geometry.Offset,
+    density: Float,
+): Boolean = boundsPx.contains(pointerLogical * density)
+
+/**
+ * Whether a macOS pinch gesture should zoom THIS browser.
+ *
+ * The gesture listener is registered on the window's root pane, because Apple's
+ * GestureUtilities can only listen on a Swing component and there is no per-browser
+ * one. So every browser in a window hears every pinch, and something has to decide
+ * which one the user meant. That something used to be Compose hover — and hover is
+ * exactly what HARDWARE_ACCELERATED takes away.
+ *
+ * Why: under HARDWARE the browser is not a component inside the Compose scene at all.
+ * JxBrowser's `WindowedWidgetState` attaches Chromium's own native window to the AWT
+ * window's native handle and positions it from Compose layout coordinates — so macOS
+ * delivers mouse movement to that foreign window, Compose never sees
+ * `PointerEventType.Enter`, and `pointerOverBrowserView` stays false for the lifetime
+ * of the tab. Gating on it there means pinch never fires, with nothing but a debug
+ * line to say so. That is the regression this function exists to prevent.
+ *
+ * The substitute is geometry: Compose still knows where the view is, and the pointer
+ * location is readable from AWT, so "is the pointer inside this view" is answerable
+ * without the pointer ever having to enter it. [pointerInsideBounds] is nullable
+ * because that answer can be genuinely unavailable (pre-layout, no window, headless),
+ * and an unknown is treated as NO — a pinch that does nothing is recoverable by
+ * pinching again, whereas one that zooms an unpointed browser in another split is a
+ * change the user did not ask for and may not notice.
+ *
+ * OFF_SCREEN deliberately keeps using hover rather than adopting the geometry check.
+ * It is a real component there, hover is accurate and cheap, and this flip should not
+ * be able to regress the platforms that already worked.
+ *
+ * Pure so the decision is pinned by tests; the impure pointer read stays at the call
+ * site (see `pointerInsideBrowserView`).
+ */
+internal fun shouldAllowPinch(
+    mode: com.teamdev.jxbrowser.engine.RenderingMode,
+    isValid: Boolean,
+    pointerOverComposeView: Boolean,
+    pointerInsideBounds: Boolean?,
+): Boolean {
+    if (!isValid) return false
+    return if (mode == com.teamdev.jxbrowser.engine.RenderingMode.HARDWARE_ACCELERATED) {
+        pointerInsideBounds == true
+    } else {
+        pointerOverComposeView
+    }
+}
 
 /**
  * Parse BOSS_BROWSER_TOP_INSET_DP into a usable vertical correction for the browser surface.

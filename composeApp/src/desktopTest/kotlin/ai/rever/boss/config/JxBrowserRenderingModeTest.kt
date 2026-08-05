@@ -11,16 +11,19 @@ import kotlin.test.assertTrue
  *
  * Two things are pinned here, and both are load-bearing.
  *
- * The platform split: Windows defaults to HARDWARE_ACCELERATED because OFF_SCREEN
- * costs it ~47% on Speedometer 3.1 (see the KDoc for the measurements), while macOS
- * is measurably FINE on OFF_SCREEN — 47.9, ahead of Chrome — and Linux was never
- * measured. A regression that leaked the Windows default onto those platforms would
- * change how browser content composites against Compose overlays on machines that
- * had no problem to fix, so it is asserted explicitly per platform.
+ * The default is HARDWARE_ACCELERATED on every platform, for two different reasons
+ * that the KDoc keeps separate: Windows because OFF_SCREEN costs it ~47% on
+ * Speedometer 3.1, macOS and Linux because OFF_SCREEN costs them idle power and
+ * memory (~10x idle CPU, -1.1 GB RSS in Lite's A/B) even though macOS Speedometer is
+ * already ahead of Chrome. It is asserted per platform string anyway — including
+ * strings no platform reports — because this value decides how browser content
+ * composites against every app overlay, and a platform silently falling through to
+ * the wrong branch is not visible in any single test that asserts only the branch it
+ * expects.
  *
- * The override precedence: an explicit OFF_SCREEN must win on Windows, because it is
- * the documented escape hatch if HARDWARE_ACCELERATED turns out to draw browser
- * content over Compose menus and dialogs there.
+ * The override precedence: an explicit OFF_SCREEN must win everywhere, because it is
+ * now the only way to get the old compositing back if a machine turns out to draw
+ * browser content over Compose menus and dialogs.
  */
 class JxBrowserRenderingModeTest {
     private val windows = "windows 11"
@@ -28,46 +31,42 @@ class JxBrowserRenderingModeTest {
     private val linux = "linux"
 
     @Test
-    fun `windows defaults to HARDWARE_ACCELERATED`() {
-        for (raw in listOf(null, "", "   ")) {
-            assertEquals(
-                RenderingMode.HARDWARE_ACCELERATED,
-                JxBrowserConfig.resolveRenderingMode(raw, windows),
-                "expected the Windows default for '$raw'",
-            )
+    fun `every platform defaults to HARDWARE_ACCELERATED`() {
+        // "darwin" is here on purpose: it contains the substring "win". The default no
+        // longer branches on the OS, but this test outlives that — reintroducing a
+        // carve-out written as contains("win") would hand macOS the Windows branch.
+        for (os in listOf(windows, mac, linux, "darwin", "freebsd", "sunos", "")) {
+            for (raw in listOf(null, "", "   ")) {
+                assertEquals(
+                    RenderingMode.HARDWARE_ACCELERATED,
+                    JxBrowserConfig.resolveRenderingMode(raw, os),
+                    "expected the default for '$raw' on '$os'",
+                )
+            }
         }
     }
 
     @Test
-    fun `mac and linux keep OFF_SCREEN — the Windows finding must not leak`() {
-        // "darwin" is here on purpose: it contains the substring "win", so a platform check
-        // written as contains("win") would hand macOS the Windows default.
-        for (os in listOf(mac, linux, "darwin", "freebsd", "sunos")) {
-            assertEquals(
-                RenderingMode.OFF_SCREEN,
-                JxBrowserConfig.resolveRenderingMode(null, os),
-                "expected OFF_SCREEN on '$os'",
-            )
-        }
-    }
-
-    @Test
-    fun `an explicit OFF_SCREEN overrides the Windows default`() {
+    fun `an explicit OFF_SCREEN overrides the default on every platform`() {
         // The escape hatch: if the HARDWARE overlay handling turns out to be
         // incomplete on some machine, this restores the old behaviour with no rebuild.
         // All three spellings are BossConsoleLite's, so one value works in both repos.
-        for (raw in listOf("OFF_SCREEN", "off_screen", "  Off_Screen  ", "OFFSCREEN", "software")) {
-            assertEquals(
-                RenderingMode.OFF_SCREEN,
-                JxBrowserConfig.resolveRenderingMode(raw, windows),
-                "expected the override to win for '$raw'",
-            )
+        for (os in listOf(windows, mac, linux)) {
+            for (raw in listOf("OFF_SCREEN", "off_screen", "  Off_Screen  ", "OFFSCREEN", "software")) {
+                assertEquals(
+                    RenderingMode.OFF_SCREEN,
+                    JxBrowserConfig.resolveRenderingMode(raw, os),
+                    "expected the override to win for '$raw' on '$os'",
+                )
+            }
         }
     }
 
     @Test
-    fun `an explicit HARDWARE mode can be opted into on mac and linux`() {
-        for (os in listOf(mac, linux)) {
+    fun `an explicit HARDWARE mode is still honoured, not just defaulted into`() {
+        // Distinct from the default test: this asserts the spellings are parsed, so a
+        // user who pins HARDWARE keeps it if the default is ever narrowed again.
+        for (os in listOf(windows, mac, linux)) {
             for (raw in listOf("hardware_accelerated", "HARDWARE", "gpu")) {
                 assertEquals(
                     RenderingMode.HARDWARE_ACCELERATED,
@@ -79,22 +78,19 @@ class JxBrowserRenderingModeTest {
     }
 
     @Test
-    fun `an unrecognized value falls back to the platform default, never to a guess`() {
-        // A near-miss must not be read as intent. Getting this wrong would change
-        // compositing app-wide with no other signal than a log line. Note "hardware",
-        // "gpu", "offscreen" and "software" are NOT here: those are Lite's accepted
-        // spellings and are honoured (see the override tests above).
+    fun `an unrecognized value falls back to the default, never to a guess`() {
+        // A near-miss must not be read as intent — least of all a near-miss of
+        // OFF_SCREEN, which would silently change compositing app-wide with no signal
+        // beyond a log line. Note "hardware", "gpu", "offscreen" and "software" are NOT
+        // here: those are Lite's accepted spellings and are honoured (see above).
         for (raw in listOf("HARDWARE-ACCELERATED", "ACCELERATED", "off screen", "hard ware", "nonsense")) {
-            assertEquals(
-                RenderingMode.HARDWARE_ACCELERATED,
-                JxBrowserConfig.resolveRenderingMode(raw, windows),
-                "expected the Windows default for unrecognized '$raw'",
-            )
-            assertEquals(
-                RenderingMode.OFF_SCREEN,
-                JxBrowserConfig.resolveRenderingMode(raw, mac),
-                "expected the mac default for unrecognized '$raw'",
-            )
+            for (os in listOf(windows, mac, linux)) {
+                assertEquals(
+                    RenderingMode.HARDWARE_ACCELERATED,
+                    JxBrowserConfig.resolveRenderingMode(raw, os),
+                    "expected the default for unrecognized '$raw' on '$os'",
+                )
+            }
         }
     }
 

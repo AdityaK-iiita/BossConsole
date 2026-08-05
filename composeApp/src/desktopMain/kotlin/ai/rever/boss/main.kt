@@ -133,6 +133,15 @@ fun main(args: Array<String>) {
     // Set up proper temp directories for native libraries
     setupNativeLibraryPaths()
 
+    // Publish the Chromium flags chosen in Settings > Browser Engine as system properties, so
+    // every existing ConfigLoader read site picks them up without knowing settings exist.
+    // Position is load-bearing and this is as early as it can go: the Skiko block immediately
+    // below reads BOSS_SKIKO_RENDER_API before AWT initialises, and JxBrowserConfig.renderingMode
+    // is a `by lazy` that caches the first answer for the life of the process. An environment
+    // variable still outranks anything published here - see applyToSystemProperties.
+    ai.rever.boss.config.ChromiumFlagsSettingsManager
+        .applyToSystemProperties()
+
     // Opt-in override for the Compose UI's own rendering backend (Skiko) - separate from the
     // BROWSER's rendering mode in JxBrowserConfig. Lets a backend be A/B'd on a real machine
     // without a rebuild: pin DIRECT3D, or confirm the GPU-less Windows RDP/VM cohort that falls
@@ -149,7 +158,8 @@ fun main(args: Array<String>) {
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
         ?.let { requested ->
-            val known = setOf("DIRECT3D", "OPENGL", "METAL", "SOFTWARE_FAST", "SOFTWARE")
+            // Shared with the Settings dropdown, so it can never offer a value rejected here.
+            val known = ai.rever.boss.config.ChromiumFlagKeys.SKIKO_RENDER_APIS
             val normalized = requested.uppercase()
             if (normalized in known) {
                 System.setProperty("skiko.renderApi", normalized)

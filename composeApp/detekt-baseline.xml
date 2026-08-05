@@ -240,6 +240,7 @@
     <ID>LongMethod:CLIInstallationDialog.kt$@Composable private fun ErrorContent( message: String, onRetry: () -&gt; Unit, onClose: () -&gt; Unit, )</ID>
     <ID>LongMethod:ChromiumAutoDownloader.kt$ChromiumAutoDownloader$internal suspend fun installFromCandidates( candidates: List&lt;EngineDownloadCandidate&gt;, version: String, targetDir: Path, staged: Boolean, onProgress: (DownloadProgress) -&gt; Unit, fetch: (String, Path) -&gt; Unit = { url, dest -&gt; downloadWithProgress(url, dest, onProgress) }, extract: (Path, Path) -&gt; Unit = { zip, dest -&gt; extractZip(zip, dest) }, ): Result&lt;Path&gt;</ID>
     <ID>LongMethod:ChromiumDownloadDialog.kt$@Composable private fun DownloadSurface( progress: Float, downloadedMB: Long, totalMB: Long, status: String, error: String?, onCancel: () -&gt; Unit, onRetry: (() -&gt; Unit)?, )</ID>
+    <ID>LongMethod:ChromiumFlagsSection.kt$@Composable fun ChromiumFlagsSections()</ID>
     <ID>LongMethod:CloneProjectDialog.kt$@Composable fun CloneProjectDialog( onDismiss: () -&gt; Unit, onProjectCloned: (String) -&gt; Unit, )</ID>
     <ID>LongMethod:CloneProjectDialog.kt$@Composable private fun CloningStep( repositoryUrl: String, targetDirectory: String, progressMessage: String, onProgress: (String) -&gt; Unit, onSuccess: (String) -&gt; Unit, onError: (String) -&gt; Unit, )</ID>
     <ID>LongMethod:CloneProjectDialog.kt$@Composable private fun ConfigurationStep( onDismiss: () -&gt; Unit, onClone: (url: String, directory: String) -&gt; Unit, )</ID>
@@ -1078,7 +1079,7 @@
     <ID>ReturnCount:FluckEngine.kt$FluckEngine$private fun cleanupStaleLockFiles(profileDir: java.nio.file.Path): Boolean</ID>
     <ID>ReturnCount:FluckEngine.kt$FluckEngine$private fun getMacOSBundledChromiumPath(): java.nio.file.Path?</ID>
     <ID>ReturnCount:FluckEngine.kt$FluckEngine$private fun getWindowsBundledChromiumPath(): java.nio.file.Path?</ID>
-    <ID>ReturnCount:FluckEngine.kt$FluckEngine$private fun runningInContainer(): Boolean</ID>
+    <ID>ReturnCount:FluckEngine.kt$FluckEngine$internal fun runningInContainer(): Boolean</ID>
     <ID>ReturnCount:FluckEngine.kt$FluckEngine.BrowserFindBar$private fun performFind(backward: Boolean)</ID>
     <ID>ReturnCount:FontManager.kt$FontManager$fun isFontAvailable(fontName: String): Boolean</ID>
     <ID>ReturnCount:FormFieldDetector.kt$FormFieldDetector$private fun determineFieldType( inputType: String, fieldName: String, fieldId: String, placeholder: String, autocomplete: String, className: String, ariaLabel: String, ): FieldType</ID>
@@ -1147,6 +1148,7 @@
     <ID>SpreadOperator:FilePickerProviderFactory.kt$DesktopFilePickerProvider$( filters.joinToString(", ") { "*.$it" }, *filters.toTypedArray(), )</ID>
     <ID>ThrowsCount:UpdateInstaller.kt$UpdateInstaller$internal fun validateDownloadFile( downloadFile: File, expectedExtension: String, stagingDir: File = defaultStagingDir(), )</ID>
     <ID>ThrowsCount:UpdatePathValidator.kt$UpdatePathValidator$fun validatePath( path: String, description: String, )</ID>
+    <ID>TooGenericExceptionCaught:ChromiumFlagsSettings.kt$ChromiumFlagsSettingsManager$e: Exception</ID>
     <ID>TooGenericExceptionCaught:LastSessionCoordinator.kt$LastSessionCoordinator$e: Exception</ID>
     <ID>TooGenericExceptionCaught:AWTKeyboardInterceptor.kt$AWTKeyboardInterceptor$e: Exception</ID>
     <ID>TooGenericExceptionCaught:AppThemeSettingsManager.kt$AppThemeSettingsManager$e: Exception</ID>
@@ -1369,6 +1371,7 @@
     <ID>TooManyFunctions:CLICommandHandler.kt$CLICommandHandler</ID>
     <ID>TooManyFunctions:CLIInstaller.kt$CLIInstaller</ID>
     <ID>TooManyFunctions:ChromiumAutoDownloader.kt$ChromiumAutoDownloader</ID>
+    <ID>TooManyFunctions:ChromiumFlagsSection.kt$ai.rever.boss.components.settings.sections.ChromiumFlagsSection.kt</ID>
     <ID>TooManyFunctions:CodeEditor.kt$ai.rever.boss.components.plugin.tab_types.CodeEditor.kt</ID>
     <ID>TooManyFunctions:CommonConditions.kt$Conditions</ID>
     <ID>TooManyFunctions:CrashHandler.kt$CrashHandler</ID>

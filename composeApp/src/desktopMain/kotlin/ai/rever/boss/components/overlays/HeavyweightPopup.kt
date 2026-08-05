@@ -72,15 +72,7 @@ fun HeavyweightPopup(
     // will not move meaningfully while it is up, and re-reading them would make the content
     // drift. AWT reports these in logical units, which map 1:1 to dp in Compose Desktop — so
     // everything below stays in dp and never touches physical pixels or the density factor.
-    val bounds =
-        remember {
-            runCatching {
-                parent?.takeIf { it.isShowing }?.let {
-                    val at = it.locationOnScreen
-                    intArrayOf(at.x, at.y, it.width, it.height)
-                }
-            }.getOrNull()
-        }
+    val bounds = rememberOverlayParentBounds(parent)
     val cursor =
         remember {
             runCatching {
@@ -90,17 +82,9 @@ fun HeavyweightPopup(
             }.getOrNull()
         }
 
-    val state =
-        if (bounds != null) {
-            rememberWindowState(
-                position = WindowPosition(bounds[0].dp, bounds[1].dp),
-                size = DpSize(bounds[2].dp, bounds[3].dp),
-            )
-        } else {
-            // No resolvable parent (should not happen in-app). Cover the screen rather than
-            // falling back to a small window, so the scrim still catches the dismissing click.
-            rememberWindowState(placement = WindowPlacement.Maximized)
-        }
+    // Covers the parent window, or the screen if it could not be measured — either way the
+    // scrim still catches the dismissing click. See rememberOverlayWindowState.
+    val state = rememberOverlayWindowState(bounds)
 
     // Where the content sits INSIDE the overlay window.
     val contentOffset = contentOffsetFor(cursor?.x, cursor?.y, offset, bounds?.get(0), bounds?.get(1))
@@ -122,6 +106,7 @@ fun HeavyweightPopup(
             }
         },
     ) {
+        EnsureOverlayWindowTransparent(window)
         RegisterOpenPopup()
 
         if (focusable) {
