@@ -119,9 +119,31 @@ object ConfigLoader {
         localProps: Properties,
         embeddedProps: Properties,
     ): String? =
-        envValue
-            ?: sysPropValue
-            ?: localProps.getProperty(key)
-            ?: embeddedProps.getProperty(key)
+        envValue.orNullIfBlank()
+            ?: sysPropValue.orNullIfBlank()
+            ?: localProps.getProperty(key).orNullIfBlank()
+            ?: embeddedProps.getProperty(key).orNullIfBlank()
+            // NOT blank-filtered: a caller that passes "" as its default has said so explicitly,
+            // unlike an exported variable that merely happens to be empty.
             ?: defaultValue
+
+    /**
+     * A blank value at any tier is not a value, so the next tier gets its turn.
+     *
+     * `export BOSS_RENDERING_MODE=` produces an empty string, which is non-null, so it used to win
+     * the chain and shadow every tier below it - including a setting the user had chosen in the
+     * app. Silently: the value resolves to `""`, which every consumer then treats as unrecognised
+     * and falls back on, so the effect is a platform default with nothing to explain it.
+     *
+     * That became worse once Settings started publishing to the system-property tier. The Settings
+     * UI reports env ownership by asking whether the variable is set, and it now treats blank as
+     * unset - so with a blank variable exported the dropdown showed the user's choice, the
+     * command-line preview showed the switches for it, the startup log said it was applied, and
+     * this function still handed the engine `""`. Fixing only the UI turned a confusing-but-honest
+     * state into a silent lie; the fix belongs here, where the value is actually decided.
+     *
+     * Applied to all four sources rather than just the environment: a properties file line reading
+     * `KEY=` is the same mistake with the same consequence.
+     */
+    private fun String?.orNullIfBlank(): String? = this?.takeIf { it.isNotBlank() }
 }

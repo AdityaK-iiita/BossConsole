@@ -62,8 +62,8 @@ fun ChromiumFlagsSections() {
     // it as a parameter, and a fresh lambda each pass would recompose all of them on any change.
     val save =
         remember(scope) {
-            { next: ChromiumFlagsSettings ->
-                scope.launch { ChromiumFlagsSettingsManager.updateSettings(next) }
+            { transform: (ChromiumFlagsSettings) -> ChromiumFlagsSettings ->
+                scope.launch { ChromiumFlagsSettingsManager.updateSettings(transform) }
                 Unit
             }
         }
@@ -103,7 +103,7 @@ fun ChromiumFlagsSections() {
             message = pending.message,
             confirmText = pending.confirmText,
             onConfirm = {
-                save(pending.apply(settings))
+                save { current -> pending.apply(current) }
                 confirming = null
             },
             onDismiss = { confirming = null },
@@ -149,15 +149,32 @@ fun ChromiumFlagsSections() {
  * for a key an environment variable owns, where the next launch resolves to exactly what is
  * running now and the user loses their session for nothing.
  */
-internal fun restartWouldChangeAnything(settings: ChromiumFlagsSettings): Boolean {
-    val boot = ChromiumFlagsSettingsManager.bootSettings
+internal fun restartWouldChangeAnything(
+    settings: ChromiumFlagsSettings,
+    // Injectable purely so tests are hermetic. bootSettings is a val read from the DEFAULT path at
+    // object construction, before any test can redirect settingsFile, so a test comparing against
+    // it depends on whether the developer's machine happens to have saved a Chromium setting -
+    // including one written by the very bug an earlier commit here fixed. Production never passes
+    // this.
+    boot: ChromiumFlagsSettings = ChromiumFlagsSettingsManager.bootSettings,
+): Boolean {
     if (settings == boot) return false
     // Settings-only fields have no config key, so previewValue cannot speak for them; any change
     // to one is a real change. Published keys are compared as the next launch would resolve them.
     val publishedDiffers =
         ChromiumFlagKeys.PUBLISHED.any { key ->
-            ChromiumFlagsSettingsManager.previewValue(settings, key) !=
-                ChromiumFlagsSettingsManager.previewValue(boot, key)
+            val now = ChromiumFlagsSettingsManager.previewValue(settings, key)
+            val before = ChromiumFlagsSettingsManager.previewValue(boot, key)
+            if (key == ChromiumFlagKeys.SKIA_GRAPHITE) {
+                // Compared RESOLVED, not raw. Graphite's default follows the rendering mode, so
+                // toggling it off and back on leaves an explicit "true" where boot held null -
+                // different strings, identical behaviour - and offering a restart for that is a
+                // lost session for no effect. Every other key resolves from its raw value alone.
+                FluckEngine.resolveSkiaGraphite(now, nextRenderingMode(settings)) !=
+                    FluckEngine.resolveSkiaGraphite(before, nextRenderingMode(boot))
+            } else {
+                now != before
+            }
         }
     // Settings-only fields have no config key, so previewValue cannot speak for them and any
     // change to one is a real change.
@@ -272,7 +289,7 @@ internal const val OFF_SCREEN_LABEL = "Off-screen"
 @Composable
 private fun RenderingSection(
     settings: ChromiumFlagsSettings,
-    save: (ChromiumFlagsSettings) -> Unit,
+    save: ((ChromiumFlagsSettings) -> ChromiumFlagsSettings) -> Unit,
 ) {
     SettingsSection(
         title = "Rendering",
@@ -293,7 +310,8 @@ private fun RenderingSection(
             // hand-edited file saying that would display as Off-screen while running Hardware.
             selectedOption = renderingModeLabel(settings.renderingMode, hostOs),
             onOptionSelected = { selection ->
-                save(settings.copy(renderingMode = if (selection == OFF_SCREEN_LABEL) "OFF_SCREEN" else null))
+                val mode = if (selection == OFF_SCREEN_LABEL) "OFF_SCREEN" else null
+                save { current -> current.copy(renderingMode = mode) }
             },
             enabled = modeEnvNote == null,
             description =
@@ -311,7 +329,7 @@ private fun RenderingSection(
             options = listOf(AUTO_LABEL) + ChromiumFlagKeys.SKIKO_RENDER_APIS,
             selectedOption = settings.skikoRenderApi ?: AUTO_LABEL,
             onOptionSelected = { selection ->
-                save(settings.copy(skikoRenderApi = selection.takeIf { it != AUTO_LABEL }))
+                save { current -> current.copy(skikoRenderApi = selection.takeIf { it != AUTO_LABEL }) }
             },
             enabled = skikoEnvNote == null,
             description =
@@ -327,7 +345,7 @@ private fun RenderingSection(
         SettingsNumberInput(
             label = "Browser surface top offset (dp)",
             value = settings.topInsetDp ?: 0,
-            onValueChange = { save(settings.copy(topInsetDp = it.takeIf { v -> v != 0 })) },
+            onValueChange = { save { current -> current.copy(topInsetDp = it.takeIf { v -> v != 0 }) } },
             range = 0..200,
             enabled = insetEnvNote == null,
             description =
@@ -343,7 +361,7 @@ private const val AUTO_LABEL = "Auto"
 @Composable
 private fun PerformanceSection(
     settings: ChromiumFlagsSettings,
-    save: (ChromiumFlagsSettings) -> Unit,
+    save: ((ChromiumFlagsSettings) -> ChromiumFlagsSettings) -> Unit,
     isMacAarch64: Boolean,
     isLinux: Boolean,
     isWindows: Boolean,
@@ -353,7 +371,8 @@ private fun PerformanceSection(
             label = "HTTP disk cache (MB)",
             value = settings.diskCacheMb ?: FluckEngine.DEFAULT_DISK_CACHE_MB,
             onValueChange = {
-                save(settings.copy(diskCacheMb = it.takeIf { v -> v != FluckEngine.DEFAULT_DISK_CACHE_MB }))
+                val mb = it.takeIf { v -> v != FluckEngine.DEFAULT_DISK_CACHE_MB }
+                save { current -> current.copy(diskCacheMb = mb) }
             },
             range = 1..8192,
             description =
@@ -370,7 +389,7 @@ private fun PerformanceSection(
             // because --renderer-process-limit=0 is not a cap — so 0 is spelled as "no limit"
             // rather than stored, and no separate "unlimited" control is needed.
             value = settings.rendererProcessLimit ?: 0,
-            onValueChange = { save(settings.copy(rendererProcessLimit = it.takeIf { v -> v > 0 })) },
+            onValueChange = { save { current -> current.copy(rendererProcessLimit = it.takeIf { v -> v > 0 }) } },
             range = 0..64,
             enabled = capEnvNote == null,
             description =
@@ -386,7 +405,7 @@ private fun PerformanceSection(
         SettingsToggle(
             label = "Pre-warm the engine at startup",
             checked = settings.browserPrewarm ?: true,
-            onCheckedChange = { save(settings.copy(browserPrewarm = it.takeIf { v -> !v })) },
+            onCheckedChange = { save { current -> current.copy(browserPrewarm = it.takeIf { v -> !v }) } },
             enabled = prewarmEnvNote == null,
             description =
                 prewarmEnvNote
@@ -408,7 +427,7 @@ private fun PerformanceSection(
 @Composable
 private fun PlatformPerformanceRows(
     settings: ChromiumFlagsSettings,
-    save: (ChromiumFlagsSettings) -> Unit,
+    save: ((ChromiumFlagsSettings) -> ChromiumFlagsSettings) -> Unit,
     isMacAarch64: Boolean,
     isLinux: Boolean,
     isWindows: Boolean,
@@ -429,7 +448,7 @@ private fun PlatformPerformanceRows(
                 // Stores the explicit boolean rather than collapsing one side to null. With a
                 // mode-dependent default, "off" is a real choice that has to survive a switch back
                 // to hardware rendering — collapsing it would silently re-enable Graphite.
-                onCheckedChange = { save(settings.copy(enableSkiaGraphite = it)) },
+                onCheckedChange = { save { current -> current.copy(enableSkiaGraphite = it) } },
                 enabled = graphiteEnvNote == null,
                 description =
                     graphiteEnvNote
@@ -450,7 +469,7 @@ private fun PlatformPerformanceRows(
             SettingsToggle(
                 label = "VA-API hardware video decode",
                 checked = settings.enableVaapi ?: true,
-                onCheckedChange = { save(settings.copy(enableVaapi = it.takeIf { v -> !v })) },
+                onCheckedChange = { save { current -> current.copy(enableVaapi = it.takeIf { v -> !v }) } },
                 description =
                     "On by default. Turn it off if video is glitching or failing to play - VA-API " +
                         "needs a working driver, and forcing it on a broken one is worse than software decode.",
@@ -462,7 +481,7 @@ private fun PlatformPerformanceRows(
             SettingsToggle(
                 label = "Disable native-window occlusion tracking",
                 checked = settings.disableWinOcclusion ?: true,
-                onCheckedChange = { save(settings.copy(disableWinOcclusion = it.takeIf { v -> !v })) },
+                onCheckedChange = { save { current -> current.copy(disableWinOcclusion = it.takeIf { v -> !v }) } },
                 description =
                     "On by default. Chromium can decide the embedded window is fully covered and stop " +
                         "producing frames, which shows up as a browser that freezes until you interact with it.",
@@ -474,7 +493,7 @@ private fun PlatformPerformanceRows(
 @Composable
 private fun NetworkSection(
     settings: ChromiumFlagsSettings,
-    save: (ChromiumFlagsSettings) -> Unit,
+    save: ((ChromiumFlagsSettings) -> ChromiumFlagsSettings) -> Unit,
 ) {
     SettingsSection(
         title = "Privacy & Network",
@@ -483,14 +502,14 @@ private fun NetworkSection(
         SettingsToggle(
             label = "Drop hyperlink auditing pings",
             checked = settings.noPings ?: true,
-            onCheckedChange = { save(settings.copy(noPings = it.takeIf { v -> !v })) },
+            onCheckedChange = { save { current -> current.copy(noPings = it.takeIf { v -> !v }) } },
             description = "--no-pings. On by default. Turn off only if a site depends on ping tracking.",
         )
         Spacer(modifier = Modifier.height(8.dp))
         SettingsToggle(
             label = "Disable Domain Reliability reporting",
             checked = settings.disableDomainReliability ?: true,
-            onCheckedChange = { save(settings.copy(disableDomainReliability = it.takeIf { v -> !v })) },
+            onCheckedChange = { save { current -> current.copy(disableDomainReliability = it.takeIf { v -> !v }) } },
             description = "--disable-domain-reliability. On by default. Stops Chrome's error reports to Google.",
         )
     }
@@ -499,7 +518,7 @@ private fun NetworkSection(
 @Composable
 private fun AdvancedSection(
     settings: ChromiumFlagsSettings,
-    save: (ChromiumFlagsSettings) -> Unit,
+    save: ((ChromiumFlagsSettings) -> ChromiumFlagsSettings) -> Unit,
 ) {
     SettingsSection(title = "Advanced") {
         val extrasEnvNote = envNote(ChromiumFlagKeys.EXTRA_SWITCHES)
@@ -511,7 +530,7 @@ private fun AdvancedSection(
         SettingsTextArea(
             label = "Extra Chromium switches",
             value = raw,
-            onValueChange = { save(settings.copy(extraSwitches = it.takeIf { v -> v.isNotBlank() })) },
+            onValueChange = { save { current -> current.copy(extraSwitches = it.takeIf { v -> v.isNotBlank() }) } },
             placeholder = "--some-switch --another=value",
             enabled = extrasEnvNote == null,
             minLines = 3,
@@ -552,7 +571,7 @@ private fun AdvancedSection(
 @Composable
 private fun DangerZoneSection(
     settings: ChromiumFlagsSettings,
-    save: (ChromiumFlagsSettings) -> Unit,
+    save: ((ChromiumFlagsSettings) -> ChromiumFlagsSettings) -> Unit,
     onConfirm: (PendingDangerousFlag) -> Unit,
 ) {
     SettingsSection(
@@ -568,7 +587,7 @@ private fun DangerZoneSection(
 @Composable
 private fun SandboxRow(
     settings: ChromiumFlagsSettings,
-    save: (ChromiumFlagsSettings) -> Unit,
+    save: ((ChromiumFlagsSettings) -> ChromiumFlagsSettings) -> Unit,
     onConfirm: (PendingDangerousFlag) -> Unit,
 ) {
     Column {
@@ -594,7 +613,7 @@ private fun SandboxRow(
                         ),
                     )
                 } else {
-                    save(settings.copy(disableSandbox = null))
+                    save { current -> current.copy(disableSandbox = null) }
                 }
             },
             enabled = sandboxEnvNote == null,
@@ -610,7 +629,7 @@ private fun SandboxRow(
 @Composable
 private fun DevToolsPortRows(
     settings: ChromiumFlagsSettings,
-    save: (ChromiumFlagsSettings) -> Unit,
+    save: ((ChromiumFlagsSettings) -> ChromiumFlagsSettings) -> Unit,
     onConfirm: (PendingDangerousFlag) -> Unit,
 ) {
     Column {
@@ -635,7 +654,7 @@ private fun DevToolsPortRows(
                         ),
                     )
                 } else {
-                    save(settings.copy(remoteDebuggingPort = null))
+                    save { current -> current.copy(remoteDebuggingPort = null) }
                 }
             },
             enabled = portEnvNote == null,
@@ -651,7 +670,7 @@ private fun DevToolsPortRows(
                 value = port,
                 // Ports below 1024 are privileged and 0 means "pick any free port" to Chromium —
                 // a debugging endpoint nobody knows is open. The range keeps both unreachable.
-                onValueChange = { save(settings.copy(remoteDebuggingPort = it)) },
+                onValueChange = { save { current -> current.copy(remoteDebuggingPort = it) } },
                 range = 1024..65535,
                 description = "1024-65535. Bound to localhost by Chromium.",
             )

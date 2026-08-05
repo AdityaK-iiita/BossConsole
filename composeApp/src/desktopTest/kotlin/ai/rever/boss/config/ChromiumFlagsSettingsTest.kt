@@ -1,6 +1,8 @@
 package ai.rever.boss.config
 
+import ai.rever.boss.components.settings.sections.nextRenderingMode
 import ai.rever.boss.components.settings.sections.restartWouldChangeAnything
+import ai.rever.boss.plugin.browser.FluckEngine
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -206,7 +208,7 @@ class ChromiumFlagsSettingsTest {
             )
         for ((name, changed) in cases) {
             assertTrue(
-                restartWouldChangeAnything(changed),
+                restartWouldChangeAnything(changed, ChromiumFlagsSettings()),
                 "changing $name must offer a restart; is it missing from the copy() in ChromiumFlagsSection?",
             )
         }
@@ -217,9 +219,145 @@ class ChromiumFlagsSettingsTest {
         )
     }
 
+    /**
+     * The Graphite exemption in `restartWouldChangeAnything`, which nothing reached.
+     *
+     * `any single change is enough to stop looking default` asserts on `isDefault`, and
+     * `changing any settings-only field is offered a restart` enumerates the six UNPUBLISHED
+     * fields - which excludes `enableSkiaGraphite`. So the toggle-off-then-on case, the entire
+     * reason that per-key branch exists, was unpinned: if Graphite's default ever stops following
+     * the rendering mode, the exemption would silently suppress a restart that IS needed.
+     */
+    @Test
+    fun `re-enabling Graphite to its default value is not offered a restart`() {
+        // A synthetic boot, not the manager's: bootSettings is read from the real path at object
+        // construction, so asserting it is default is an assertion about the developer's home
+        // directory - and it would fail on any machine that has saved a Chromium setting.
+        val boot = ChromiumFlagsSettings()
+        // The NEXT-LAUNCH mode, which is what restartWouldChangeAnything resolves against.
+        // Substituting the live JxBrowserConfig.renderingMode here is the precise mistake
+        // ChromiumFlagsCommandLine documents as the cause of an earlier drift bug; the two agree
+        // only while boot is default, which is exactly when a test would stop noticing.
+        val default = FluckEngine.resolveSkiaGraphite(null, nextRenderingMode(boot))
+        assertFalse(restartWouldChangeAnything(boot.copy(enableSkiaGraphite = default), boot))
+        // The opposite choice IS a real change and must still be offered one.
+        assertTrue(restartWouldChangeAnything(boot.copy(enableSkiaGraphite = !default), boot))
+    }
+
+    /**
+     * The security-motivated half of the write path, which was the half still untested.
+     *
+     * `settingsFile` became an `internal var` precisely to make this reachable. It also pins the
+     * non-obvious step: the file is created `rw-------` as a TEMP file and reaches its destination
+     * through `ATOMIC_MOVE`, which carries the mode across - a JDK or filesystem change could
+     * quietly break that and nothing else would notice.
+     */
+    @Test
+    fun `the saved settings file is owner-only`() {
+        val posix =
+            java.nio.file.FileSystems
+                .getDefault()
+                .supportedFileAttributeViews()
+                .contains("posix")
+        if (!posix) return // Windows runner; the permissions path is a documented no-op there.
+        val realFile = ChromiumFlagsSettingsManager.settingsFile
+        val temp = java.io.File.createTempFile("chromium-flags-perms", ".json")
+        temp.delete() // let the write path create it, so the assertion covers creation
+        val before = ChromiumFlagsSettingsManager.currentSettings.value
+        ChromiumFlagsSettingsManager.settingsFile = temp
+        try {
+            kotlinx.coroutines.runBlocking {
+                ChromiumFlagsSettingsManager.updateSettings { it.copy(diskCacheMb = 321) }
+            }
+            assertEquals(
+                "rw-------",
+                java.nio.file.attribute.PosixFilePermissions
+                    .toString(
+                        java.nio.file.Files
+                            .getPosixFilePermissions(temp.toPath()),
+                    ),
+                "a file that can turn off the Chromium sandbox must not be group- or world-readable",
+            )
+        } finally {
+            try {
+                kotlinx.coroutines.runBlocking { ChromiumFlagsSettingsManager.updateSettings { before } }
+            } finally {
+                ChromiumFlagsSettingsManager.settingsFile = realFile
+                temp.delete()
+            }
+        }
+    }
+
     @Test
     fun `an unchanged settings object is not offered a restart`() {
-        assertFalse(restartWouldChangeAnything(ChromiumFlagsSettingsManager.bootSettings))
+        val boot = ChromiumFlagsSettings()
+        assertFalse(restartWouldChangeAnything(boot, boot))
+    }
+
+    @Test
+    fun `envOverride reads the environment only, never system properties`() {
+        // Renamed to what it actually pins. It cannot test blank - a JVM cannot set its own
+        // environment variables - and the previous name promised coverage that now genuinely
+        // lives in ConfigLoaderTest, where the pure resolver takes envValue as a parameter.
+        // What IS worth pinning here: envOverride must not fall back to a system property, since
+        // those hold this process's own published boot settings and reading them would make the
+        // UI report the app's own setting as an environment override.
+        System.setProperty("BOSS_TEST_UNUSED_KEY", "ignored")
+        try {
+            assertNull(
+                ChromiumFlagsSettingsManager.envOverride("BOSS_TEST_UNUSED_KEY"),
+                "a system property must not be reported as an environment override",
+            )
+        } finally {
+            System.clearProperty("BOSS_TEST_UNUSED_KEY")
+        }
+    }
+
+    /**
+     * A second edit builds on the first instead of overwriting it.
+     *
+     * Named for the property actually under test, after two failed attempts to dress it as a
+     * concurrency test. It never was one: `runBlocking` without a dispatcher runs its children on
+     * one event loop, and `updateAndGet` is atomic by construction, so threads add nothing. What
+     * the transform API changes is WHEN the caller reads - at apply time rather than at compose
+     * time - and that is fully observable sequentially.
+     *
+     * The two earlier attempts are worth recording because both looked right: one awaited the
+     * calls in order and so would have passed against the very bug it existed for; the next made
+     * both transforms close over a captured snapshot and ignore their parameter, which is the bug
+     * rather than the fix, and failed. The parameter is the whole mechanism.
+     *
+     * Redirects the manager's file - `updateSettings` persists on every call, and against the
+     * default path this writes the developer's and CI's real ~/.boss/chromium-flags.json.
+     */
+    @Test
+    fun `a second edit composes onto the first rather than replacing it`() {
+        val realFile = ChromiumFlagsSettingsManager.settingsFile
+        val temp = java.io.File.createTempFile("chromium-flags-test", ".json")
+        temp.deleteOnExit()
+        ChromiumFlagsSettingsManager.settingsFile = temp
+        val before = ChromiumFlagsSettingsManager.currentSettings.value
+        try {
+            kotlinx.coroutines.runBlocking {
+                // A UI control holds a value from collectAsState() that may already be one edit
+                // stale; reading the parameter is what makes the staleness harmless.
+                ChromiumFlagsSettingsManager.updateSettings { it.copy(diskCacheMb = 111) }
+                ChromiumFlagsSettingsManager.updateSettings { it.copy(rendererProcessLimit = 7) }
+            }
+            val after = ChromiumFlagsSettingsManager.currentSettings.value
+            assertEquals(111, after.diskCacheMb, "the second edit discarded the first")
+            assertEquals(7, after.rendererProcessLimit, "the first edit discarded the second")
+        } finally {
+            // Nested, so a throwing restore cannot leave the manager pointed at a deleted temp
+            // file for the rest of the JVM. updateSettings swallows its IO errors today, which is
+            // exactly the kind of thing that stops being true later.
+            try {
+                kotlinx.coroutines.runBlocking { ChromiumFlagsSettingsManager.updateSettings { before } }
+            } finally {
+                ChromiumFlagsSettingsManager.settingsFile = realFile
+                temp.delete()
+            }
+        }
     }
 
     @Test

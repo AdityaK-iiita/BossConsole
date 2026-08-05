@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -144,7 +145,24 @@ data class ChromiumFlagsSettings(
  */
 object ChromiumFlagsSettingsManager {
     private val logger = BossLogger.forComponent("ChromiumFlagsSettingsManager")
-    private val settingsFile = BossDirectories.resolve("chromium-flags.json")
+
+    // `internal var` purely so tests can redirect it. updateSettings persists on every call, so a
+    // test exercising it against the default path writes the developer's (and CI's) real
+    // ~/.boss/chromium-flags.json - a test that mutates the machine it runs on. Production never
+    // reassigns this.
+    //
+    // Redirection covers WRITES ONLY. `bootSettings = loadSync()` runs at object initialisation,
+    // off the default path, before any test can reassign - so a test that redirects and then
+    // expects a load to follow will read the real file, not its temp one.
+    internal var settingsFile = BossDirectories.resolve("chromium-flags.json")
+        set(value) {
+            // A different file means nothing is known to be persisted in it, so the coalescing
+            // cache must not carry across. Without this a redirected test could have its first
+            // write skipped because an earlier test in the same JVM happened to persist the same
+            // snapshot - order- and machine-dependent, and it would present as a missing file.
+            field = value
+            lastPersisted = null
+        }
     private val json =
         Json {
             prettyPrint = true
@@ -206,7 +224,7 @@ object ChromiumFlagsSettingsManager {
     fun applyToSystemProperties() {
         val settings = _currentSettings.value
         val wanted = ChromiumFlagKeys.PUBLISHED.mapNotNull { key -> settings.publishedValue(key)?.let { key to it } }
-        val (envOwned, toPublish) = wanted.partition { (key, _) -> System.getenv(key) != null }
+        val (envOwned, toPublish) = wanted.partition { (key, _) -> envOverride(key) != null }
 
         val published = toPublish.toMap()
         published.forEach { (key, value) -> System.setProperty(key, value) }
@@ -235,7 +253,10 @@ object ChromiumFlagsSettingsManager {
      * is overridden instead of letting it look broken. Reads the environment ONLY: a
      * system property here would report this object's own publication back to it.
      */
-    fun envOverride(key: String): String? = System.getenv(key)
+    // Blank reads as UNSET. `FOO= boss` exports an empty string, which is non-null, so a bare
+    // getenv let an empty variable claim ownership of a key and silently suppress the user's
+    // setting - reported in the UI as an override with no value to show.
+    fun envOverride(key: String): String? = System.getenv(key)?.takeIf { it.isNotBlank() }
 
     /**
      * What [key] would resolve to on the next launch given [settings] — **env first,
@@ -251,7 +272,7 @@ object ChromiumFlagsSettingsManager {
     internal fun previewValue(
         settings: ChromiumFlagsSettings,
         key: String,
-    ): String? = System.getenv(key) ?: settings.publishedValue(key)
+    ): String? = envOverride(key) ?: settings.publishedValue(key)
 
     /**
      * Serialises the disk writes. This screen writes far more often than the version dropdown
@@ -261,11 +282,38 @@ object ChromiumFlagsSettingsManager {
      */
     private val writeMutex = kotlinx.coroutines.sync.Mutex()
 
-    suspend fun updateSettings(settings: ChromiumFlagsSettings) {
+    /**
+     * The last snapshot this process actually wrote, so a queued write that would produce
+     * identical bytes can be skipped. Guarded by [writeMutex].
+     *
+     * **Starts null, deliberately, and must not be seeded from [bootSettings].** They look
+     * interchangeable and are not: [loadSync] answers a parse failure with a DEFAULT object while
+     * the corrupt file stays on disk, so seeding would record "defaults are persisted" about a
+     * file that holds nothing of the sort - and "Reset engine flags", which writes exactly those
+     * defaults, would match the cache and skip the write, leaving the corrupt file in place
+     * forever with the UI reporting success. Null means "nothing known to be on disk", which is
+     * the truth at startup, and it costs one redundant first write.
+     */
+    private var lastPersisted: ChromiumFlagsSettings? = null
+
+    /**
+     * Apply [transform] to the current settings, atomically, and persist the result.
+     *
+     * A TRANSFORM rather than a finished value. The callers are UI controls computing
+     * `current.copy(field = new)` from a snapshot they collected earlier, so two edits landing in
+     * the same frame - which per-keystroke number inputs make ordinary - both derive from that one
+     * snapshot and the second silently discards the first. `updateAndGet` closes it: each caller
+     * reads the value at the moment it applies, not at the moment it composed.
+     *
+     * **[transform] must be side-effect free.** `updateAndGet` is a CAS loop, so under contention
+     * it re-invokes the lambda until the swap succeeds. Every call site today is a pure `copy`,
+     * which is fine; logging, toasting or writing from inside it would fire more than once.
+     */
+    suspend fun updateSettings(transform: (ChromiumFlagsSettings) -> ChromiumFlagsSettings) {
         // In-memory state first, on the CALLER's thread, so the UI and any subsequent read see
         // the new value immediately and cannot observe a write that is still queued behind the
         // mutex. Only the disk write is asynchronous.
-        _currentSettings.value = settings
+        _currentSettings.updateAndGet(transform)
         withContext(Dispatchers.IO) {
             writeMutex.withLock {
                 try {
@@ -275,14 +323,24 @@ object ChromiumFlagsSettingsManager {
                     // failure with ChromiumFlagsSettings() — so an interrupted keystroke could
                     // silently reset every flag the user had set, including the security ones.
                     val temp = java.io.File(settingsFile.parentFile, "${settingsFile.name}.tmp")
-                    temp.writeText(json.encodeToString(ChromiumFlagsSettings.serializer(), settings))
-                    restrictToOwner(temp)
+                    // Read under the lock rather than using a value captured before it: with two
+                    // writers, the second could otherwise persist the older of the two snapshots.
+                    val toPersist = _currentSettings.value
+                    // Per-keystroke inputs queue several writes that all resolve to the same final
+                    // snapshot once `toPersist` is re-read under the lock, so typing "8192" used to
+                    // write the identical bytes four times - now five syscalls each. Skip the ones
+                    // that would change nothing.
+                    if (toPersist == lastPersisted) return@withLock
+                    createOwnerOnly(temp)
+                    temp.writeText(json.encodeToString(ChromiumFlagsSettings.serializer(), toPersist))
+                    restrictAfterWrite(temp)
                     java.nio.file.Files.move(
                         temp.toPath(),
                         settingsFile.toPath(),
                         java.nio.file.StandardCopyOption.REPLACE_EXISTING,
                         java.nio.file.StandardCopyOption.ATOMIC_MOVE,
                     )
+                    lastPersisted = toPersist
                     logger.debug(LogCategory.BROWSER, "Chromium flag settings saved")
                 } catch (e: Exception) {
                     logger.warn(LogCategory.BROWSER, "Error saving Chromium flag settings", error = e)
@@ -304,17 +362,61 @@ object ChromiumFlagsSettingsManager {
      * Best-effort: a filesystem without POSIX permissions (a Windows share) must not stop the
      * settings from saving, so a failure is logged and the write proceeds.
      */
-    private fun restrictToOwner(file: java.io.File) {
+    private fun createOwnerOnly(file: java.io.File) {
         try {
             val perms =
                 java.nio.file.attribute.PosixFilePermissions
                     .fromString("rw-------")
+            // Created WITH the permissions rather than chmod-ed after writing. Writing first and
+            // restricting second left the contents readable at the default umask for the width of
+            // that call - a small window, but an avoidable one on a file that can turn off the
+            // Chromium sandbox.
             java.nio.file.Files
-                .setPosixFilePermissions(file.toPath(), perms)
+                .deleteIfExists(file.toPath())
+            java.nio.file.Files
+                .createFile(
+                    file.toPath(),
+                    java.nio.file.attribute.PosixFilePermissions
+                        .asFileAttribute(perms),
+                )
         } catch (e: UnsupportedOperationException) {
             logger.debug(
                 LogCategory.BROWSER,
                 "Filesystem has no POSIX permissions - Chromium flag settings left at default",
+                mapOf("error" to e.toString()),
+            )
+        } catch (e: Exception) {
+            logger.warn(
+                LogCategory.BROWSER,
+                "Could not create Chromium flag settings owner-only",
+                mapOf("error" to e.toString()),
+            )
+        }
+    }
+
+    /**
+     * Restrict [file] after the fact, as a fallback for [createOwnerOnly].
+     *
+     * Creating the file with its permissions closes the write window, but it also became the ONLY
+     * mechanism - so any failure there left the file at the default umask with nothing but a log
+     * line, which is weaker than the chmod-after-write it replaced. Belt and braces: create
+     * restricted, then confirm restricted. Cheap, and the failure mode it guards is a file that
+     * can turn off the Chromium sandbox being world-readable.
+     */
+    private fun restrictAfterWrite(file: java.io.File) {
+        try {
+            java.nio.file.Files
+                .setPosixFilePermissions(
+                    file.toPath(),
+                    java.nio.file.attribute.PosixFilePermissions
+                        .fromString("rw-------"),
+                )
+        } catch (e: UnsupportedOperationException) {
+            // Non-POSIX filesystem. createOwnerOnly already reported it, so this is debug rather
+            // than a second warning for the same cause - but it is logged, not swallowed.
+            logger.debug(
+                LogCategory.BROWSER,
+                "Filesystem has no POSIX permissions - fallback restrict skipped",
                 mapOf("error" to e.toString()),
             )
         } catch (e: Exception) {
@@ -326,5 +428,5 @@ object ChromiumFlagsSettingsManager {
         }
     }
 
-    suspend fun resetToDefault() = updateSettings(ChromiumFlagsSettings())
+    suspend fun resetToDefault() = updateSettings { ChromiumFlagsSettings() }
 }

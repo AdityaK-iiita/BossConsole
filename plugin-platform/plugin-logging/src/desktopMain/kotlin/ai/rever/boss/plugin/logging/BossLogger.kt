@@ -167,26 +167,37 @@ object BossLogger {
      * - boss.log.level system property
      * - Defaults to INFO for production, DEBUG if "dev" mode detected
      */
+
+    /**
+     * The level a given set of inputs resolves to, split out so the blank rule is testable.
+     *
+     * A JVM cannot set its own environment variables, so this is the only place the
+     * blank-env branch is reachable from a test - the same reason ConfigLoader.resolve takes its
+     * sources as parameters.
+     */
+    internal fun resolveLevel(
+        envLevel: String?,
+        propLevel: String?,
+        devMode: Boolean,
+    ): LogLevel =
+        envLevel?.takeIf { it.isNotBlank() }?.let { LogLevel.fromString(it) }
+            ?: propLevel?.takeIf { it.isNotBlank() }?.let { LogLevel.fromString(it) }
+            ?: if (devMode) LogLevel.DEBUG else LogLevel.INFO
+
     fun configureFromEnvironment() {
-        // Check environment variable first
-        val envLevel = System.getenv("BOSS_LOG_LEVEL")
-        if (envLevel != null) {
-            globalLevel = LogLevel.fromString(envLevel)
-            return
-        }
-
-        // Check system property
-        val propLevel = System.getProperty("boss.log.level")
-        if (propLevel != null) {
-            globalLevel = LogLevel.fromString(propLevel)
-            return
-        }
-
-        // Default based on whether we're in dev mode
+        // Blank counts as UNSET throughout: `export BOSS_LOG_LEVEL=` yields an empty string,
+        // which is non-null, so it used to win here and resolve through LogLevel.fromString to
+        // whatever that makes of "" - shadowing both the system property and the dev-mode default
+        // with a level nobody chose. Same rule as ConfigLoader.resolve.
         val isDevMode =
             System.getProperty("boss.dev.mode")?.toBoolean() == true ||
                 System.getenv("BOSS_DEV_MODE")?.toBoolean() == true
-        globalLevel = if (isDevMode) LogLevel.DEBUG else LogLevel.INFO
+        globalLevel =
+            resolveLevel(
+                envLevel = System.getenv("BOSS_LOG_LEVEL"),
+                propLevel = System.getProperty("boss.log.level"),
+                devMode = isDevMode,
+            )
     }
 
     /**

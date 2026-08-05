@@ -127,6 +127,20 @@ private val startupScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 fun main(args: Array<String>) {
     val startupBeganMs = System.currentTimeMillis()
 
+    // Logging FIRST, before anything that can log. Everything below this line does:
+    // setLinuxWMClass and setupNativeLibraryPaths both log, applyToSystemProperties emits the
+    // audit trail of which Chromium flags this session runs with, ChromiumFlagsSettingsManager's
+    // init warns about a corrupt settings file, and the Skiko block warns about an unrecognised
+    // backend. Configuring the level afterwards meant none of them respected BOSS_LOG_LEVEL - and
+    // the flag audit is the line most worth being able to turn up.
+    //
+    // Safe this early, checked rather than assumed: configureFromEnvironment only reads env and
+    // system properties, and initialize() only registers a shutdown hook. Neither resolves a path,
+    // so setupNativeLibraryPaths reassigning java.io.tmpdir below cannot affect them - file
+    // logging is opt-in through configure() with an explicit path.
+    BossLogger.configureFromEnvironment()
+    BossLogger.initialize() // Register shutdown hook for log flushing
+
     // Set WM_CLASS for Linux desktop integration (must be before any AWT init)
     setLinuxWMClass()
 
@@ -175,10 +189,6 @@ fun main(args: Array<String>) {
     // Disable lightweight popups for HARDWARE_ACCELERATED rendering mode (#258)
     // This ensures Swing popup menus (context menus) appear above the browser view
     JPopupMenu.setDefaultLightWeightPopupEnabled(false)
-
-    // Initialize logging framework early
-    BossLogger.configureFromEnvironment()
-    BossLogger.initialize() // Register shutdown hook for log flushing
 
     // Uninstall hook (Windows): `BOSS.exe --unregister-protocol` removes the boss://
     // handler that WindowsProtocolHandler registers at runtime, so uninstalling does not
