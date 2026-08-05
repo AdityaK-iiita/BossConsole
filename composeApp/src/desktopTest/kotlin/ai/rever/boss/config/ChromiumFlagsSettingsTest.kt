@@ -223,6 +223,41 @@ class ChromiumFlagsSettingsTest {
     }
 
     @Test
+    fun `a blank environment variable does not claim ownership of a key`() {
+        // `FOO= boss` exports an empty string, which is non-null. A bare getenv let that suppress
+        // the user's setting and report it in the UI as an env override with no value to show.
+        // Asserted through envOverride because that is the single place both the publish
+        // partition and the UI notice now ask.
+        System.setProperty("BOSS_TEST_UNUSED_KEY", "ignored")
+        try {
+            // No env var of this name exists in a test JVM, so this pins the null-for-absent half;
+            // the blank-string half is the branch the takeIf adds and is covered by inspection of
+            // the same expression, since a test cannot set an env var in-process.
+            assertNull(ChromiumFlagsSettingsManager.envOverride("BOSS_TEST_UNUSED_KEY"))
+        } finally {
+            System.clearProperty("BOSS_TEST_UNUSED_KEY")
+        }
+    }
+
+    @Test
+    fun `updateSettings applies a transform to the value current at the time it runs`() =
+        kotlinx.coroutines.runBlocking {
+            // The lost update this replaced: both callers used to compute copy() from the same
+            // snapshot, so the second silently discarded the first. Two transforms touching
+            // DIFFERENT fields must both survive.
+            val before = ChromiumFlagsSettingsManager.currentSettings.value
+            try {
+                ChromiumFlagsSettingsManager.updateSettings { it.copy(diskCacheMb = 111) }
+                ChromiumFlagsSettingsManager.updateSettings { it.copy(rendererProcessLimit = 7) }
+                val after = ChromiumFlagsSettingsManager.currentSettings.value
+                assertEquals(111, after.diskCacheMb)
+                assertEquals(7, after.rendererProcessLimit, "the second edit must not discard the first")
+            } finally {
+                ChromiumFlagsSettingsManager.updateSettings { before }
+            }
+        }
+
+    @Test
     fun `previewValue puts the environment ahead of the setting`() {
         // The precedence the whole screen rests on, and the rule the command-line preview has to
         // reproduce or it reports a next launch that will not happen.

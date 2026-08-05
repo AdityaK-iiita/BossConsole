@@ -133,6 +133,14 @@ fun main(args: Array<String>) {
     // Set up proper temp directories for native libraries
     setupNativeLibraryPaths()
 
+    // Logging first, because everything below this line logs. applyToSystemProperties emits the
+    // audit trail of which flags this session runs with, and ChromiumFlagsSettingsManager's init
+    // warns about a corrupt settings file; the Skiko block below warns about an unrecognised
+    // backend. Configuring the level afterwards meant none of those respected BOSS_LOG_LEVEL - and
+    // the flag audit is the line most worth being able to turn up.
+    BossLogger.configureFromEnvironment()
+    BossLogger.initialize() // Register shutdown hook for log flushing
+
     // Publish the Chromium flags chosen in Settings > Browser Engine as system properties, so
     // every existing ConfigLoader read site picks them up without knowing settings exist.
     // Position is load-bearing and this is as early as it can go: the Skiko block immediately
@@ -175,10 +183,6 @@ fun main(args: Array<String>) {
     // Disable lightweight popups for HARDWARE_ACCELERATED rendering mode (#258)
     // This ensures Swing popup menus (context menus) appear above the browser view
     JPopupMenu.setDefaultLightWeightPopupEnabled(false)
-
-    // Initialize logging framework early
-    BossLogger.configureFromEnvironment()
-    BossLogger.initialize() // Register shutdown hook for log flushing
 
     // Uninstall hook (Windows): `BOSS.exe --unregister-protocol` removes the boss://
     // handler that WindowsProtocolHandler registers at runtime, so uninstalling does not

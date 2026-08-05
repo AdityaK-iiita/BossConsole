@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -206,7 +207,7 @@ object ChromiumFlagsSettingsManager {
     fun applyToSystemProperties() {
         val settings = _currentSettings.value
         val wanted = ChromiumFlagKeys.PUBLISHED.mapNotNull { key -> settings.publishedValue(key)?.let { key to it } }
-        val (envOwned, toPublish) = wanted.partition { (key, _) -> System.getenv(key) != null }
+        val (envOwned, toPublish) = wanted.partition { (key, _) -> envOverride(key) != null }
 
         val published = toPublish.toMap()
         published.forEach { (key, value) -> System.setProperty(key, value) }
@@ -235,7 +236,10 @@ object ChromiumFlagsSettingsManager {
      * is overridden instead of letting it look broken. Reads the environment ONLY: a
      * system property here would report this object's own publication back to it.
      */
-    fun envOverride(key: String): String? = System.getenv(key)
+    // Blank reads as UNSET. `FOO= boss` exports an empty string, which is non-null, so a bare
+    // getenv let an empty variable claim ownership of a key and silently suppress the user's
+    // setting - reported in the UI as an override with no value to show.
+    fun envOverride(key: String): String? = System.getenv(key)?.takeIf { it.isNotBlank() }
 
     /**
      * What [key] would resolve to on the next launch given [settings] — **env first,
@@ -261,11 +265,20 @@ object ChromiumFlagsSettingsManager {
      */
     private val writeMutex = kotlinx.coroutines.sync.Mutex()
 
-    suspend fun updateSettings(settings: ChromiumFlagsSettings) {
+    /**
+     * Apply [transform] to the current settings, atomically, and persist the result.
+     *
+     * A TRANSFORM rather than a finished value. The callers are UI controls computing
+     * `current.copy(field = new)` from a snapshot they collected earlier, so two edits landing in
+     * the same frame - which per-keystroke number inputs make ordinary - both derive from that one
+     * snapshot and the second silently discards the first. `updateAndGet` closes it: each caller
+     * reads the value at the moment it applies, not at the moment it composed.
+     */
+    suspend fun updateSettings(transform: (ChromiumFlagsSettings) -> ChromiumFlagsSettings) {
         // In-memory state first, on the CALLER's thread, so the UI and any subsequent read see
         // the new value immediately and cannot observe a write that is still queued behind the
         // mutex. Only the disk write is asynchronous.
-        _currentSettings.value = settings
+        _currentSettings.updateAndGet(transform)
         withContext(Dispatchers.IO) {
             writeMutex.withLock {
                 try {
@@ -275,8 +288,11 @@ object ChromiumFlagsSettingsManager {
                     // failure with ChromiumFlagsSettings() — so an interrupted keystroke could
                     // silently reset every flag the user had set, including the security ones.
                     val temp = java.io.File(settingsFile.parentFile, "${settingsFile.name}.tmp")
-                    temp.writeText(json.encodeToString(ChromiumFlagsSettings.serializer(), settings))
-                    restrictToOwner(temp)
+                    // Read under the lock rather than using a value captured before it: with two
+                    // writers, the second could otherwise persist the older of the two snapshots.
+                    val toPersist = _currentSettings.value
+                    createOwnerOnly(temp)
+                    temp.writeText(json.encodeToString(ChromiumFlagsSettings.serializer(), toPersist))
                     java.nio.file.Files.move(
                         temp.toPath(),
                         settingsFile.toPath(),
@@ -304,13 +320,23 @@ object ChromiumFlagsSettingsManager {
      * Best-effort: a filesystem without POSIX permissions (a Windows share) must not stop the
      * settings from saving, so a failure is logged and the write proceeds.
      */
-    private fun restrictToOwner(file: java.io.File) {
+    private fun createOwnerOnly(file: java.io.File) {
         try {
             val perms =
                 java.nio.file.attribute.PosixFilePermissions
                     .fromString("rw-------")
+            // Created WITH the permissions rather than chmod-ed after writing. Writing first and
+            // restricting second left the contents readable at the default umask for the width of
+            // that call - a small window, but an avoidable one on a file that can turn off the
+            // Chromium sandbox.
             java.nio.file.Files
-                .setPosixFilePermissions(file.toPath(), perms)
+                .deleteIfExists(file.toPath())
+            java.nio.file.Files
+                .createFile(
+                    file.toPath(),
+                    java.nio.file.attribute.PosixFilePermissions
+                        .asFileAttribute(perms),
+                )
         } catch (e: UnsupportedOperationException) {
             logger.debug(
                 LogCategory.BROWSER,
@@ -320,11 +346,11 @@ object ChromiumFlagsSettingsManager {
         } catch (e: Exception) {
             logger.warn(
                 LogCategory.BROWSER,
-                "Could not restrict Chromium flag settings to owner-only",
+                "Could not create Chromium flag settings owner-only",
                 mapOf("error" to e.toString()),
             )
         }
     }
 
-    suspend fun resetToDefault() = updateSettings(ChromiumFlagsSettings())
+    suspend fun resetToDefault() = updateSettings { ChromiumFlagsSettings() }
 }
