@@ -89,6 +89,54 @@ private fun resolveServiceJar(
         ?: File(installedDir, jarName).path
 }
 
+private val reapLogger = LoggerFactory.getLogger("KernelReaper")
+
+/**
+ * Stop supervising children, then kill every registered one inside [gracePeriodMs] total.
+ *
+ * Supervision goes first because each [ManagedProcess.destroy] below is indistinguishable from a
+ * crash to the monitor, whose failure handler respawns - reaping while it still watches can hand an
+ * exiting host a fresh generation of children to strand.
+ *
+ * The kills are issued to everything up front and then awaited against a single shared deadline,
+ * rather than destroy-then-wait per process. Per-process waiting made exit cost scale with the
+ * cohort - N plugins meant up to 2N seconds - and the OS caps how long a shutdown hook may run, so
+ * a hook cut off partway down the list stranded the tail. That is the orphan symptom this whole
+ * change exists to remove, arriving by a different route.
+ */
+internal fun reapChildren(
+    monitor: ProcessMonitor?,
+    registry: ProcessRegistry?,
+    gracePeriodMs: Long = 3_000,
+) {
+    runCatching { monitor?.stopSupervision() }
+
+    val children = registry?.getAllProcesses().orEmpty()
+    if (children.isEmpty()) return
+
+    reapLogger.info("Reaping {} child process(es)", children.size)
+    children.forEach { runCatching { it.destroy() } }
+
+    val deadline = System.currentTimeMillis() + gracePeriodMs
+    children.forEach { child ->
+        val budget = deadline - System.currentTimeMillis()
+        if (budget <= 0) return@forEach
+        try {
+            child.process.waitFor(budget, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            return@forEach
+        } catch (_: Exception) {
+            // Fall through to the force-kill pass.
+        }
+    }
+
+    children.filter { it.isAlive }.forEach {
+        reapLogger.warn("Force-killing process: {}", it.config.processId)
+        runCatching { it.destroyForcibly() }
+    }
+}
+
 private val notifyLogger = LoggerFactory.getLogger("KernelRepairNotice")
 
 /**
@@ -256,20 +304,7 @@ class KernelBootstrap(
             Thread({
                 try {
                     logger.info("JVM shutdown hook: cleaning up child processes...")
-                    // Stop supervision before reaping. Each destroy below is indistinguishable
-                    // from a crash to the monitor, whose failure handler respawns - so reaping
-                    // while it still watches can hand an exiting host a fresh generation of
-                    // children to strand.
-                    runCatching { processMonitor?.stopAll() }
-                    processRegistry?.getAllProcesses()?.forEach { process ->
-                        try {
-                            process.destroy()
-                            process.process.waitFor(2, TimeUnit.SECONDS)
-                            if (process.isAlive) process.destroyForcibly()
-                        } catch (_: Exception) {
-                            process.destroyForcibly()
-                        }
-                    }
+                    reapChildren(processMonitor, processRegistry)
                     ipcServer?.stop()
                 } catch (_: Exception) {
                 }
@@ -289,8 +324,13 @@ class KernelBootstrap(
                     val process = registry.getProcess(id)
                     if (process != null) {
                         if (force) process.destroyForcibly() else process.destroy()
-                        // Don't unregister — process monitor will detect the exit and
-                        // trigger auto-respawn if restartPolicy == ON_FAILURE
+                        // Don't unregister — for a SERVICE/APP/ORCHESTRATOR the process monitor
+                        // will detect the exit and trigger auto-respawn if
+                        // restartPolicy == ON_FAILURE.
+                        //
+                        // PLUGIN is the exception: it is not health-supervised, so nothing
+                        // respawns it despite its config also saying ON_FAILURE, and the global
+                        // monitor prunes the dead entry instead.
                         true
                     } else {
                         false
@@ -734,34 +774,12 @@ class KernelBootstrap(
 
         logger.info("Shutting down KERNEL mode...")
 
-        // 1. Stop process monitor
-        processMonitor?.stopAll()
-
-        // 2. Clear event bridges
+        // 1. Clear event bridges. Before reaping, because step 2 no longer cancels `scope` and
+        //    this still needs it.
         wireEventBridges(IpcEventBridgeImpl(null, scope))
 
-        // 3. Shut down all child processes (apps first, then services)
-        processRegistry?.getProcessesByType(ProcessType.PLUGIN)?.forEach { it.destroy() }
-        processRegistry?.getProcessesByType(ProcessType.APP)?.forEach { it.destroy() }
-        processRegistry?.getProcessesByType(ProcessType.ORCHESTRATOR)?.forEach { it.destroy() }
-        processRegistry?.getProcessesByType(ProcessType.SERVICE)?.forEach { it.destroy() }
-
-        // 4. Wait for graceful shutdown with 2s per-process timeout
-        processRegistry?.getAllProcesses()?.forEach { process ->
-            try {
-                if (!process.process.waitFor(2, TimeUnit.SECONDS)) {
-                    logger.warn("Process did not exit in 2s: {}", process.config.processId)
-                }
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
-            }
-        }
-
-        // 5. Force kill any remaining
-        processRegistry?.getAllProcesses()?.filter { it.isAlive }?.forEach {
-            logger.warn("Force-killing process: {}", it.config.processId)
-            it.destroyForcibly()
-        }
+        // 2. Stop supervision and shut down every child against one shared deadline.
+        reapChildren(processMonitor, processRegistry)
 
         // 6. Stop IPC server
         ipcServer?.stop()

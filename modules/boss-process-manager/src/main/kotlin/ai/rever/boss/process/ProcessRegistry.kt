@@ -41,6 +41,26 @@ class ProcessRegistry {
         logger.info("Unregistered process: id={}", id)
     }
 
+    /**
+     * Remove [id], but only while it still maps to [process]. Returns whether it did.
+     *
+     * For callers acting on a process handle they read earlier: a plain [unregister] removes by id,
+     * so a respawn that re-registered the same id in between would have its live replacement
+     * dropped instead - and since this registry is what the shutdown hook reaps, dropping a live
+     * child is exactly how one becomes an orphan.
+     */
+    fun unregisterIfSame(
+        id: String,
+        process: ManagedProcess,
+    ): Boolean {
+        if (!processes.remove(id, process)) return false
+        manifests.remove(id)
+        restartCounts.remove(id)
+        _processCount.value = processes.size
+        logger.info("Unregistered process: id={}", id)
+        return true
+    }
+
     fun getProcess(id: String): ManagedProcess? = processes[id]
 
     fun getManifest(id: String): ProcessManifest? = manifests[id]

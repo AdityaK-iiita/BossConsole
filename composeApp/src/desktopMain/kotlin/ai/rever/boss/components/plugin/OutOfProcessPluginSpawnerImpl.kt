@@ -127,7 +127,7 @@ class OutOfProcessPluginSpawnerImpl(
 
                 val config =
                     ProcessConfig(
-                        processId = "plugin-$pluginId",
+                        processId = processIdOf(pluginId),
                         processType = ProcessType.PLUGIN,
                         displayName = manifest.displayName,
                         mainClass = "ai.rever.boss.plugin.runtime.PluginProcessMainKt",
@@ -149,15 +149,8 @@ class OutOfProcessPluginSpawnerImpl(
                     runtimeClasspath,
                 )
 
-                // spawn() enters the child in the kernel registry, which is what the JVM shutdown
-                // hook in KernelBootstrap reaps on exit. This class used to keep its handles only
-                // in managedProcesses below, so the hook iterated a list that never contained a
-                // plugin, killed nothing, and every host exit - a clean Cmd+Q included - stranded
-                // the whole cohort as PPID-1 orphans that outlived the host indefinitely.
-                //
-                // The child's own gRPC registration reaches only the registry's *manifest* map
-                // (see KernelServiceImpl.onProcessRegistered), which is why waitForReady below
-                // could see a child that getAllProcesses() could not.
+                // spawn() enters the child in the kernel registry, which is what the shutdown hook
+                // reaps. See ProcessSpawner's KDoc for why registration lives there.
                 val managedProcess = processSpawner.spawn(config)
                 managedProcesses[pluginId] = managedProcess
 
@@ -205,20 +198,19 @@ class OutOfProcessPluginSpawnerImpl(
      * Tear down everything [spawn] may have created for a plugin whose startup failed.
      */
     private fun cleanupFailedSpawn(pluginId: String) {
-        kernelRegistry()?.unregister(processIdOf(pluginId))
         runCatching { stateBridges.remove(pluginId)?.dispose() }
         runCatching { pluginChannels.remove(pluginId)?.shutdownNow() }
-        runCatching { managedProcesses.remove(pluginId)?.destroyForcibly() }
+        // Kill first, drop the registry entry second: while the child is alive the registry entry
+        // is the only thing that would let a host exit reap it.
+        val process = managedProcesses.remove(pluginId)
+        runCatching { process?.destroyForcibly() }
+        process?.let { kernelRegistry()?.unregisterIfSame(processIdOf(pluginId), it) }
     }
 
     override suspend fun terminate(pluginId: String): Result<Unit> =
         withContext(Dispatchers.IO) {
+            val process = managedProcesses.remove(pluginId)
             try {
-                // Drop the registry entry before killing the child. This is a deliberate
-                // termination, so leaving the entry in place would hand a dead handle to
-                // anything that iterates the registry afterwards.
-                kernelRegistry()?.unregister(processIdOf(pluginId))
-
                 // Dispose state bridge
                 stateBridges.remove(pluginId)?.dispose()
 
@@ -232,7 +224,6 @@ class OutOfProcessPluginSpawnerImpl(
                 }
 
                 // Destroy process
-                val process = managedProcesses.remove(pluginId)
                 if (process != null) {
                     logger.info("Terminating plugin process: id={}, pid={}", pluginId, process.pid)
                     process.destroy()
@@ -250,10 +241,15 @@ class OutOfProcessPluginSpawnerImpl(
                 Result.success(Unit)
             } catch (e: Exception) {
                 // Force kill if graceful shutdown failed
-                managedProcesses[pluginId]?.destroyForcibly()
-                managedProcesses.remove(pluginId)
+                process?.destroyForcibly()
                 logger.warn("Force-killed plugin process: id={}", pluginId, e)
                 Result.success(Unit)
+            } finally {
+                // Registry entry goes last, and only if it is still this process. "Registered
+                // implies reapable" has to hold for as long as the child is alive, so a host exit
+                // part-way through an unload still reaps it; and removing by id alone could evict
+                // a replacement that a concurrent respawn had already registered.
+                process?.let { kernelRegistry()?.unregisterIfSame(processIdOf(pluginId), it) }
             }
         }
 

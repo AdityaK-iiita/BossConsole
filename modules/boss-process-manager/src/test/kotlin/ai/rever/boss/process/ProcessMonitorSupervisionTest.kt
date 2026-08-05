@@ -9,6 +9,8 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
@@ -154,6 +156,34 @@ class ProcessMonitorSupervisionTest {
     @Test
     fun `a live plugin is left in the registry`() {
         assertEquals(listOf("p1"), registeredIdsAfterDeath(ProcessType.PLUGIN, kill = false))
+    }
+
+    @Test
+    fun `pruning a dead plugin cannot evict a live replacement under the same id`() {
+        // getAllProcesses() hands back a snapshot, so the prune decides on a handle it read earlier.
+        // If a respawn registers a new child under the same id in between, removing by id alone
+        // would drop the live one - out of the registry that is the only thing the shutdown hook
+        // can see, making it exactly the orphan this whole change exists to prevent.
+        runTest {
+            val registry = ProcessRegistry()
+            val monitor = ProcessMonitor(registry, backgroundScope)
+
+            val dead = FakeProcess(1111)
+            registry.register("plugin-x", managed("plugin-x", ProcessType.PLUGIN, dead))
+            dead.die(exitCode = 1)
+
+            // The replacement lands before the monitor gets to act on its snapshot.
+            val liveReplacement = managed("plugin-x", ProcessType.PLUGIN, FakeProcess(2222))
+            registry.register("plugin-x", liveReplacement)
+
+            monitor.startGlobalMonitor(checkIntervalMs = 10)
+            advanceTimeBy(500)
+
+            val survivor = registry.getProcess("plugin-x")
+            assertNotNull(survivor, "the live replacement must still be registered")
+            assertSame(liveReplacement, survivor, "the dead handle's prune took the live one with it")
+            assertTrue(survivor.isAlive)
+        }
     }
 
     @Test

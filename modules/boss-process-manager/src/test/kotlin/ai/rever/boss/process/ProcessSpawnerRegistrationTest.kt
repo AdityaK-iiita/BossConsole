@@ -5,8 +5,8 @@ import java.nio.file.Files
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 /**
  * Every spawned process lands in the registry.
@@ -99,6 +99,8 @@ class ProcessSpawnerRegistrationTest {
         val process = spawner(registry = null).spawn(config("no-registry", ProcessType.SERVICE))
         spawned += process
 
-        assertNotNull(process.pid)
+        // pid is a non-nullable Long, so assertNotNull here could never fail - assert the process
+        // actually started instead.
+        assertTrue(process.pid > 0, "a real child process should have been started")
     }
 }
