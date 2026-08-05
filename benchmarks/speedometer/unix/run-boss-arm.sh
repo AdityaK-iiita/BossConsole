@@ -86,7 +86,7 @@ case "$(uname -s)" in
 esac
 
 if [[ ! -x "$APP_BIN" ]]; then
-    echo "BOSS not built at $APP_BIN — run: ./gradlew :composeApp:createDistributable" >&2
+    echo "BOSS not built at $APP_BIN - run: ./gradlew :composeApp:createDistributable" >&2
     exit 1
 fi
 
@@ -101,9 +101,19 @@ LAST_SESSION="$HOME/Documents/BOSS/workspaces/Last_Session.json"
 BACKUP="$LAST_SESSION.preperf-backup"
 # The operator's own Last Session lives at the path this script overwrites. Keep one
 # pristine copy so it can always be put back.
-if [[ -f "$LAST_SESSION" && ! -f "$BACKUP" ]]; then
-    cp "$LAST_SESSION" "$BACKUP"
-    echo "Backed up your Last Session to $BACKUP"
+#
+# HAD_NO_SESSION is the case a conditional backup alone loses. The fixture is written
+# unconditionally before every launch, but with no pre-existing file there is nothing to
+# back up, so restore_session had nothing to do and the harness single-tab layout became
+# the operator's session permanently - the opposite of "put it back on ANY exit".
+HAD_NO_SESSION=false
+if [[ -f "$LAST_SESSION" ]]; then
+    if [[ ! -f "$BACKUP" ]]; then
+        cp "$LAST_SESSION" "$BACKUP"
+        echo "Backed up your Last Session to $BACKUP"
+    fi
+else
+    HAD_NO_SESSION=true
 fi
 
 # Only ever match BOSS processes launched from THIS worktree's build output.
@@ -180,7 +190,7 @@ raise_and_maximize() {
     if [[ "$PLATFORM" == "mac" ]]; then
         local pid
         if ! pid="$(boss_window_pid)"; then
-            echo "WARNING: no BOSS window found for this worktree's build — not touching any other BOSS." >&2
+            echo "WARNING: no BOSS window found for this worktree's build - not touching any other BOSS." >&2
             echo "         (If your terminal lacks accessibility access, grant it or raise the window by hand.)" >&2
             return 1
         fi
@@ -204,13 +214,13 @@ AS
                 [[ "$(ps -p "$wpid" -o command= 2>/dev/null)" == "$APP_BIN"* ]] && { echo "$id"; break; }
             done)"
             if [[ -z "$wid" ]]; then
-                echo "WARNING: no BOSS window found for this worktree's build — not touching any other BOSS." >&2
+                echo "WARNING: no BOSS window found for this worktree's build - not touching any other BOSS." >&2
                 return 1
             fi
             wmctrl -i -a "$wid" >/dev/null 2>&1 || true
             wmctrl -i -r "$wid" -b add,maximized_vert,maximized_horz >/dev/null 2>&1 || true
         else
-            echo "WARNING: wmctrl not found — maximize the benchmark window by hand, or rAF throttling will skew the run." >&2
+            echo "WARNING: wmctrl not found - maximize the benchmark window by hand, or rAF throttling will skew the run." >&2
             return 1
         fi
     fi
@@ -218,7 +228,13 @@ AS
 }
 
 restore_session() {
-    [[ -f "$BACKUP" ]] && cp "$BACKUP" "$LAST_SESSION" || true
+    if [[ -f "$BACKUP" ]]; then
+        cp "$BACKUP" "$LAST_SESSION"
+    elif [[ "$HAD_NO_SESSION" == true ]]; then
+        # No session existed before this run, so restoring means REMOVING the fixture rather
+        # than leaving it behind as the operator's.
+        rm -f "$LAST_SESSION"
+    fi
 }
 # An interrupted sweep is the normal case here (Ctrl+C, a failed run), so putting the
 # operator's layout back on ANY exit is what makes this self-healing rather than leaving
@@ -229,7 +245,7 @@ restore_session() {
 # leaves the benchmark's single-tab fixture in place as the operator's session. Verified
 # the hard way — a probe script that restored first ended up with the fixture saved over
 # the real layout, by the dying app, a moment after the restore.
-trap 'stop_dev_boss; restore_session' EXIT INT TERM
+trap 'trap - EXIT INT TERM; stop_dev_boss; restore_session' EXIT INT TERM
 
 mkdir -p "$HERE/$RESULTS"
 echo "=== arm '$LABEL'  mode=$RENDERING_MODE  extra='$EXTRA'  repeats=$REPEATS"
@@ -248,7 +264,7 @@ for ((i = 1; i <= REPEATS; i++)); do
     mkdir -p "$(dirname "$LAST_SESSION")"
     cp "$HERE/../win/bench-last-session.json" "$LAST_SESSION"
 
-    echo "[$LABEL] run $i/$REPEATS — launching BOSS"
+    echo "[$LABEL] run $i/$REPEATS - launching BOSS"
     # BOSS_LOG_LEVEL is pinned because BOSS_DEV_MODE alone drops the global level to
     # DEBUG (BossLogger.configureFromEnvironment), and the BROWSER category logs on
     # navigation and frame events — i.e. dev mode would be measured doing work a
@@ -261,7 +277,7 @@ for ((i = 1; i <= REPEATS; i++)); do
         "$APP_BIN" >/dev/null 2>&1 &
 
     if ! wait_devtools 180; then
-        echo "WARNING: [$LABEL] run $i — DevTools port $PORT never came up; skipping" >&2
+        echo "WARNING: [$LABEL] run $i - DevTools port $PORT never came up; skipping" >&2
         continue
     fi
     sleep 5

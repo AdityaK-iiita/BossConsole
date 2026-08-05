@@ -206,9 +206,10 @@ class FluckEngineSwitchesTest {
 
     @Test
     fun `partitionExtraSwitches separates accepted switches from dropped tokens in one pass`() {
-        val (accepted, dropped) = FluckEngine.partitionExtraSwitches("--ok not-a-switch -single --also-ok")
-        assertEquals(listOf("--ok", "--also-ok"), accepted)
-        assertEquals(listOf("not-a-switch", "-single"), dropped)
+        val parsed = FluckEngine.partitionExtraSwitches("--ok not-a-switch -single --also-ok")
+        assertEquals(listOf("--ok", "--also-ok"), parsed.accepted)
+        assertEquals(listOf("not-a-switch", "-single"), parsed.malformed)
+        assertEquals(emptyList(), parsed.gated)
     }
 
     @Test
@@ -317,16 +318,19 @@ class FluckEngineSwitchesTest {
         // The text box reached the same end states as the sandbox and DevTools toggles, which are
         // deliberately behind dialogs spelling out the exposure. A confirmation that can be
         // sidestepped by typing is not a confirmation.
-        val (accepted, dropped) =
+        val parsed =
             FluckEngine.partitionExtraSwitches(
                 "--no-sandbox --remote-debugging-port=9222 --disable-setuid-sandbox --harmless-flag",
             )
-        assertEquals(listOf("--harmless-flag"), accepted)
-        // Refused entries land in `dropped`, which the UI already surfaces as "will be ignored" —
-        // so the refusal is visible rather than silent.
-        assertTrue("--no-sandbox" in dropped)
-        assertTrue("--remote-debugging-port=9222" in dropped, "must match with a value attached")
-        assertTrue("--disable-setuid-sandbox" in dropped)
+        assertEquals(listOf("--harmless-flag"), parsed.accepted)
+        // In `gated`, NOT `malformed`. They are well-formed switches refused for a different
+        // reason, and reporting them as "does not start with --" told the user something plainly
+        // false and sent them to fix a prefix that was never missing.
+        assertEquals(
+            listOf("--no-sandbox", "--remote-debugging-port=9222", "--disable-setuid-sandbox"),
+            parsed.gated,
+        )
+        assertEquals(emptyList(), parsed.malformed, "a gated switch is not a malformed one")
     }
 
     @Test
@@ -334,9 +338,10 @@ class FluckEngineSwitchesTest {
         // Deliberately NOT a general-purpose filter: the field is documented as unrestricted, and
         // trying to make arbitrary Chromium switches safe is not a winnable game. It closes only
         // the paths that bypass a gate this app itself put up.
-        val (accepted, _) =
+        val parsed =
             FluckEngine.partitionExtraSwitches("--disable-web-security --proxy-server=http://x --load-extension=/tmp/e")
-        assertEquals(3, accepted.size)
+        assertEquals(3, parsed.accepted.size)
+        assertEquals(emptyList(), parsed.gated)
     }
 
     // --- disk cache ---

@@ -160,16 +160,22 @@ private fun restartWouldChangeAnything(settings: ChromiumFlagsSettings): Boolean
             ChromiumFlagsSettingsManager.previewValue(settings, key) !=
                 ChromiumFlagsSettingsManager.previewValue(boot, key)
         }
+    // Settings-only fields have no config key, so previewValue cannot speak for them and any
+    // change to one is a real change.
+    //
+    // Names the SETTINGS-ONLY fields rather than the published ones, which is the safer list to
+    // restate: the same six are already enumerated in ChromiumFlagsSettingsTest, where a test
+    // asserts fieldCount == PUBLISHED.size + settingsOnly.size. So adding a field to
+    // ChromiumFlagsSettings fails that test until it is categorised, which is the guard the
+    // previous version of this function (restating the eight published names, unguarded) lacked.
     val settingsOnlyDiffers =
-        settings.copy(
-            renderingMode = boot.renderingMode,
-            skikoRenderApi = boot.skikoRenderApi,
-            topInsetDp = boot.topInsetDp,
-            browserPrewarm = boot.browserPrewarm,
-            rendererProcessLimit = boot.rendererProcessLimit,
-            enableSkiaGraphite = boot.enableSkiaGraphite,
-            disableSandbox = boot.disableSandbox,
-            extraSwitches = boot.extraSwitches,
+        boot.copy(
+            diskCacheMb = settings.diskCacheMb,
+            noPings = settings.noPings,
+            disableDomainReliability = settings.disableDomainReliability,
+            disableWinOcclusion = settings.disableWinOcclusion,
+            enableVaapi = settings.enableVaapi,
+            remoteDebuggingPort = settings.remoteDebuggingPort,
         ) != boot
     return publishedDiffers || settingsOnlyDiffers
 }
@@ -243,6 +249,25 @@ private fun envNote(key: String): String? =
         "Overridden by $key=$value in this session's environment. Unset it to use this setting."
     }
 
+/**
+ * The dropdown label for a stored rendering-mode value.
+ *
+ * Routed through the parser rather than a null check. The UI only ever writes null or
+ * "OFF_SCREEN", but "HARDWARE" is documented as an honoured spelling, so a hand-edited file
+ * saying that would otherwise display as Off-screen while the app ran Hardware.
+ */
+private fun renderingModeLabel(
+    stored: String?,
+    hostOs: String,
+): String =
+    if (JxBrowserConfig.resolveRenderingMode(stored, hostOs) ==
+        com.teamdev.jxbrowser.engine.RenderingMode.OFF_SCREEN
+    ) {
+        OFF_SCREEN_LABEL
+    } else {
+        HARDWARE_LABEL
+    }
+
 private const val HARDWARE_LABEL = "Hardware accelerated (default)"
 
 /** Internal, not private: the command-line report names the mode a restart would switch to. */
@@ -259,6 +284,7 @@ private fun RenderingSection(
             "How the embedded Chromium hands frames to the app. Hardware accelerated composites on " +
                 "the GPU and is the default on every platform; off-screen renders to a CPU bitmap.",
     ) {
+        val hostOs = remember { System.getProperty("os.name").orEmpty().lowercase() }
         val modeEnvNote = envNote(ChromiumFlagKeys.RENDERING_MODE)
         // Two options, not three. "Platform default" would be a third label resolving to exactly
         // the same mode as "Hardware accelerated" on every platform BOSS ships to, and an option
@@ -266,7 +292,10 @@ private fun RenderingSection(
         SettingsDropdown(
             label = "Rendering mode",
             options = listOf(HARDWARE_LABEL, OFF_SCREEN_LABEL),
-            selectedOption = if (settings.renderingMode == null) HARDWARE_LABEL else OFF_SCREEN_LABEL,
+            // Routed through the parser rather than a null check: the UI only ever writes null or
+            // "OFF_SCREEN", but the stored spelling "HARDWARE" is documented as honoured, and a
+            // hand-edited file saying that would display as Off-screen while running Hardware.
+            selectedOption = renderingModeLabel(settings.renderingMode, hostOs),
             onOptionSelected = { selection ->
                 save(settings.copy(renderingMode = if (selection == OFF_SCREEN_LABEL) "OFF_SCREEN" else null))
             },
@@ -394,8 +423,10 @@ private fun PlatformPerformanceRows(
             val graphiteEnvNote = envNote(ChromiumFlagKeys.SKIA_GRAPHITE)
             // The default is not a constant — it follows the rendering mode, so the unset state
             // has to be shown as whatever that mode resolves to rather than as a fixed false.
+            // The mode the next launch will use, not the latched one — otherwise selecting
+            // Off-screen leaves this reading ON with an explanation about hardware rendering.
             val graphiteDefault =
-                FluckEngine.resolveSkiaGraphite(null, JxBrowserConfig.renderingMode)
+                FluckEngine.resolveSkiaGraphite(null, nextRenderingMode(settings))
             SettingsToggle(
                 label = "Skia Graphite (Metal) raster backend",
                 checked = settings.enableSkiaGraphite ?: graphiteDefault,
@@ -479,7 +510,7 @@ private fun AdvancedSection(
         val raw = settings.extraSwitches ?: ""
         // Validated with the same function the engine parses these with, so what the UI calls
         // rejected and what boot silently drops can never disagree.
-        val dropped = remember(raw) { FluckEngine.partitionExtraSwitches(raw).second }
+        val parsed = remember(raw) { FluckEngine.partitionExtraSwitches(raw) }
 
         SettingsTextArea(
             label = "Extra Chromium switches",
@@ -496,14 +527,27 @@ private fun AdvancedSection(
                     "than adding to it.",
         )
 
-        if (dropped.isNotEmpty()) {
+        // Two rows, not one. Folding both rejections into a single "not switch-shaped" message
+        // told anyone who typed --no-sandbox that their entry did not start with "--", which is
+        // false and points at the wrong fix.
+        if (parsed.malformed.isNotEmpty()) {
             Spacer(modifier = Modifier.height(8.dp))
             SettingsInfoRow(
                 label = "Will be ignored",
-                value = "${dropped.size}",
+                value = "${parsed.malformed.size}",
                 description =
                     "These are not switch-shaped and will be dropped at startup: " +
-                        dropped.joinToString(" "),
+                        parsed.malformed.joinToString(" "),
+            )
+        }
+        if (parsed.gated.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            SettingsInfoRow(
+                label = "Has its own setting above",
+                value = "${parsed.gated.size}",
+                description =
+                    "Refused here because it would skip the confirmation on its own row: " +
+                        parsed.gated.joinToString(" ") + ". Use the Danger zone controls instead.",
             )
         }
     }

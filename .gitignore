@@ -102,3 +102,7 @@ hs_err_pid*.log
 homebrew-boss/
 boss-releases/
 firebase-debug.log
+
+# Python bytecode from running scripts/*.py locally. Churns per interpreter version.
+__pycache__/
+*.pyc

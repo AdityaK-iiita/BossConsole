@@ -1025,26 +1025,47 @@ object FluckEngine {
     internal fun isFalsyFlag(value: String?): Boolean = value?.trim()?.lowercase() in ENV_FALSE
 
     /**
-     * Truthiness of a tunable, resolved through [ConfigLoader] rather than `System.getenv`.
+     * Falsiness of a tunable, resolved through [ai.rever.boss.config.ConfigLoader] rather than
+     * `System.getenv`.
      *
-     * The distinction matters since these became Settings rows: settings are published as
-     * system properties at startup (see ChromiumFlagsSettingsManager.applyToSystemProperties),
-     * and getenv cannot see a system property — so a getenv read here would accept the
-     * environment and silently ignore the app's own setting. ConfigLoader keeps env first, so
-     * the override precedence is unchanged; it just stops being the *only* source.
+     * The distinction matters since these became Settings rows: settings are published as system
+     * properties at startup, and getenv cannot see a system property — so a getenv read here would
+     * accept the environment and silently ignore the app's own setting. ConfigLoader keeps env
+     * first, so the override precedence is unchanged; it just stops being the only source.
+     *
+     * For CAPABILITY-granting keys use [capabilityValue] instead, which deliberately excludes
+     * local.properties.
      */
-    private fun configIsTrue(name: String) =
-        isTruthyFlag(
-            ai.rever.boss.config.ConfigLoader
-                .getConfig(name),
-        )
-
-    /** Falsiness of a tunable. See [configIsTrue] for why this is not `System.getenv`. */
     private fun configIsFalse(name: String) =
         isFalsyFlag(
             ai.rever.boss.config.ConfigLoader
                 .getConfig(name),
         )
+
+    /**
+     * A CAPABILITY-GRANTING tunable: environment variable or system property ONLY, never
+     * [ai.rever.boss.config.ConfigLoader].
+     *
+     * ConfigLoader also ranks local.properties and the embedded build config, and for these two
+     * keys that is a trust boundary rather than a convenience. Moving them off `System.getenv` to
+     * make Settings reachable by the engine quietly handed local.properties the power to turn off
+     * the Chromium sandbox for every future run of a checkout — the exact property the DevTools
+     * port is kept out of ConfigLoader to avoid, applied to a capability at least as strong.
+     *
+     * It was invisible as well as wrong: the sandbox opt-out is applied through
+     * `EngineOptions.disableSandbox()` rather than a switch, so it cannot show under "Active this
+     * session"; `envNote` reads only the environment; and `settings.disableSandbox` stays null, so
+     * the Danger Zone toggle renders OFF. The sandbox would be disabled while every surface in the
+     * app said it was on.
+     *
+     * The system property is still honoured, because that is exactly how
+     * [ai.rever.boss.config.ChromiumFlagsSettingsManager.applyToSystemProperties] delivers the
+     * user's own setting — so this costs the Settings screen nothing. Precedence within the pair
+     * matches ConfigLoader: environment first.
+     */
+    private fun capabilityValue(name: String): String? = System.getenv(name) ?: System.getProperty(name)
+
+    private fun capabilityIsTrue(name: String) = isTruthyFlag(capabilityValue(name))
 
     /**
      * Parse BOSS_CHROMIUM_EXTRA_SWITCHES: whitespace-separated, exactly like a
@@ -1055,9 +1076,28 @@ object FluckEngine {
      * a single tokenization so the accept filter and the dropped-token warning
      * can never diverge.
      */
-    internal fun partitionExtraSwitches(raw: String?): Pair<List<String>, List<String>> {
+
+    /**
+     * The outcome of parsing the extra-switches field, split three ways.
+     *
+     * [malformed] and [gated] are separate because they are different mistakes with different
+     * fixes, and folding them together made the app tell a user who typed `--no-sandbox` that
+     * their entry did not start with `--` — plainly false, and it sends them to fix the wrong
+     * thing. One list, one message, meant the message could only be right for one of the cases.
+     */
+    internal data class ExtraSwitches(
+        val accepted: List<String> = emptyList(),
+        val malformed: List<String> = emptyList(),
+        val gated: List<String> = emptyList(),
+    )
+
+    internal fun partitionExtraSwitches(raw: String?): ExtraSwitches {
         val tokens = raw?.trim()?.split(WHITESPACE)?.filter { it.isNotEmpty() } ?: emptyList()
-        return tokens.partition { it.startsWith("--") && !isGatedSwitch(it) }
+        return ExtraSwitches(
+            accepted = tokens.filter { it.startsWith("--") && !isGatedSwitch(it) },
+            malformed = tokens.filterNot { it.startsWith("--") },
+            gated = tokens.filter { it.startsWith("--") && isGatedSwitch(it) },
+        )
     }
 
     /**
@@ -1097,7 +1137,7 @@ object FluckEngine {
     private val WHITESPACE = Regex("\\s+")
 
     /** Accepted switches only — see [partitionExtraSwitches]. */
-    internal fun parseExtraSwitches(raw: String?): List<String> = partitionExtraSwitches(raw).first
+    internal fun parseExtraSwitches(raw: String?): List<String> = partitionExtraSwitches(raw).accepted
 
     /**
      * Warm the engine on a background thread so the first browser tab doesn't pay
@@ -1873,11 +1913,9 @@ object FluckEngine {
         builder.diskCacheSize(diskCacheMb.toLong() * 1024 * 1024)
         _lastDiskCacheMb.value = diskCacheMb
 
-        val (extras, dropped) =
-            partitionExtraSwitches(
-                ai.rever.boss.config.ConfigLoader
-                    .getConfig(ChromiumFlagKeys.EXTRA_SWITCHES),
-            )
+        // capabilityValue, not ConfigLoader: arbitrary switches are arbitrary capability.
+        val parsed = partitionExtraSwitches(capabilityValue(ChromiumFlagKeys.EXTRA_SWITCHES))
+        val extras = parsed.accepted
         if (extras.isNotEmpty()) {
             // Audit trail: extras are unrestricted and can re-weaken hardening,
             // so record exactly what this session runs with.
@@ -1889,14 +1927,26 @@ object FluckEngine {
                 ),
             )
         }
-        if (dropped.isNotEmpty()) {
+        if (parsed.malformed.isNotEmpty()) {
             // Surface fat-fingered entries (bare values, single-dash flags) instead
             // of silently dropping them — misconfiguration should be debuggable.
             logger.warn(
                 LogCategory.BROWSER,
                 "Ignoring non-switch tokens in BOSS_CHROMIUM_EXTRA_SWITCHES (switches must start with --)",
                 mapOf(
-                    "dropped" to dropped.joinToString(" "),
+                    "dropped" to parsed.malformed.joinToString(" "),
+                ),
+            )
+        }
+        if (parsed.gated.isNotEmpty()) {
+            // A DIFFERENT reason, and it needs its own wording: these are well-formed switches
+            // refused because they have a confirmed Settings row of their own. Reporting them as
+            // malformed sent the user to fix a "--" that was never missing.
+            logger.warn(
+                LogCategory.BROWSER,
+                "Ignoring switches that have their own confirmed setting - use Settings > Browser Engine instead",
+                mapOf(
+                    "dropped" to parsed.gated.joinToString(" "),
                 ),
             )
         }
@@ -2259,7 +2309,7 @@ object FluckEngine {
                 // the sandbox usually can't start (no user namespaces) and the
                 // container boundary provides the isolation instead.
                 .apply {
-                    if (configIsTrue(ChromiumFlagKeys.DISABLE_SANDBOX) || inContainer) disableSandbox()
+                    if (capabilityIsTrue(ChromiumFlagKeys.DISABLE_SANDBOX) || inContainer) disableSandbox()
                 }.apply { applyRemoteDebuggingPort(this) }
 
         // Add user agent if configured

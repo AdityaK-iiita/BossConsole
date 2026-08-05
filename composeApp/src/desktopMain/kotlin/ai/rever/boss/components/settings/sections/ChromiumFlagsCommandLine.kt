@@ -86,11 +86,7 @@ internal fun EffectiveCommandLineSection(
         // `settings.renderingMode` directly promised a change that would not happen whenever the
         // environment owned the key - in the one section whose stated purpose is that it does not
         // lie. previewValue exists for exactly this.
-        val nextMode =
-            JxBrowserConfig.resolveRenderingMode(
-                ChromiumFlagsSettingsManager.previewValue(settings, ChromiumFlagKeys.RENDERING_MODE),
-                System.getProperty("os.name").orEmpty().lowercase(),
-            )
+        val nextMode = nextRenderingMode(settings)
         SettingsInfoRow(
             label = "Rendering mode",
             // The live value, latched for this process, not the pending setting - this block is
@@ -172,6 +168,19 @@ private fun SwitchList(
  * Values that have a config key go through [ChromiumFlagsSettingsManager.previewValue] so
  * an environment variable shows up as winning, exactly as it will at boot.
  */
+
+/**
+ * The rendering mode the next launch will resolve to, env first then the setting.
+ *
+ * Shared so the preview, the Graphite default and the mode row cannot disagree about which mode
+ * they are describing — the drift this fixes came from two of them reading the LIVE mode instead.
+ */
+internal fun nextRenderingMode(settings: ChromiumFlagsSettings): com.teamdev.jxbrowser.engine.RenderingMode =
+    JxBrowserConfig.resolveRenderingMode(
+        ChromiumFlagsSettingsManager.previewValue(settings, ChromiumFlagKeys.RENDERING_MODE),
+        System.getProperty("os.name").orEmpty().lowercase(),
+    )
+
 private fun nextLaunchSwitches(
     settings: ChromiumFlagsSettings,
     os: String,
@@ -188,10 +197,15 @@ private fun nextLaunchSwitches(
         )
     // Same resolver the engine uses, so the preview shows the mode-dependent default rather
     // than reading an unset value as "off".
+    // resolveSkiaGraphite takes the mode the NEXT LAUNCH will use, not JxBrowserConfig.renderingMode,
+    // which is latched for this process. Using the live mode made the preview drift on exactly the
+    // path the mode-dependence exists to protect: select Off-screen and this still listed
+    // SkiaGraphite, while the next launch emits none — and the reverse previewed no Graphite while
+    // the next boot added the switch that was observed blanking pages.
     val graphite =
         FluckEngine.resolveSkiaGraphite(
             ChromiumFlagsSettingsManager.previewValue(settings, ChromiumFlagKeys.SKIA_GRAPHITE),
-            JxBrowserConfig.renderingMode,
+            nextRenderingMode(settings),
         )
     return FluckEngine.performanceSwitchesFor(
         os = os,

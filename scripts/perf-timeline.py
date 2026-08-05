@@ -139,7 +139,7 @@ def summarize(rows):
     active = [r for r in rows if r[1] > 0]
     print(f"\n=== SUMMARY [{LABEL}] ===", flush=True)
     if not active:
-        print("no active samples (app never detected — check the marker)", flush=True)
+        print("no active samples (app never detected - check the marker)", flush=True)
         return
     procs = [r[1] for r in active]
     rss = [r[2] for r in active]
