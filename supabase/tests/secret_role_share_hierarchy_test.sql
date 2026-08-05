@@ -56,7 +56,7 @@ select is(
 select set_eq(
     $$ select name from public.roles
         where id in (select public.effective_share_role_ids('60000000-0000-0000-0000-000000000001')) $$,
-    $$ values ('admin'),('boss_admin'),('finance_admin'),('user') $$,
+    $$ values ('admin'),('boss_admin'),('boss_plugin_admin'),('finance_admin'),('user') $$,
     'effective_share_role_ids(admin) is the full descendant closure'
 );
 select set_eq(
@@ -68,7 +68,7 @@ select set_eq(
 select set_eq(
     $$ select name from public.roles
         where id in (select public.get_role_ancestors((select id from public.roles where name='user'))) $$,
-    $$ values ('user'),('boss_admin'),('finance_admin'),('admin') $$,
+    $$ values ('user'),('boss_plugin_admin'),('boss_admin'),('finance_admin'),('admin') $$,
     'get_role_ancestors(user) walks up both branches to admin'
 );
 
@@ -80,7 +80,7 @@ values ((select id from public.roles where name='user'),
 select set_eq(
     $$ select name from public.roles
         where id in (select public.get_role_ancestors((select id from public.roles where name='user'))) $$,
-    $$ values ('user'),('boss_admin'),('finance_admin'),('admin') $$,
+    $$ values ('user'),('boss_plugin_admin'),('boss_admin'),('finance_admin'),('admin') $$,
     'get_role_ancestors terminates on a cyclic graph'
 );
 select lives_ok(

@@ -59,7 +59,12 @@ select set_eq(
 select set_eq(
     $$ select unnest(public.get_effective_permissions('11111111-1111-1111-1111-111111111111')) $$,
     $$ values ('plugins.create'),('api_key.create'),
-              ('user.read'),('user.write'),('user.update'),('user.delete') $$,
+              ('user.read'),('user.write'),('user.update'),('user.delete'),
+              -- The organisation feature grants these two to the baseline `user`
+              -- role (20260801010000), and boss_plugin_admin inherits from it.
+              -- Revoking them from `user` is the kill-switch for self-service
+              -- organisation creation, so this list tracks that grant.
+              ('organisation.create'),('organisation.read') $$,
     'boss_plugin_admin EFFECTIVE = direct + the inherited user.* baseline'
 );
 
