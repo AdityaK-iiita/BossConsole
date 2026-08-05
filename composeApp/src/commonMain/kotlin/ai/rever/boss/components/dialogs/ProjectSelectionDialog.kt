@@ -184,7 +184,7 @@ private fun ProjectListItem(
             Icon(
                 imageVector = Icons.Outlined.Folder,
                 contentDescription = "Project",
-                tint = BossTheme.colors.signal,
+                tint = BossTheme.colors.signalText,
                 modifier = Modifier.size(20.dp),
             )
             Spacer(modifier = Modifier.width(12.dp))

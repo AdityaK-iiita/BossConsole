@@ -38,9 +38,9 @@ object BossThemeColors {
 /**
  * BOSS application theme.
  *
- * Resolves through [BossThemeController]'s active theme — Operator (dark,
- * default), Daylight (light), or Clean (charcoal) — selected explicitly by the
- * user in Settings and persisted; the OS theme setting is not consulted.
+ * Resolves through [BossThemeController]'s active theme — one of [BossThemes.all],
+ * Blueprint (dark) by default — selected explicitly by the user in Settings and
+ * persisted; the OS theme setting is not consulted.
  *
  * @param content The content to be styled with this theme
  */

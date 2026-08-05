@@ -109,7 +109,7 @@ fun UpdateAvailableDialog(
         },
         confirmButton = {
             TextButton(onClick = onUpdateNow) {
-                Text("Update Now", color = BossTheme.colors.signal, fontSize = 13.sp)
+                Text("Update Now", color = BossTheme.colors.signalText, fontSize = 13.sp)
             }
         },
         dismissButton = {

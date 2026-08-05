@@ -15,26 +15,110 @@ Three rules drive every token. When a choice is unclear, return here.
    MesloLGS) is the grid the whole UI snaps to. Chrome borrows the terminal's
    discipline - 8.dp base spacing, hairline borders, high density - not the
    other way around.
-2. **One amber signal.** Amber `#F2A93B` means *live / active / now*: the
-   primary action, the focused field, the selected tab, the cursor. Nothing else
-   competes for it. Cyan `#56C7E0` carries links and data.
+2. **Exactly one signal.** One color means *live / active / now*: the primary
+   action, the focused field, the selected tab, the cursor. Nothing else competes
+   for it. A second color, `data`, carries links and data. *Which* hues those are
+   is the active theme's business - electric blue under **Blueprint** (the
+   default), amber and cyan under **Operator** - but a theme never gets three.
 3. **Quiet everywhere else.** Surfaces separate by tint, not shadow. Borders are
    hairlines. Density is high and calm so your output is the loudest thing on
    screen.
 
-The deliberate, non-default choices: amber (not blue) is the primary action
-color, and **monospace is the display/brand voice**, not just code. Both are
-grounded in a terminal-first product.
+The deliberate, non-default choice throughout: **monospace is the display/brand
+voice**, not just code. Grounded in a terminal-first product.
 
 ---
 
 ## 2. Color
 
 Host chrome and the terminal share one floor (`ink`), so a panel and the shell
-it wraps read as one continuous surface. Amber and cyan are the only saturated
-colors that appear in chrome.
+it wraps read as one continuous surface. `signal` and `data` are the only
+saturated colors that appear in chrome.
 
-### Surface & ink
+### Selectable themes
+
+Every token below is a *slot*, not a hex. The active theme fills the slots;
+components only ever name slots. Themes live in
+`…/ui/BossThemes.kt` and the picker renders `BossThemes.all` in order, so adding
+a theme is one `BossAppTheme` plus one list entry.
+
+| Theme | id | | Identity |
+|-------|----|-|----------|
+| **Blueprint** | `blueprint` | dark | Electric blue on ink - matches [bossconsole.ai](https://bossconsole.ai). **The default.** |
+| **Blueprint Light** | `blueprint-light` | light | The same blue, re-grounded on the site's `--paper` |
+| **Operator** | `operator` | dark | The original amber-on-ink identity |
+| **Daylight** | `daylight` | light | Clean light theme |
+| **Clean** | `clean` | dark | Neutral charcoal, steel-blue accent |
+
+The choice is explicit and persisted (`~/.boss/app-theme-settings.json`); the OS
+theme setting is never consulted.
+
+**Who a default change re-skins.** `AppThemeSettingsManager` writes that file only
+from `select()` - `ensureInitialized()` resolves the id without saving. So a file
+that omits `appThemeId`, *or no file at all*, means "whatever the default is", and
+**anyone who never explicitly picked a theme moves to Blueprint on update**. Only an
+explicit selection survives. That is intended here (it is the brand alignment this
+theme exists for); if a future default change should instead be a no-op for current
+users, `ensureInitialized()` has to persist the resolved id once.
+
+That property is why the four mirrors below have to agree on the default, not just
+on the palettes.
+
+#### Blueprint - the default palette
+
+Lifted from bossconsole.ai's stylesheet, or composited from it (a site alpha over
+the site's own floor). The site's hero mocks the app itself (`.console-frame` /
+`.console-topbar` / `.console-sidebar` / `.agent-strip`), so this ladder is the
+site's rather than an interpretation of it.
+
+| Token | Blueprint | Blueprint Light | Source on the site |
+|-------|-----------|-----------------|--------------------|
+| `ink` | `#05070B` | `#F5F7FB` | `--ink` / `--paper` |
+| `panel` | `#080B11` | `#FFFFFF` | `.console-frame` / `.feature-card` |
+| `raised` | `#0E141E` | `#FFFFFF` | near `--ink-2 #0b1019` |
+| `line` | `#1C2432` | `#DCE2EB` | `--line-dark` / `--line` over the floor |
+| `lineStrong` | `#2E3B4F` | `#A8B2C2` | `#ffffff4d` over ink; light edge softened from the site's full-ink card border |
+| `textPrimary` | `#E7EDFA` | `#05070B` | site `#e7edfa` / `--ink` |
+| `textSecondary` | `#9AA7BB` | `#687081` | `.eyebrow` / `--muted` |
+| `textMuted` | `#69768B` | `#9AA3B2` | `.console-topbar` |
+| `signal` | `#0F5BFF` | `#0F5BFF` | `--blue` |
+| `signalDim` | `#0A45C4` | `#0A45C4` | pressed / variant |
+| `signalWash` | `#0A1A3C` | `#DCE7FF` | `.console-sidebar .selected` / `--blue-soft` |
+| `signalText` | `#88A9FF` | `#0F5BFF` | the site's link-blue family (see below) |
+| `data` | `#88A9FF` | `#0C3FBF` | `.audit-line svg` `#8af` |
+| `ok` | `#2FD98A` | `#1E9E63` | - |
+| `warn` | `#F0B429` | `#A8710A` | - |
+| `alert` | `#FF5D5D` | `#D33B4A` | - |
+| `onSignal` | `#FFFFFF` | `#FFFFFF` | `.button-light { background: --blue; color: #fff }` |
+| `onData` | `#05070B` | `#FFFFFF` | - |
+
+**`signal` is the fill; `signalText` is the glyph.** `--blue` sits at 3.8:1 against
+Blueprint's `ink` - fine for the WCAG 3:1 UI-component floor (indicators, borders,
+focus rings, fills), below the 4.5:1 text floor. A *saturated* accent cannot be
+both: dark enough to carry white `onSignal` content as a fill, and light enough to
+read as a glyph on `ink`. Amber can do both, which is why the single-`signal`
+assumption held until Blueprint.
+
+So: **`signal` on a rect, `signalText` on a `Text` or `Icon`.** In Operator and
+Clean the two are the same value; in Blueprint `signalText` is the site's own
+link-blue (`#88A9FF`, 8.1:1), and in Daylight it is a darker amber (`#95580A`,
+5.3:1) - which also retires a defect that predated Blueprint, where Daylight's
+`signal` was 2.6:1 as text on its own near-white floor.
+
+`BossThemesRegistryTest` holds every theme to both floors, on `ink`, `panel` **and**
+`raised` - the dark themes' `panel`/`raised` are lighter than `ink`, so an ink-only
+check reports better ratios than the surfaces the chrome actually paints on. It
+also fails if `signalText` aliases `signal` in a theme where `signal` does not
+already clear 4.5:1, so the token cannot quietly become decorative.
+
+If a control reads as too quiet, thicken the indicator or lift the wash - do not
+brighten `signal`.
+
+### Surface & ink - Operator
+
+These are the raw `BossPalette` constants - the Operator values, kept as the
+reference definition of each slot's *role*. Read them for what a slot is for, not
+for what color the app is currently painted; use `BossTheme.colors.*` for that.
 
 | Token | Hex | Role |
 |-------|-----|------|
@@ -47,13 +131,14 @@ colors that appear in chrome.
 | `mist` | `#8593A3` | Secondary text |
 | `muted` | `#5C6977` | Tertiary / disabled |
 
-### Signals
+### Signals - Operator
 
 | Token | Hex | Role |
 |-------|-----|------|
 | `signal` | `#F2A93B` | Amber - live / active / primary action |
 | `signalDim` | `#C98A2E` | Pressed / variant |
 | `signalWash` | `#2A2113` | Faint amber hover fill on `ink` |
+| `signalText` | `#F2A93B` | Signal-colored **glyphs** (= `signal` here; amber clears 4.5:1) |
 | `data` | `#56C7E0` | Cyan - links / info / data |
 | `ok` | `#6FD08C` | Success / clean exit |
 | `warn` | `#F0B429` | Warning |
@@ -216,13 +301,32 @@ raw-palette names `chalk` / `mist` / `muted`.
 | Concern | Location |
 |---------|----------|
 | Host tokens (source of truth) | `plugin-platform/plugin-ui-core/src/commonMain/kotlin/ai/rever/boss/plugin/ui/BossDesignSystem.kt` |
+| Selectable themes + reactive controller | `…/ui/BossThemes.kt` (`BossThemes.all`, `BossThemeController`) |
+| Theme picker UI | `composeApp/.../components/settings/sections/ThemeSettings.kt` (renders `BossThemes.all`) |
+| Persisted choice | `composeApp/.../theme/AppThemeSettings.kt` → `~/.boss/app-theme-settings.json` |
 | Legacy color object (delegates to `BossPalette`) | `…/ui/BossColors.kt` |
 | `BossTheme()` composable (provides token locals) | `…/ui/BossTheme.kt` |
 | composeApp re-exports + MesloLGS font injection | `composeApp/.../components/misc/BossTheme.kt` |
-| Terminal theme + ANSI palette | BossTerm `…/settings/theme/BuiltinThemes.kt`, `BuiltinColorPalettes.kt` (id `boss-operator`, now the default) |
-| Terminal defaults | BossTerm `…/settings/TerminalSettings.kt` (`activeThemeId = "boss-operator"`) |
+| Terminal theme + ANSI palette | BossTerm `…/settings/theme/BuiltinThemes.kt`, `BuiltinColorPalettes.kt` (`boss-blueprint` is the default, `boss-operator` alongside it) |
+| Terminal defaults | BossTerm `…/settings/TerminalSettings.kt` (`activeThemeId = "boss-blueprint"`, and the fg/bg/selection defaults must match that theme) |
+| Terminal chrome tokens | BossTerm `…/settings/theme/UiTheme.kt` (`EXACT_TOKENS` - both BOSS identities skip derivation) |
 
-**Defaults changed:** BossTerm `DEFAULT_THEME_ID` and `TerminalSettings.activeThemeId`
-are now `boss-operator`, and the default terminal fg/bg are `#D7DEE6` / `#0E1217`.
-Existing saved settings keep their current theme; only fresh installs pick up the
-new default.
+**Defaults:** the host default is `blueprint` (`BossThemes.DEFAULT_ID`) and the
+BossTerm default is `boss-blueprint` (`DEFAULT_THEME_ID` /
+`TerminalSettings.activeThemeId`). Existing saved settings keep their current
+theme; only fresh installs pick up a new default.
+
+**Four mirrors, one settings file.** The palettes exist in four places and they
+have to agree:
+
+| Mirror | Where |
+|--------|-------|
+| Host (source of truth) | `…/ui/BossThemes.kt` |
+| Terminal grid + chrome | BossTerm `…/settings/theme/{BuiltinThemes,BuiltinColorPalettes,UiTheme}.kt` |
+| Out-of-process plugins | `modules/boss-ui-sdk/.../WidgetSemantics.kt` (`ThemeToken`, names only) |
+| Rust host | `BossConsoleRust/crates/boss-core/src/theme.rs` |
+
+The Rust mirror reads and writes **the same** `~/.boss/app-theme-settings.json`,
+and a file that omits `appThemeId` means "the default" - so its `ThemeId::DEFAULT`
+must move whenever `BossThemes.DEFAULT_ID` does, or the two hosts render different
+themes from identical settings.

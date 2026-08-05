@@ -368,6 +368,7 @@ internal val themeTokenColors: Map<ThemeToken, BossColorScheme.() -> Color> =
         ThemeToken.SIGNAL to { signal },
         ThemeToken.SIGNAL_DIM to { signalDim },
         ThemeToken.SIGNAL_WASH to { signalWash },
+        ThemeToken.SIGNAL_TEXT to { signalText },
         ThemeToken.DATA to { data },
         ThemeToken.OK to { ok },
         ThemeToken.WARN to { warn },

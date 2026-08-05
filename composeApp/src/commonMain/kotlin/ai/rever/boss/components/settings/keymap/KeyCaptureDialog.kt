@@ -253,7 +253,7 @@ private fun KeyDisplay(
             text = shortcutText,
             fontSize = if (large) 24.sp else 13.sp,
             fontWeight = FontWeight.Bold,
-            color = BossTheme.colors.signal,
+            color = BossTheme.colors.signalText,
         )
     }
 }

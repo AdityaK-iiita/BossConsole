@@ -19,9 +19,15 @@ import androidx.compose.ui.unit.sp
  *
  *  1. The terminal character cell is the atomic grid unit; chrome borrows the
  *     terminal's discipline (8.dp base, hairline borders, high density).
- *  2. One amber [BossPalette.signal] means "live / active / now" — the primary
- *     action, the focused field, the selected tab, the cursor. Cyan
- *     [BossPalette.data] carries links and data. Everything else stays quiet.
+ *  2. Exactly one `signal` color means "live / active / now" — the primary
+ *     action, the focused field, the selected tab, the cursor. `data` carries
+ *     links and data. Everything else stays quiet. Which hues those are is the
+ *     theme's business (amber/cyan under Operator, electric blue under
+ *     Blueprint); the *rule* is the design system's.
+ *
+ *     `signal` is the FILL; [BossColorScheme.signalText] is the same idea drawn
+ *     as a glyph, and the two diverge whenever the accent is too saturated to be
+ *     both. Reach for `signal` on a rect and `signalText` on a `Text`/`Icon`.
  *
  * Access tokens inside a [BossTheme] via the [BossTheme] accessor object, e.g.
  * `BossTheme.colors.signal`, `BossTheme.space.md`, `BossTheme.radius.button`.
@@ -49,6 +55,7 @@ object BossPalette {
     val signal = Color(0xFFF2A93B) // amber — live / active / primary action
     val signalDim = Color(0xFFC98A2E) // pressed / variant
     val signalWash = Color(0xFF2A2113) // amber at home on ink (hover fill)
+    val signalText = Color(0xFFF2A93B) // signal-colored TEXT (amber clears 4.5:1 as-is)
     val data = Color(0xFF56C7E0) // cyan — links / info / data
 
     // Semantic.
@@ -77,6 +84,20 @@ data class BossColorScheme(
     val signal: Color,
     val signalDim: Color,
     val signalWash: Color,
+    /**
+     * Signal-colored **text and icons**, held to the 4.5:1 text floor.
+     *
+     * Separate from [signal] because a *saturated* accent cannot be both dark
+     * enough to carry [onSignal] content as a fill and light enough to read as
+     * text on [ink]. Amber can do both, so Operator/Clean set this equal to
+     * [signal]; Blueprint's `--blue` is 3.5:1 as text and cannot, and Daylight's
+     * amber-on-white was already failing at 2.6:1.
+     *
+     * Use [signal] for fills, borders and indicators; use this for anything
+     * drawn as a glyph. `BossThemesRegistryTest` holds it to 4.5:1 against
+     * `ink`, `panel` and `raised` in every theme.
+     */
+    val signalText: Color,
     val data: Color,
     val ok: Color,
     val warn: Color,
@@ -98,6 +119,7 @@ val BossDarkColorScheme =
         signal = BossPalette.signal,
         signalDim = BossPalette.signalDim,
         signalWash = BossPalette.signalWash,
+        signalText = BossPalette.signalText,
         data = BossPalette.data,
         ok = BossPalette.ok,
         warn = BossPalette.warn,

@@ -173,7 +173,7 @@ fun ShortcutHelpDialog(
                         },
                         colors =
                             ButtonDefaults.textButtonColors(
-                                contentColor = BossTheme.colors.signal,
+                                contentColor = BossTheme.colors.signalText,
                             ),
                     ) {
                         Icon(
@@ -261,7 +261,7 @@ private fun CategoryHeader(category: String) {
         text = category,
         fontSize = 13.sp,
         fontWeight = FontWeight.SemiBold,
-        color = BossTheme.colors.signal,
+        color = BossTheme.colors.signalText,
         modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
     )
 }

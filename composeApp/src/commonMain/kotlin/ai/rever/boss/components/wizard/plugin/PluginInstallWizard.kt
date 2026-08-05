@@ -103,7 +103,7 @@ internal fun WelcomeStepContent() {
             imageVector = Icons.Default.HomeRepairService,
             contentDescription = null,
             modifier = Modifier.size(64.dp),
-            tint = BossTheme.colors.signal,
+            tint = BossTheme.colors.signalText,
         )
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -143,7 +143,7 @@ internal fun WelcomeStepContent() {
                 imageVector = Icons.Default.Rocket,
                 contentDescription = null,
                 modifier = Modifier.size(20.dp),
-                tint = BossTheme.colors.signal,
+                tint = BossTheme.colors.signalText,
             )
             Spacer(modifier = Modifier.width(12.dp))
             Text(
@@ -173,7 +173,7 @@ internal fun CategoryStepContent(
             ) {
                 TextButton(
                     onClick = onSelectAll,
-                    colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.signal),
+                    colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.signalText),
                 ) {
                     Text("Select All", fontSize = 12.sp)
                 }

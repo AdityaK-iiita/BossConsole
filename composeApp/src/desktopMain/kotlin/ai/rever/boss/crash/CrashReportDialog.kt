@@ -260,7 +260,7 @@ internal fun CrashReportDialog(
                                             },
                                             colors =
                                                 ButtonDefaults.textButtonColors(
-                                                    contentColor = BossTheme.colors.signal,
+                                                    contentColor = BossTheme.colors.signalText,
                                                 ),
                                         ) {
                                             Icon(

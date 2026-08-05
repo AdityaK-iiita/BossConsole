@@ -314,7 +314,7 @@ private fun VersionItem(
             Icon(
                 imageVector = Icons.Default.CloudDownload,
                 contentDescription = "Download",
-                tint = BossTheme.colors.signal,
+                tint = BossTheme.colors.signalText,
             )
         }
     }

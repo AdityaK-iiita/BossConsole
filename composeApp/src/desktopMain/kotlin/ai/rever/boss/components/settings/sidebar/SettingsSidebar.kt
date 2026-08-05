@@ -4,6 +4,7 @@ import ai.rever.boss.components.settings.shared.SettingsTheme.AccentColor
 import ai.rever.boss.components.settings.shared.SettingsTheme.SurfaceColor
 import ai.rever.boss.components.settings.shared.SettingsTheme.TextPrimary
 import ai.rever.boss.components.settings.shared.SettingsTheme.TextSecondary
+import ai.rever.boss.plugin.ui.BossThemes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -94,7 +95,7 @@ enum class SettingsSection(
     ),
     THEME(
         displayName = "Theme",
-        description = "App color theme - Operator, Daylight, or Clean",
+        description = "App color theme - " + BossThemes.all.joinToString { it.name },
         icon = Icons.Outlined.Palette,
     ),
     WINDOW_APPEARANCE(

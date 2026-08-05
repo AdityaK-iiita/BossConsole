@@ -197,7 +197,7 @@ internal fun FinishedContent(
 
         Spacer(Modifier.height(BossTheme.space.lg))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            TextButton(onClick = onClose) { Text("Done", color = BossTheme.colors.signal) }
+            TextButton(onClick = onClose) { Text("Done", color = BossTheme.colors.signalText) }
         }
     }
 }

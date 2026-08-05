@@ -91,7 +91,7 @@ fun PresetSelector(
                             Text(
                                 text = "Modified",
                                 fontSize = 10.sp,
-                                color = BossTheme.colors.signal,
+                                color = BossTheme.colors.signalText,
                             )
                         }
                     }
@@ -131,7 +131,7 @@ fun PresetSelector(
             }
             TextButton(
                 onClick = { showResetConfirmation = true },
-                colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.signal),
+                colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.signalText),
             ) {
                 Icon(
                     imageVector = Icons.Default.Refresh,
@@ -274,7 +274,7 @@ private fun PresetMenuItem(
             Icon(
                 imageVector = Icons.Default.Check,
                 contentDescription = "Selected",
-                tint = BossTheme.colors.signal,
+                tint = BossTheme.colors.signalText,
                 modifier = Modifier.size(18.dp),
             )
         }

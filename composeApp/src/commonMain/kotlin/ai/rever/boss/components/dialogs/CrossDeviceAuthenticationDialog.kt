@@ -170,7 +170,7 @@ fun CrossDeviceAuthenticationDialog(
                         imageVector = Icons.AutoMirrored.Outlined.Launch,
                         contentDescription = "Opening in browser",
                         modifier = Modifier.size(64.dp),
-                        tint = BossTheme.colors.signal,
+                        tint = BossTheme.colors.signalText,
                     )
                 }
 
@@ -243,7 +243,7 @@ fun CrossDeviceAuthenticationDialog(
                             modifier = Modifier.weight(1f),
                             colors =
                                 ButtonDefaults.outlinedButtonColors(
-                                    contentColor = BossTheme.colors.signal,
+                                    contentColor = BossTheme.colors.signalText,
                                 ),
                         ) {
                             Text("Retry")

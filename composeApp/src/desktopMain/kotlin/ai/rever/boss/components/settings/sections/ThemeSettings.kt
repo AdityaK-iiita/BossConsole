@@ -33,7 +33,7 @@ import androidx.compose.ui.unit.sp
 
 /**
  * App theme picker — mirrors BossTerm's theme settings. Lists the host themes
- * (Operator / Daylight / Clean); selecting one applies it live and persists it.
+ * from [BossThemes.all]; selecting one applies it live and persists it.
  */
 @Composable
 fun ThemeSettings() {
@@ -92,10 +92,13 @@ private fun ThemeCard(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Swatch(preview.panel)
-            Swatch(preview.signal)
-            Swatch(preview.data)
-            Swatch(preview.textPrimary)
+            // Each swatch carries the theme's own hairline: in the light themes
+            // `panel` and `raised` are pure white on a near-white `ink`, so an
+            // unbordered swatch renders as nothing at all (1.05:1).
+            Swatch(preview.panel, preview.line)
+            Swatch(preview.signal, preview.line)
+            Swatch(preview.data, preview.line)
+            Swatch(preview.textPrimary, preview.line)
         }
 
         Column(modifier = Modifier.weight(1f)) {
@@ -116,7 +119,7 @@ private fun ThemeCard(
             Icon(
                 imageVector = Icons.Default.Check,
                 contentDescription = "Selected",
-                tint = BossTheme.colors.signal,
+                tint = BossTheme.colors.signalText,
                 modifier = Modifier.size(18.dp),
             )
         }
@@ -124,12 +127,16 @@ private fun ThemeCard(
 }
 
 @Composable
-private fun Swatch(color: Color) {
+private fun Swatch(
+    color: Color,
+    border: Color,
+) {
     Box(
         modifier =
             Modifier
                 .size(16.dp)
                 .clip(RoundedCornerShape(3.dp))
-                .background(color),
+                .background(color)
+                .border(1.dp, border, RoundedCornerShape(3.dp)),
     )
 }

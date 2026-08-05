@@ -767,7 +767,7 @@ fun NewTabDialog(
                                             Icon(
                                                 imageVector = Icons.Outlined.Folder,
                                                 contentDescription = "Folder",
-                                                tint = BossTheme.colors.signal,
+                                                tint = BossTheme.colors.signalText,
                                                 modifier = Modifier.size(18.dp),
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))

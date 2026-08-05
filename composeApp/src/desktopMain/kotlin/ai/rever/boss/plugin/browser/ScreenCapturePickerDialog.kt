@@ -330,7 +330,7 @@ private fun SourceListItem(
                 Icon(
                     imageVector = Icons.Default.CheckCircle,
                     contentDescription = "Selected",
-                    tint = BossTheme.colors.signal,
+                    tint = BossTheme.colors.signalText,
                     modifier = Modifier.size(20.dp),
                 )
             }

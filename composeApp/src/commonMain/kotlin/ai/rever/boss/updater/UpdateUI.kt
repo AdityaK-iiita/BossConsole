@@ -94,7 +94,7 @@ private fun UpdateAvailableBanner(
                 Icon(
                     Icons.Default.KeyboardArrowDown,
                     contentDescription = "Update Available",
-                    tint = BossTheme.colors.signal,
+                    tint = BossTheme.colors.signalText,
                     modifier = Modifier.size(16.dp),
                 )
                 Spacer(modifier = Modifier.width(8.dp))
@@ -114,7 +114,7 @@ private fun UpdateAvailableBanner(
             Row {
                 TextButton(
                     onClick = onDownload,
-                    colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.signal),
+                    colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.signalText),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                     modifier = Modifier.height(28.dp),
                 ) {
@@ -231,7 +231,7 @@ private fun RestartRequiredBanner() {
             Icon(
                 Icons.Default.Refresh,
                 contentDescription = "Installing",
-                tint = BossTheme.colors.signal,
+                tint = BossTheme.colors.signalText,
                 modifier = Modifier.size(16.dp),
             )
             Spacer(modifier = Modifier.width(8.dp))
@@ -291,7 +291,7 @@ private fun ErrorBanner(
             Row {
                 TextButton(
                     onClick = onRetry,
-                    colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.signal),
+                    colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.signalText),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                     modifier = Modifier.height(28.dp),
                 ) {
@@ -495,7 +495,7 @@ fun UpdateSettingsSection(updateCoordinator: UpdateCoordinator = UpdateCoordinat
                             updateCoordinator.checkForUpdatesInBackground(force = true)
                         },
                         enabled = updateState !is UpdateState.CheckingForUpdates,
-                        colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.signal),
+                        colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.signalText),
                     ) {
                         if (updateState is UpdateState.CheckingForUpdates) {
                             CircularProgressIndicator(
@@ -526,7 +526,7 @@ fun UpdateSettingsSection(updateCoordinator: UpdateCoordinator = UpdateCoordinat
                                 showVersionDialog = true
                             }
                         },
-                        colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.signal),
+                        colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.signalText),
                     ) {
                         Icon(
                             Icons.Default.ArrowDropDown,
@@ -583,7 +583,7 @@ fun UpdateSettingsSection(updateCoordinator: UpdateCoordinator = UpdateCoordinat
                         Column {
                             Text(
                                 "Downloading update...",
-                                color = BossTheme.colors.signal,
+                                color = BossTheme.colors.signalText,
                                 fontSize = 14.sp,
                             )
                             Spacer(modifier = Modifier.height(8.dp))
@@ -664,7 +664,7 @@ fun UpdateSettingsSection(updateCoordinator: UpdateCoordinator = UpdateCoordinat
                                         restartApplication()
                                     }
                                 },
-                                colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.signal),
+                                colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.signalText),
                             ) {
                                 Icon(
                                     Icons.Default.Refresh,
