@@ -155,6 +155,14 @@ object ChromiumFlagsSettingsManager {
     // off the default path, before any test can reassign - so a test that redirects and then
     // expects a load to follow will read the real file, not its temp one.
     internal var settingsFile = BossDirectories.resolve("chromium-flags.json")
+        set(value) {
+            // A different file means nothing is known to be persisted in it, so the coalescing
+            // cache must not carry across. Without this a redirected test could have its first
+            // write skipped because an earlier test in the same JVM happened to persist the same
+            // snapshot - order- and machine-dependent, and it would present as a missing file.
+            field = value
+            lastPersisted = null
+        }
     private val json =
         Json {
             prettyPrint = true
@@ -275,11 +283,18 @@ object ChromiumFlagsSettingsManager {
     private val writeMutex = kotlinx.coroutines.sync.Mutex()
 
     /**
-     * The last snapshot actually written, so a queued write that would produce identical bytes can
-     * be skipped. Guarded by [writeMutex]; seeded from [bootSettings] because that is what is on
-     * disk when the process starts, so a no-op first save writes nothing.
+     * The last snapshot this process actually wrote, so a queued write that would produce
+     * identical bytes can be skipped. Guarded by [writeMutex].
+     *
+     * **Starts null, deliberately, and must not be seeded from [bootSettings].** They look
+     * interchangeable and are not: [loadSync] answers a parse failure with a DEFAULT object while
+     * the corrupt file stays on disk, so seeding would record "defaults are persisted" about a
+     * file that holds nothing of the sort - and "Reset engine flags", which writes exactly those
+     * defaults, would match the cache and skip the write, leaving the corrupt file in place
+     * forever with the UI reporting success. Null means "nothing known to be on disk", which is
+     * the truth at startup, and it costs one redundant first write.
      */
-    private var lastPersisted: ChromiumFlagsSettings? = bootSettings
+    private var lastPersisted: ChromiumFlagsSettings? = null
 
     /**
      * Apply [transform] to the current settings, atomically, and persist the result.
