@@ -34,7 +34,7 @@ const HANDOFF_WINDOW_SECONDS = 60
 export const orgPageRoutes = new OpenAPIHono()
 
 orgPageRoutes.get("/o/:slug", async (ctx) => {
-  const slug = ctx.req.param("slug")
+  const slug = ctx.req.param("slug") ?? ""
   const facts = await readRequestFacts(ctx)
 
   if (!isValidSlug(slug)) {

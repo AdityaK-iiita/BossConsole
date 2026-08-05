@@ -38,7 +38,10 @@ export type Guarded<T> = { ok: true; value: T } | { ok: false; response: Respons
  * and mutate org A's data under org B's URL.
  */
 export async function requireOrgSession(ctx: Context): Promise<Guarded<OrgContext>> {
-  const slug = ctx.req.param("slug")
+  // `param` is `string | undefined`: a handler can be reached by a path with
+  // no such segment. Empty string fails isValidSlug, so the guard below is
+  // the single place that decision is made.
+  const slug = ctx.req.param("slug") ?? ""
   const facts = await readRequestFacts(ctx)
 
   if (!isValidSlug(slug)) return { ok: false, response: notAvailable() }

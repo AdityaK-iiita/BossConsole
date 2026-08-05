@@ -129,7 +129,10 @@ async function resolveTxtDoh(name: string): Promise<string[] | null> {
 
 /** Resolves to null on timeout rather than rejecting. */
 async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
-  let timer: number | undefined
+  // ReturnType, not `number`: setTimeout is typed as returning a Timeout
+  // object under the Node-compatible lib and a number under the Deno one,
+  // and which of those wins depends on how the file is entered.
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
     return await Promise.race([
       promise,
