@@ -275,6 +275,13 @@ object ChromiumFlagsSettingsManager {
     private val writeMutex = kotlinx.coroutines.sync.Mutex()
 
     /**
+     * The last snapshot actually written, so a queued write that would produce identical bytes can
+     * be skipped. Guarded by [writeMutex]; seeded from [bootSettings] because that is what is on
+     * disk when the process starts, so a no-op first save writes nothing.
+     */
+    private var lastPersisted: ChromiumFlagsSettings? = null
+
+    /**
      * Apply [transform] to the current settings, atomically, and persist the result.
      *
      * A TRANSFORM rather than a finished value. The callers are UI controls computing
@@ -304,6 +311,11 @@ object ChromiumFlagsSettingsManager {
                     // Read under the lock rather than using a value captured before it: with two
                     // writers, the second could otherwise persist the older of the two snapshots.
                     val toPersist = _currentSettings.value
+                    // Per-keystroke inputs queue several writes that all resolve to the same final
+                    // snapshot once `toPersist` is re-read under the lock, so typing "8192" used to
+                    // write the identical bytes four times - now five syscalls each. Skip the ones
+                    // that would change nothing.
+                    if (toPersist == lastPersisted) return@withLock
                     createOwnerOnly(temp)
                     temp.writeText(json.encodeToString(ChromiumFlagsSettings.serializer(), toPersist))
                     restrictAfterWrite(temp)
@@ -313,6 +325,7 @@ object ChromiumFlagsSettingsManager {
                         java.nio.file.StandardCopyOption.REPLACE_EXISTING,
                         java.nio.file.StandardCopyOption.ATOMIC_MOVE,
                     )
+                    lastPersisted = toPersist
                     logger.debug(LogCategory.BROWSER, "Chromium flag settings saved")
                 } catch (e: Exception) {
                     logger.warn(LogCategory.BROWSER, "Error saving Chromium flag settings", error = e)

@@ -1,7 +1,7 @@
 package ai.rever.boss.config
 
 import ai.rever.boss.components.settings.sections.restartWouldChangeAnything
-import kotlinx.coroutines.launch
+import ai.rever.boss.plugin.browser.FluckEngine
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -218,23 +218,91 @@ class ChromiumFlagsSettingsTest {
         )
     }
 
+    /**
+     * The Graphite exemption in `restartWouldChangeAnything`, which nothing reached.
+     *
+     * `any single change is enough to stop looking default` asserts on `isDefault`, and
+     * `changing any settings-only field is offered a restart` enumerates the six UNPUBLISHED
+     * fields - which excludes `enableSkiaGraphite`. So the toggle-off-then-on case, the entire
+     * reason that per-key branch exists, was unpinned: if Graphite's default ever stops following
+     * the rendering mode, the exemption would silently suppress a restart that IS needed.
+     */
+    @Test
+    fun `re-enabling Graphite to its default value is not offered a restart`() {
+        val boot = ChromiumFlagsSettingsManager.bootSettings
+        // Assumes a default boot, as the test below it already does.
+        assertTrue(boot.isDefault, "this test reads the boot settings as unmodified")
+        // Toggling off then on stores an explicit value where boot held null: different strings,
+        // identical resolved behaviour, so no restart is owed.
+        val default = FluckEngine.resolveSkiaGraphite(null, JxBrowserConfig.renderingMode)
+        assertFalse(restartWouldChangeAnything(boot.copy(enableSkiaGraphite = default)))
+        // The opposite choice IS a real change and must still be offered one.
+        assertTrue(restartWouldChangeAnything(boot.copy(enableSkiaGraphite = !default)))
+    }
+
+    /**
+     * The security-motivated half of the write path, which was the half still untested.
+     *
+     * `settingsFile` became an `internal var` precisely to make this reachable. It also pins the
+     * non-obvious step: the file is created `rw-------` as a TEMP file and reaches its destination
+     * through `ATOMIC_MOVE`, which carries the mode across - a JDK or filesystem change could
+     * quietly break that and nothing else would notice.
+     */
+    @Test
+    fun `the saved settings file is owner-only`() {
+        val posix =
+            java.nio.file.FileSystems
+                .getDefault()
+                .supportedFileAttributeViews()
+                .contains("posix")
+        if (!posix) return // Windows runner; the permissions path is a documented no-op there.
+        val realFile = ChromiumFlagsSettingsManager.settingsFile
+        val temp = java.io.File.createTempFile("chromium-flags-perms", ".json")
+        temp.delete() // let the write path create it, so the assertion covers creation
+        val before = ChromiumFlagsSettingsManager.currentSettings.value
+        ChromiumFlagsSettingsManager.settingsFile = temp
+        try {
+            kotlinx.coroutines.runBlocking {
+                ChromiumFlagsSettingsManager.updateSettings { it.copy(diskCacheMb = 321) }
+            }
+            assertEquals(
+                "rw-------",
+                java.nio.file.attribute.PosixFilePermissions
+                    .toString(
+                        java.nio.file.Files
+                            .getPosixFilePermissions(temp.toPath()),
+                    ),
+                "a file that can turn off the Chromium sandbox must not be group- or world-readable",
+            )
+        } finally {
+            try {
+                kotlinx.coroutines.runBlocking { ChromiumFlagsSettingsManager.updateSettings { before } }
+            } finally {
+                ChromiumFlagsSettingsManager.settingsFile = realFile
+                temp.delete()
+            }
+        }
+    }
+
     @Test
     fun `an unchanged settings object is not offered a restart`() {
         assertFalse(restartWouldChangeAnything(ChromiumFlagsSettingsManager.bootSettings))
     }
 
     @Test
-    fun `a blank environment variable does not claim ownership of a key`() {
-        // `FOO= boss` exports an empty string, which is non-null. A bare getenv let that suppress
-        // the user's setting and report it in the UI as an env override with no value to show.
-        // Asserted through envOverride because that is the single place both the publish
-        // partition and the UI notice now ask.
+    fun `envOverride reads the environment only, never system properties`() {
+        // Renamed to what it actually pins. It cannot test blank - a JVM cannot set its own
+        // environment variables - and the previous name promised coverage that now genuinely
+        // lives in ConfigLoaderTest, where the pure resolver takes envValue as a parameter.
+        // What IS worth pinning here: envOverride must not fall back to a system property, since
+        // those hold this process's own published boot settings and reading them would make the
+        // UI report the app's own setting as an environment override.
         System.setProperty("BOSS_TEST_UNUSED_KEY", "ignored")
         try {
-            // No env var of this name exists in a test JVM, so this pins the null-for-absent half;
-            // the blank-string half is the branch the takeIf adds and is covered by inspection of
-            // the same expression, since a test cannot set an env var in-process.
-            assertNull(ChromiumFlagsSettingsManager.envOverride("BOSS_TEST_UNUSED_KEY"))
+            assertNull(
+                ChromiumFlagsSettingsManager.envOverride("BOSS_TEST_UNUSED_KEY"),
+                "a system property must not be reported as an environment override",
+            )
         } finally {
             System.clearProperty("BOSS_TEST_UNUSED_KEY")
         }

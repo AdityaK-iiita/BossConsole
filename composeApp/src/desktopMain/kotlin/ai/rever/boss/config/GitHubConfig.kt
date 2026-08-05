@@ -54,11 +54,22 @@ object GitHubConfig {
     fun getAuthContext(): GitHubAuthContext {
         // Try explicit config sources first (fast: env var, system prop, local.properties)
         ConfigLoader.getConfig("GITHUB_TOKEN")?.let { token ->
+            // Blank-filtered to agree with ConfigLoader.resolve, which now treats a blank entry at
+            // any tier as unset. Without this the attribution lies whenever a variable is exported
+            // empty: the token comes from local.properties while this reports the environment.
             val source =
                 when {
-                    System.getenv("GITHUB_TOKEN") != null -> GitHubAuthContext.TokenSource.ENVIRONMENT_VARIABLE
-                    System.getProperty("GITHUB_TOKEN") != null -> GitHubAuthContext.TokenSource.SYSTEM_PROPERTY
-                    else -> GitHubAuthContext.TokenSource.LOCAL_PROPERTIES
+                    System.getenv("GITHUB_TOKEN")?.isNotBlank() == true -> {
+                        GitHubAuthContext.TokenSource.ENVIRONMENT_VARIABLE
+                    }
+
+                    System.getProperty("GITHUB_TOKEN")?.isNotBlank() == true -> {
+                        GitHubAuthContext.TokenSource.SYSTEM_PROPERTY
+                    }
+
+                    else -> {
+                        GitHubAuthContext.TokenSource.LOCAL_PROPERTIES
+                    }
                 }
             return GitHubAuthContext(
                 token = token,

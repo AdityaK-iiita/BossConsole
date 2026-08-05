@@ -168,15 +168,18 @@ object BossLogger {
      * - Defaults to INFO for production, DEBUG if "dev" mode detected
      */
     fun configureFromEnvironment() {
-        // Check environment variable first
-        val envLevel = System.getenv("BOSS_LOG_LEVEL")
+        // Check environment variable first. Blank counts as UNSET: `export BOSS_LOG_LEVEL=`
+        // yields an empty string, which is non-null, so it used to win here and resolve through
+        // LogLevel.fromString to whatever that makes of "" - shadowing both the system property
+        // and the dev-mode default with a level nobody chose. Same rule as ConfigLoader.resolve.
+        val envLevel = System.getenv("BOSS_LOG_LEVEL")?.takeIf { it.isNotBlank() }
         if (envLevel != null) {
             globalLevel = LogLevel.fromString(envLevel)
             return
         }
 
         // Check system property
-        val propLevel = System.getProperty("boss.log.level")
+        val propLevel = System.getProperty("boss.log.level")?.takeIf { it.isNotBlank() }
         if (propLevel != null) {
             globalLevel = LogLevel.fromString(propLevel)
             return
