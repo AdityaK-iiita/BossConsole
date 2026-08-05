@@ -89,4 +89,74 @@ class ConfigLoaderTest {
             System.clearProperty(liveKey)
         }
     }
+
+    /**
+     * A blank value at any tier must fall through, not shadow the tiers below it.
+     *
+     * `export BOSS_RENDERING_MODE=` yields an empty string, which is non-null and used to win the
+     * chain. Testable here and nowhere else: a JVM cannot set its own environment variables, so the
+     * pure resolver taking `envValue` as a parameter is the only place this branch is reachable -
+     * which is why the fix belongs here rather than at the call sites.
+     */
+    @Test
+    fun `a blank value falls through to the next source`() {
+        val local = Properties().apply { setProperty("K", "from-local") }
+        for (blank in listOf("", "   ", "\t")) {
+            assertEquals(
+                "from-sysprop",
+                ConfigLoader.resolve(
+                    "K",
+                    null,
+                    envValue = blank,
+                    sysPropValue = "from-sysprop",
+                    localProps = local,
+                    embeddedProps = Properties(),
+                ),
+                "blank env '$blank' must not shadow the system property",
+            )
+            assertEquals(
+                "from-local",
+                ConfigLoader.resolve(
+                    "K",
+                    null,
+                    envValue = blank,
+                    sysPropValue = blank,
+                    localProps = local,
+                    embeddedProps = Properties(),
+                ),
+                "blank env and sysprop '$blank' must both fall through",
+            )
+        }
+        // A blank properties entry is the same mistake with the same consequence.
+        val blankLocal = Properties().apply { setProperty("K", "") }
+        val embedded = Properties().apply { setProperty("K", "from-embedded") }
+        assertEquals(
+            "from-embedded",
+            ConfigLoader.resolve(
+                "K",
+                null,
+                envValue = null,
+                sysPropValue = null,
+                localProps = blankLocal,
+                embeddedProps = embedded,
+            ),
+        )
+    }
+
+    @Test
+    fun `an explicit blank default is still returned`() {
+        // Not blank-filtered, unlike the sources: a caller passing "" as its default has said so,
+        // where an exported variable merely happens to be empty.
+        assertEquals(
+            "",
+            ConfigLoader.resolve(
+                "K",
+                defaultValue = "",
+                envValue = null,
+                sysPropValue = null,
+                localProps = Properties(),
+                embeddedProps = Properties(),
+            ),
+        )
+    }
 }

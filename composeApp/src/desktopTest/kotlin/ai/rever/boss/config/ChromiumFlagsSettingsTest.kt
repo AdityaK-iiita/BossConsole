@@ -241,24 +241,24 @@ class ChromiumFlagsSettingsTest {
     }
 
     /**
-     * Two concurrent edits must both survive.
+     * A second edit builds on the first instead of overwriting it.
      *
-     * The point of taking a transform is that the callback receives the value AT APPLY TIME rather
-     * than the snapshot the caller composed against, so a second edit builds on the first instead
-     * of overwriting it. The production call sites all read their parameter
-     * (`save { current -> current.copy(...) }`), which is what makes that hold.
+     * Named for the property actually under test, after two failed attempts to dress it as a
+     * concurrency test. It never was one: `runBlocking` without a dispatcher runs its children on
+     * one event loop, and `updateAndGet` is atomic by construction, so threads add nothing. What
+     * the transform API changes is WHEN the caller reads - at apply time rather than at compose
+     * time - and that is fully observable sequentially.
      *
-     * Written twice before it was right: an earlier version awaited the two calls in order, so
-     * nothing raced and it would have passed against the very bug it exists for; the version after
-     * that had both transforms IGNORE their parameter and close over one snapshot, which is the
-     * bug itself rather than the fix, and it failed. Both mistakes are easy to make here, hence
-     * the note.
+     * The two earlier attempts are worth recording because both looked right: one awaited the
+     * calls in order and so would have passed against the very bug it existed for; the next made
+     * both transforms close over a captured snapshot and ignore their parameter, which is the bug
+     * rather than the fix, and failed. The parameter is the whole mechanism.
      *
-     * Redirects the manager's file: updateSettings persists on every call, and against the default
-     * path this test writes the developer's and CI's real ~/.boss/chromium-flags.json.
+     * Redirects the manager's file - `updateSettings` persists on every call, and against the
+     * default path this writes the developer's and CI's real ~/.boss/chromium-flags.json.
      */
     @Test
-    fun `concurrent edits to different fields both survive`() {
+    fun `a second edit composes onto the first rather than replacing it`() {
         val realFile = ChromiumFlagsSettingsManager.settingsFile
         val temp = java.io.File.createTempFile("chromium-flags-test", ".json")
         temp.deleteOnExit()
@@ -266,24 +266,24 @@ class ChromiumFlagsSettingsTest {
         val before = ChromiumFlagsSettingsManager.currentSettings.value
         try {
             kotlinx.coroutines.runBlocking {
-                val a =
-                    launch {
-                        ChromiumFlagsSettingsManager.updateSettings { it.copy(diskCacheMb = 111) }
-                    }
-                val b =
-                    launch {
-                        ChromiumFlagsSettingsManager.updateSettings { it.copy(rendererProcessLimit = 7) }
-                    }
-                a.join()
-                b.join()
+                // A UI control holds a value from collectAsState() that may already be one edit
+                // stale; reading the parameter is what makes the staleness harmless.
+                ChromiumFlagsSettingsManager.updateSettings { it.copy(diskCacheMb = 111) }
+                ChromiumFlagsSettingsManager.updateSettings { it.copy(rendererProcessLimit = 7) }
             }
             val after = ChromiumFlagsSettingsManager.currentSettings.value
             assertEquals(111, after.diskCacheMb, "the second edit discarded the first")
             assertEquals(7, after.rendererProcessLimit, "the first edit discarded the second")
         } finally {
-            kotlinx.coroutines.runBlocking { ChromiumFlagsSettingsManager.updateSettings { before } }
-            ChromiumFlagsSettingsManager.settingsFile = realFile
-            temp.delete()
+            // Nested, so a throwing restore cannot leave the manager pointed at a deleted temp
+            // file for the rest of the JVM. updateSettings swallows its IO errors today, which is
+            // exactly the kind of thing that stops being true later.
+            try {
+                kotlinx.coroutines.runBlocking { ChromiumFlagsSettingsManager.updateSettings { before } }
+            } finally {
+                ChromiumFlagsSettingsManager.settingsFile = realFile
+                temp.delete()
+            }
         }
     }
 

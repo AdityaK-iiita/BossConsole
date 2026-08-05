@@ -150,6 +150,10 @@ object ChromiumFlagsSettingsManager {
     // test exercising it against the default path writes the developer's (and CI's) real
     // ~/.boss/chromium-flags.json - a test that mutates the machine it runs on. Production never
     // reassigns this.
+    //
+    // Redirection covers WRITES ONLY. `bootSettings = loadSync()` runs at object initialisation,
+    // off the default path, before any test can reassign - so a test that redirects and then
+    // expects a load to follow will read the real file, not its temp one.
     internal var settingsFile = BossDirectories.resolve("chromium-flags.json")
     private val json =
         Json {
@@ -278,6 +282,10 @@ object ChromiumFlagsSettingsManager {
      * the same frame - which per-keystroke number inputs make ordinary - both derive from that one
      * snapshot and the second silently discards the first. `updateAndGet` closes it: each caller
      * reads the value at the moment it applies, not at the moment it composed.
+     *
+     * **[transform] must be side-effect free.** `updateAndGet` is a CAS loop, so under contention
+     * it re-invokes the lambda until the swap succeeds. Every call site today is a pure `copy`,
+     * which is fine; logging, toasting or writing from inside it would fire more than once.
      */
     suspend fun updateSettings(transform: (ChromiumFlagsSettings) -> ChromiumFlagsSettings) {
         // In-memory state first, on the CALLER's thread, so the UI and any subsequent read see
