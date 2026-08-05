@@ -279,7 +279,7 @@ object ChromiumFlagsSettingsManager {
      * be skipped. Guarded by [writeMutex]; seeded from [bootSettings] because that is what is on
      * disk when the process starts, so a no-op first save writes nothing.
      */
-    private var lastPersisted: ChromiumFlagsSettings? = null
+    private var lastPersisted: ChromiumFlagsSettings? = bootSettings
 
     /**
      * Apply [transform] to the current settings, atomically, and persist the result.

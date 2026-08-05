@@ -149,8 +149,15 @@ fun ChromiumFlagsSections() {
  * for a key an environment variable owns, where the next launch resolves to exactly what is
  * running now and the user loses their session for nothing.
  */
-internal fun restartWouldChangeAnything(settings: ChromiumFlagsSettings): Boolean {
-    val boot = ChromiumFlagsSettingsManager.bootSettings
+internal fun restartWouldChangeAnything(
+    settings: ChromiumFlagsSettings,
+    // Injectable purely so tests are hermetic. bootSettings is a val read from the DEFAULT path at
+    // object construction, before any test can redirect settingsFile, so a test comparing against
+    // it depends on whether the developer's machine happens to have saved a Chromium setting -
+    // including one written by the very bug an earlier commit here fixed. Production never passes
+    // this.
+    boot: ChromiumFlagsSettings = ChromiumFlagsSettingsManager.bootSettings,
+): Boolean {
     if (settings == boot) return false
     // Settings-only fields have no config key, so previewValue cannot speak for them; any change
     // to one is a real change. Published keys are compared as the next launch would resolve them.

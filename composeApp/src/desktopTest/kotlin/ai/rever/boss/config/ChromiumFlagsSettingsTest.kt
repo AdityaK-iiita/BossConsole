@@ -1,5 +1,6 @@
 package ai.rever.boss.config
 
+import ai.rever.boss.components.settings.sections.nextRenderingMode
 import ai.rever.boss.components.settings.sections.restartWouldChangeAnything
 import ai.rever.boss.plugin.browser.FluckEngine
 import kotlin.test.Test
@@ -207,7 +208,7 @@ class ChromiumFlagsSettingsTest {
             )
         for ((name, changed) in cases) {
             assertTrue(
-                restartWouldChangeAnything(changed),
+                restartWouldChangeAnything(changed, ChromiumFlagsSettings()),
                 "changing $name must offer a restart; is it missing from the copy() in ChromiumFlagsSection?",
             )
         }
@@ -229,15 +230,18 @@ class ChromiumFlagsSettingsTest {
      */
     @Test
     fun `re-enabling Graphite to its default value is not offered a restart`() {
-        val boot = ChromiumFlagsSettingsManager.bootSettings
-        // Assumes a default boot, as the test below it already does.
-        assertTrue(boot.isDefault, "this test reads the boot settings as unmodified")
-        // Toggling off then on stores an explicit value where boot held null: different strings,
-        // identical resolved behaviour, so no restart is owed.
-        val default = FluckEngine.resolveSkiaGraphite(null, JxBrowserConfig.renderingMode)
-        assertFalse(restartWouldChangeAnything(boot.copy(enableSkiaGraphite = default)))
+        // A synthetic boot, not the manager's: bootSettings is read from the real path at object
+        // construction, so asserting it is default is an assertion about the developer's home
+        // directory - and it would fail on any machine that has saved a Chromium setting.
+        val boot = ChromiumFlagsSettings()
+        // The NEXT-LAUNCH mode, which is what restartWouldChangeAnything resolves against.
+        // Substituting the live JxBrowserConfig.renderingMode here is the precise mistake
+        // ChromiumFlagsCommandLine documents as the cause of an earlier drift bug; the two agree
+        // only while boot is default, which is exactly when a test would stop noticing.
+        val default = FluckEngine.resolveSkiaGraphite(null, nextRenderingMode(boot))
+        assertFalse(restartWouldChangeAnything(boot.copy(enableSkiaGraphite = default), boot))
         // The opposite choice IS a real change and must still be offered one.
-        assertTrue(restartWouldChangeAnything(boot.copy(enableSkiaGraphite = !default)))
+        assertTrue(restartWouldChangeAnything(boot.copy(enableSkiaGraphite = !default), boot))
     }
 
     /**
@@ -286,7 +290,8 @@ class ChromiumFlagsSettingsTest {
 
     @Test
     fun `an unchanged settings object is not offered a restart`() {
-        assertFalse(restartWouldChangeAnything(ChromiumFlagsSettingsManager.bootSettings))
+        val boot = ChromiumFlagsSettings()
+        assertFalse(restartWouldChangeAnything(boot, boot))
     }
 
     @Test
