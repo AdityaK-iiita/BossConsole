@@ -7,6 +7,7 @@ import ai.rever.boss.plugin.api.PluginManifest
 import ai.rever.boss.plugin.loader.PluginManifestReader
 import ai.rever.boss.process.ManagedProcess
 import ai.rever.boss.process.ProcessConfig
+import ai.rever.boss.process.ProcessRegistry
 import ai.rever.boss.process.ProcessSpawner
 import ai.rever.boss.process.ProcessType
 import ai.rever.boss.process.RestartPolicy
@@ -126,7 +127,7 @@ class OutOfProcessPluginSpawnerImpl(
 
                 val config =
                     ProcessConfig(
-                        processId = "plugin-$pluginId",
+                        processId = processIdOf(pluginId),
                         processType = ProcessType.PLUGIN,
                         displayName = manifest.displayName,
                         mainClass = "ai.rever.boss.plugin.runtime.PluginProcessMainKt",
@@ -148,6 +149,8 @@ class OutOfProcessPluginSpawnerImpl(
                     runtimeClasspath,
                 )
 
+                // spawn() enters the child in the kernel registry, which is what the shutdown hook
+                // reaps. See ProcessSpawner's KDoc for why registration lives there.
                 val managedProcess = processSpawner.spawn(config)
                 managedProcesses[pluginId] = managedProcess
 
@@ -182,13 +185,31 @@ class OutOfProcessPluginSpawnerImpl(
                     manifest.pluginId,
                     e,
                 )
+                // A waitForReady timeout leaves a child that started but never registered -
+                // still alive, and no longer referenced by anything that would kill it. Reap
+                // it here rather than let a failed spawn become another orphan.
+                cleanupFailedSpawn(manifest.pluginId)
                 Result.failure(e)
             }
         }
     }
 
+    /**
+     * Tear down everything [spawn] may have created for a plugin whose startup failed.
+     */
+    private fun cleanupFailedSpawn(pluginId: String) {
+        runCatching { stateBridges.remove(pluginId)?.dispose() }
+        runCatching { pluginChannels.remove(pluginId)?.shutdownNow() }
+        // Kill first, drop the registry entry second: while the child is alive the registry entry
+        // is the only thing that would let a host exit reap it.
+        val process = managedProcesses.remove(pluginId)
+        runCatching { process?.destroyForcibly() }
+        process?.let { kernelRegistry()?.unregisterIfSame(processIdOf(pluginId), it) }
+    }
+
     override suspend fun terminate(pluginId: String): Result<Unit> =
         withContext(Dispatchers.IO) {
+            val process = managedProcesses.remove(pluginId)
             try {
                 // Dispose state bridge
                 stateBridges.remove(pluginId)?.dispose()
@@ -203,7 +224,6 @@ class OutOfProcessPluginSpawnerImpl(
                 }
 
                 // Destroy process
-                val process = managedProcesses.remove(pluginId)
                 if (process != null) {
                     logger.info("Terminating plugin process: id={}, pid={}", pluginId, process.pid)
                     process.destroy()
@@ -221,10 +241,15 @@ class OutOfProcessPluginSpawnerImpl(
                 Result.success(Unit)
             } catch (e: Exception) {
                 // Force kill if graceful shutdown failed
-                managedProcesses[pluginId]?.destroyForcibly()
-                managedProcesses.remove(pluginId)
+                process?.destroyForcibly()
                 logger.warn("Force-killed plugin process: id={}", pluginId, e)
                 Result.success(Unit)
+            } finally {
+                // Registry entry goes last, and only if it is still this process. "Registered
+                // implies reapable" has to hold for as long as the child is alive, so a host exit
+                // part-way through an unload still reaps it; and removing by id alone could evict
+                // a replacement that a concurrent respawn had already registered.
+                process?.let { kernelRegistry()?.unregisterIfSame(processIdOf(pluginId), it) }
             }
         }
 
@@ -280,8 +305,8 @@ class OutOfProcessPluginSpawnerImpl(
         timeoutMs: Long,
     ) {
         withTimeout(timeoutMs) {
-            val processId = "plugin-$pluginId"
-            val registry = KernelBootstrap.instance?.processRegistry
+            val processId = processIdOf(pluginId)
+            val registry = kernelRegistry()
 
             while (true) {
                 if (!process.isAlive) {
@@ -325,3 +350,25 @@ class OutOfProcessPluginSpawnerImpl(
             ?.absolutePath
     }
 }
+
+/**
+ * Kernel-side process id for a plugin. The kernel registry is keyed by it.
+ *
+ * **Not window-scoped.** This spawner is per-window but the registry is process-wide, so two windows
+ * running the same out-of-process plugin produce the same id and the second registration evicts the
+ * first while its child is still alive - leaving that child unreapable on host exit. `terminate()` is
+ * unaffected (each spawner keeps its own [managedProcesses]), so this only bites at exit.
+ * [ProcessRegistry.register] logs a warning when it evicts a live handle, which is how this shows up.
+ * Putting the window id in here is the real fix and needs the child side to agree, since the runtime
+ * reports state under the process id it was given.
+ */
+private fun processIdOf(pluginId: String): String = "plugin-$pluginId"
+
+/**
+ * The kernel's process registry, or null when the kernel is not up.
+ *
+ * Resolved per call rather than cached, for symmetry with the other lookups. In practice it cannot
+ * be null here: `DefaultPlugin` obtains this spawner's [ProcessSpawner] *from*
+ * `KernelBootstrap.instance`, so the instance and its registry both exist before this class does.
+ */
+private fun kernelRegistry(): ProcessRegistry? = KernelBootstrap.instance?.processRegistry

@@ -59,6 +59,21 @@ class ProcessMonitor(
 
     /**
      * Start the global monitor that watches for new/removed processes.
+     *
+     * [ProcessType.PLUGIN] is not health-supervised here. Plugin health is `PluginProcessMonitor`'s
+     * responsibility on the host side - note that it is written but **not yet wired up**, so today
+     * a crashed out-of-process plugin gets no restart and no in-process fallback from anywhere.
+     * Supervising plugins from here is still the wrong answer to that: a plugin the operator
+     * disables exits on purpose, which would read as a crash and come back through the kernel's
+     * respawn path. Plugins are registered regardless, because the registry is what the shutdown
+     * hook reaps.
+     *
+     * Dead plugins are instead *pruned*. Only a deliberate terminate unregisters one, so a plugin
+     * that died on its own would otherwise sit in the registry for the rest of the session, with
+     * [ProcessRegistry.getAllProcesses] handing out a dead handle and processCount over-reporting
+     * it as live. The removal is compare-and-remove ([ProcessRegistry.unregisterIfSame]) because
+     * `getAllProcesses` hands back a snapshot: a respawn between the snapshot and the removal would
+     * otherwise cost the live replacement its registry entry, orphaning it.
      */
     fun startGlobalMonitor(checkIntervalMs: Long = 2_000) {
         globalMonitorJob =
@@ -66,6 +81,12 @@ class ProcessMonitor(
                 while (isActive) {
                     // Check all registered processes
                     registry.getAllProcesses().forEach { process ->
+                        if (process.config.processType == ProcessType.PLUGIN) {
+                            if (!process.isAlive) {
+                                registry.unregisterIfSame(process.config.processId, process)
+                            }
+                            return@forEach
+                        }
                         if (!monitorJobs.containsKey(process.config.processId) ||
                             monitorJobs[process.config.processId]?.isActive != true
                         ) {
@@ -78,12 +99,24 @@ class ProcessMonitor(
     }
 
     /**
-     * Stop all monitoring.
+     * Stop all health supervision, leaving [scope] usable.
+     *
+     * This is what a caller that *passed in* its own scope wants: [stopAll] cancels that scope,
+     * which for `KernelBootstrap` means taking down its IPC event bridge and failure-handler
+     * collector as a side effect of stopping monitoring.
      */
-    fun stopAll() {
+    fun stopSupervision() {
         globalMonitorJob?.cancel()
         monitorJobs.values.forEach { it.cancel() }
         monitorJobs.clear()
+    }
+
+    /**
+     * Stop monitoring and cancel [scope]. Only for a caller that owns the scope - if you passed one
+     * in, use [stopSupervision] and cancel your own scope when you are ready.
+     */
+    fun stopAll() {
+        stopSupervision()
         scope.cancel()
     }
 

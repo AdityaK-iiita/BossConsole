@@ -27,7 +27,20 @@ class ProcessRegistry {
         process: ManagedProcess,
         manifest: ProcessManifest? = null,
     ) {
-        processes[id] = process
+        val replaced = processes.put(id, process)
+        // Replacing a *dead* handle is normal - that is what a respawn does. Replacing a live one
+        // means two callers picked the same process id, and the evicted child becomes invisible to
+        // the shutdown hook while still running, i.e. an orphan. The known way to reach this is two
+        // windows spawning the same out-of-process plugin, since `plugin-<id>` carries no window
+        // discriminator while the registry is process-wide.
+        if (replaced != null && replaced !== process && replaced.isAlive) {
+            logger.warn(
+                "Registered id={} replaced a LIVE handle (pid={} -> {}); the evicted child will not be reaped",
+                id,
+                replaced.pid,
+                process.pid,
+            )
+        }
         manifest?.let { manifests[id] = it }
         _processCount.value = processes.size
         logger.info("Registered process: id={}, type={}, pid={}", id, process.config.processType, process.pid)
@@ -39,6 +52,26 @@ class ProcessRegistry {
         restartCounts.remove(id)
         _processCount.value = processes.size
         logger.info("Unregistered process: id={}", id)
+    }
+
+    /**
+     * Remove [id], but only while it still maps to [process]. Returns whether it did.
+     *
+     * For callers acting on a process handle they read earlier: a plain [unregister] removes by id,
+     * so a respawn that re-registered the same id in between would have its live replacement
+     * dropped instead - and since this registry is what the shutdown hook reaps, dropping a live
+     * child is exactly how one becomes an orphan.
+     */
+    fun unregisterIfSame(
+        id: String,
+        process: ManagedProcess,
+    ): Boolean {
+        if (!processes.remove(id, process)) return false
+        manifests.remove(id)
+        restartCounts.remove(id)
+        _processCount.value = processes.size
+        logger.info("Unregistered process: id={}", id)
+        return true
     }
 
     fun getProcess(id: String): ManagedProcess? = processes[id]
