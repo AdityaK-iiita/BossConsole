@@ -21,12 +21,12 @@
     <ID>MaxLineLength:BinaryCompatibilityValidator.kt$BinaryCompatibilityValidator$errors.add("$sourceClass -&gt; ${ref.ownerClassName}.&lt;init&gt;(${ref.descriptor}): constructor not found")</ID>
     <ID>MaxLineLength:BinaryCompatibilityValidator.kt$BinaryCompatibilityValidator$internal</ID>
     <ID>MaxLineLength:BinaryCompatibilityValidator.kt$ConstantPoolParser$*</ID>
-    <ID>MaxLineLength:DynamicPluginLoader.kt$DynamicPluginLoaderImpl$"Plugin has no store signature — allowing for now, will be rejected once signature enforcement is enabled"</ID>
+    <ID>MaxLineLength:DynamicPluginLoader.kt$DynamicPluginLoaderImpl$"Plugin has no store signature - allowing for now, will be rejected once signature enforcement is enabled"</ID>
     <ID>MaxLineLength:DynamicPluginLoader.kt$DynamicPluginLoaderImpl$"Plugin requires API version ${manifest.apiVersion}, but current version is ${PluginManifestConstants.CURRENT_API_VERSION}"</ID>
     <ID>MaxLineLength:DynamicPluginLoader.kt$DynamicPluginLoaderImpl$"Plugin requires BOSS version $minBossVersion or later, but current version is $currentVersion"</ID>
     <ID>MaxLineLength:DynamicPluginLoader.kt$DynamicPluginLoaderImpl$"Plugin requires boss-plugin-api $minApiVersion or later, but installed API layer is $installedApiVersion"</ID>
-    <ID>MaxLineLength:DynamicPluginLoader.kt$DynamicPluginLoaderImpl$"Plugin signature verification failed — plugin will NOT load and will keep being rejected until it is reinstalled or removed"</ID>
-    <ID>MaxLineLength:PluginSignatureEnforcement.kt$PluginSignatureEnforcement$"Unrecognized plugin-signature enforcement flag value — flag IGNORED, falling back to default (enforcement ${if (DEFAULT) "ON" else "OFF"})"</ID>
+    <ID>MaxLineLength:DynamicPluginLoader.kt$DynamicPluginLoaderImpl$"Plugin signature verification failed - plugin will NOT load and will keep being rejected until it is reinstalled or removed"</ID>
+    <ID>MaxLineLength:PluginSignatureEnforcement.kt$PluginSignatureEnforcement$"Unrecognized plugin-signature enforcement flag value - flag IGNORED, falling back to default (enforcement ${if (DEFAULT) "ON" else "OFF"})"</ID>
     <ID>NestedBlockDepth:BinaryCompatibilityValidator.kt$BinaryCompatibilityValidator$fun validate( classLoader: ClassLoader, jarPath: String, ): ValidationResult</ID>
     <ID>NestedBlockDepth:DynamicPluginLoader.kt$DynamicPluginLoaderImpl$override suspend fun unloadPlugin( pluginId: String, waitForGC: Boolean, force: Boolean, ): Result&lt;Unit&gt;</ID>
     <ID>ReturnCount:BinaryCompatibilityValidator.kt$BinaryCompatibilityValidator$internal fun hasMethod( clazz: Class&lt;*&gt;, name: String, paramTypes: Array&lt;Class&lt;*&gt;&gt;, ): Boolean</ID>

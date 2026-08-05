@@ -97,7 +97,7 @@ if (protocAvailable) {
     // Unsupported platform (Windows ARM64): use pre-generated sources.
     // These are committed at src/main/generated/ and kept in sync
     // by running `./gradlew :boss-ipc:generateProto` on a supported platform.
-    logger.warn("protoc not available for $osName/$osArch — using pre-generated gRPC sources")
+    logger.warn("protoc not available for $osName/$osArch - using pre-generated gRPC sources")
     sourceSets {
         main {
             java.srcDir("src/main/generated")

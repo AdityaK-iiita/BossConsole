@@ -74,7 +74,7 @@ fun EditableKeymapSettings() {
                         context = ai.rever.boss.keymap.model.ShortcutContext.GLOBAL,
                         enabled = spec.defaultBinding != null,
                         category = "Plugins",
-                        description = spec.displayName + (spec.description.takeIf { it.isNotBlank() }?.let { " — $it" } ?: ""),
+                        description = spec.displayName + (spec.description.takeIf { it.isNotBlank() }?.let { " - $it" } ?: ""),
                     )
                 }
         }

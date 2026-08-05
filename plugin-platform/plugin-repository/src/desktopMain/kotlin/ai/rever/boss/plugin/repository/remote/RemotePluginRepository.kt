@@ -99,7 +99,7 @@ class RemotePluginRepository(
             }
             logger.warn(
                 LogCategory.NETWORK,
-                "Store plugin is unsigned — allowing for now, will be rejected once signature enforcement is enabled",
+                "Store plugin is unsigned - allowing for now, will be rejected once signature enforcement is enabled",
                 mapOf(
                     "pluginId" to pluginId,
                     "version" to versionLabel,
@@ -150,7 +150,7 @@ class RemotePluginRepository(
         if (!file.delete() && file.exists()) {
             logger.warn(
                 LogCategory.NETWORK,
-                "Failed to delete $context — leftover file remains",
+                "Failed to delete $context - leftover file remains",
                 mapOf(
                     "path" to file.absolutePath,
                 ),

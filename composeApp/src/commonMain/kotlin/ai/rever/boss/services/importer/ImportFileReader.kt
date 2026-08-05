@@ -85,7 +85,7 @@ object ImportFileReader {
         // password export, so the caller gets a single clear message.
         if (table == null || columns == null) {
             throw UnrecognisedImportFileException(
-                "That CSV doesn't look like a password export — no URL and password columns found.",
+                "That CSV doesn't look like a password export - no URL and password columns found.",
             )
         }
 

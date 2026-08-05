@@ -152,7 +152,7 @@ object PluginCrashRegistry {
         } else {
             logger.warn(
                 LogCategory.UI,
-                "Cannot close crashed tab — no active tab registered",
+                "Cannot close crashed tab - no active tab registered",
                 mapOf(
                     "pluginId" to pluginId,
                 ),

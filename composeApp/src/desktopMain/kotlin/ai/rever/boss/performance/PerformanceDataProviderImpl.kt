@@ -313,7 +313,7 @@ class PerformanceDataProviderImpl : PerformanceDataProvider {
             val getInstance = companionCls.getMethod("getInstance")
             val kernel = getInstance.invoke(companion)
             if (kernel == null) {
-                logger.debug("KernelBootstrap.getInstance() returned null — not in KERNEL mode")
+                logger.debug("KernelBootstrap.getInstance() returned null - not in KERNEL mode")
                 return emptyList()
             }
 

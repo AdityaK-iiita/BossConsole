@@ -1,8 +1,8 @@
-# BOSS Design System — "Operator's Console"
+# BOSS Design System - "Operator's Console"
 
 One visual language shared by **BossConsole** (the host) and **BossTerm** (the
 terminal surface). This is the canonical spec; the [**visual styleguide**](design-system.html)
-(a self-contained HTML reference — open it in a browser) is the companion reference,
+(a self-contained HTML reference - open it in a browser) is the companion reference,
 and the tokens themselves ship as code (see [Where it lives](#where-it-lives)).
 
 ---
@@ -13,13 +13,13 @@ Three rules drive every token. When a choice is unclear, return here.
 
 1. **The cell is the unit.** The terminal character cell (~8.4 × 17 px at 14sp
    MesloLGS) is the grid the whole UI snaps to. Chrome borrows the terminal's
-   discipline — 8.dp base spacing, hairline borders, high density — not the
+   discipline - 8.dp base spacing, hairline borders, high density - not the
    other way around.
 2. **Exactly one signal.** One color means *live / active / now*: the primary
    action, the focused field, the selected tab, the cursor. Nothing else competes
    for it. A second color, `data`, carries links and data. *Which* hues those are
-   is the active theme's business — electric blue under **Blueprint** (the
-   default), amber and cyan under **Operator** — but a theme never gets three.
+   is the active theme's business - electric blue under **Blueprint** (the
+   default), amber and cyan under **Operator** - but a theme never gets three.
 3. **Quiet everywhere else.** Surfaces separate by tint, not shadow. Borders are
    hairlines. Density is high and calm so your output is the loudest thing on
    screen.
@@ -44,7 +44,7 @@ a theme is one `BossAppTheme` plus one list entry.
 
 | Theme | id | | Identity |
 |-------|----|-|----------|
-| **Blueprint** | `blueprint` | dark | Electric blue on ink — matches [bossconsole.ai](https://bossconsole.ai). **The default.** |
+| **Blueprint** | `blueprint` | dark | Electric blue on ink - matches [bossconsole.ai](https://bossconsole.ai). **The default.** |
 | **Blueprint Light** | `blueprint-light` | light | The same blue, re-grounded on the site's `--paper` |
 | **Operator** | `operator` | dark | The original amber-on-ink identity |
 | **Daylight** | `daylight` | light | Clean light theme |
@@ -54,7 +54,7 @@ The choice is explicit and persisted (`~/.boss/app-theme-settings.json`); the OS
 theme setting is never consulted.
 
 **Who a default change re-skins.** `AppThemeSettingsManager` writes that file only
-from `select()` — `ensureInitialized()` resolves the id without saving. So a file
+from `select()` - `ensureInitialized()` resolves the id without saving. So a file
 that omits `appThemeId`, *or no file at all*, means "whatever the default is", and
 **anyone who never explicitly picked a theme moves to Blueprint on update**. Only an
 explicit selection survives. That is intended here (it is the brand alignment this
@@ -64,7 +64,7 @@ users, `ensureInitialized()` has to persist the resolved id once.
 That property is why the four mirrors below have to agree on the default, not just
 on the palettes.
 
-#### Blueprint — the default palette
+#### Blueprint - the default palette
 
 Lifted from bossconsole.ai's stylesheet, or composited from it (a site alpha over
 the site's own floor). The site's hero mocks the app itself (`.console-frame` /
@@ -86,14 +86,14 @@ site's rather than an interpretation of it.
 | `signalWash` | `#0A1A3C` | `#DCE7FF` | `.console-sidebar .selected` / `--blue-soft` |
 | `signalText` | `#88A9FF` | `#0F5BFF` | the site's link-blue family (see below) |
 | `data` | `#88A9FF` | `#0C3FBF` | `.audit-line svg` `#8af` |
-| `ok` | `#2FD98A` | `#1E9E63` | — |
-| `warn` | `#F0B429` | `#A8710A` | — |
-| `alert` | `#FF5D5D` | `#D33B4A` | — |
+| `ok` | `#2FD98A` | `#1E9E63` | - |
+| `warn` | `#F0B429` | `#A8710A` | - |
+| `alert` | `#FF5D5D` | `#D33B4A` | - |
 | `onSignal` | `#FFFFFF` | `#FFFFFF` | `.button-light { background: --blue; color: #fff }` |
-| `onData` | `#05070B` | `#FFFFFF` | — |
+| `onData` | `#05070B` | `#FFFFFF` | - |
 
 **`signal` is the fill; `signalText` is the glyph.** `--blue` sits at 3.8:1 against
-Blueprint's `ink` — fine for the WCAG 3:1 UI-component floor (indicators, borders,
+Blueprint's `ink` - fine for the WCAG 3:1 UI-component floor (indicators, borders,
 focus rings, fills), below the 4.5:1 text floor. A *saturated* accent cannot be
 both: dark enough to carry white `onSignal` content as a fill, and light enough to
 read as a glyph on `ink`. Amber can do both, which is why the single-`signal`
@@ -102,27 +102,27 @@ assumption held until Blueprint.
 So: **`signal` on a rect, `signalText` on a `Text` or `Icon`.** In Operator and
 Clean the two are the same value; in Blueprint `signalText` is the site's own
 link-blue (`#88A9FF`, 8.1:1), and in Daylight it is a darker amber (`#95580A`,
-5.3:1) — which also retires a defect that predated Blueprint, where Daylight's
+5.3:1) - which also retires a defect that predated Blueprint, where Daylight's
 `signal` was 2.6:1 as text on its own near-white floor.
 
 `BossThemesRegistryTest` holds every theme to both floors, on `ink`, `panel` **and**
-`raised` — the dark themes' `panel`/`raised` are lighter than `ink`, so an ink-only
+`raised` - the dark themes' `panel`/`raised` are lighter than `ink`, so an ink-only
 check reports better ratios than the surfaces the chrome actually paints on. It
 also fails if `signalText` aliases `signal` in a theme where `signal` does not
 already clear 4.5:1, so the token cannot quietly become decorative.
 
-If a control reads as too quiet, thicken the indicator or lift the wash — do not
+If a control reads as too quiet, thicken the indicator or lift the wash - do not
 brighten `signal`.
 
-### Surface & ink — Operator
+### Surface & ink - Operator
 
-These are the raw `BossPalette` constants — the Operator values, kept as the
+These are the raw `BossPalette` constants - the Operator values, kept as the
 reference definition of each slot's *role*. Read them for what a slot is for, not
 for what color the app is currently painted; use `BossTheme.colors.*` for that.
 
 | Token | Hex | Role |
 |-------|-----|------|
-| `ink` | `#0E1217` | Base floor — host **and** terminal |
+| `ink` | `#0E1217` | Base floor - host **and** terminal |
 | `panel` | `#161D26` | Chrome / card / sidebar |
 | `raised` | `#1E2731` | Menus, popovers, hover |
 | `line` | `#2A3744` | Hairline border / divider |
@@ -131,22 +131,22 @@ for what color the app is currently painted; use `BossTheme.colors.*` for that.
 | `mist` | `#8593A3` | Secondary text |
 | `muted` | `#5C6977` | Tertiary / disabled |
 
-### Signals — Operator
+### Signals - Operator
 
 | Token | Hex | Role |
 |-------|-----|------|
-| `signal` | `#F2A93B` | Amber — live / active / primary action |
+| `signal` | `#F2A93B` | Amber - live / active / primary action |
 | `signalDim` | `#C98A2E` | Pressed / variant |
 | `signalWash` | `#2A2113` | Faint amber hover fill on `ink` |
 | `signalText` | `#F2A93B` | Signal-colored **glyphs** (= `signal` here; amber clears 4.5:1) |
-| `data` | `#56C7E0` | Cyan — links / info / data |
+| `data` | `#56C7E0` | Cyan - links / info / data |
 | `ok` | `#6FD08C` | Success / clean exit |
 | `warn` | `#F0B429` | Warning |
 | `alert` | `#F2685F` | Error / destructive |
 | `onSignal` | `#1A1206` | Ink that sits on an amber fill |
 | `onData` | `#06222A` | Ink that sits on a cyan fill |
 
-### Terminal — "BOSS Operator" theme
+### Terminal - "BOSS Operator" theme
 
 | Property | Hex |
 |----------|-----|
@@ -175,17 +175,17 @@ for what color the app is currently painted; use `BossTheme.colors.*` for that.
 
 ## 3. Typography
 
-Monospace is the brand voice — display, eyebrows, labels, every number and path.
+Monospace is the brand voice - display, eyebrows, labels, every number and path.
 A humanist sans carries running UI copy where reading speed matters. The app
 bundles **MesloLGS Nerd Font** for the mono role.
 
 | Style | Family | Size | Weight | Tracking | Use |
 |-------|--------|------|--------|----------|-----|
 | `displayLarge` | mono | 28 | SemiBold | −0.5 | Hero headings |
-| `displaySmall` | mono | 22 | SemiBold | — | Section headings |
-| `title` | sans | 16 | SemiBold | — | Panel / dialog titles |
-| `body` | sans | 13 | Normal | — | Running UI copy |
-| `data` | mono | 14 | Normal | — | Terminal, code, paths, metrics |
+| `displaySmall` | mono | 22 | SemiBold | - | Section headings |
+| `title` | sans | 16 | SemiBold | - | Panel / dialog titles |
+| `body` | sans | 13 | Normal | - | Running UI copy |
+| `data` | mono | 14 | Normal | - | Terminal, code, paths, metrics |
 | `label` | mono | 11 | SemiBold | +1.5, UPPER | Eyebrows / section labels |
 | `micro` | mono | 10 | Medium | +1.0, UPPER | Captions / status |
 
@@ -193,17 +193,17 @@ bundles **MesloLGS Nerd Font** for the mono role.
 
 ## 4. Space, shape, motion
 
-**Spacing** — 8.dp base, 4.dp half-step:
+**Spacing** - 8.dp base, 4.dp half-step:
 `hairline 2` · `xs 4` · `sm 8` · `md 12` · `lg 16` · `xl 24` · `xxl 32`.
 `cellWidth 8.4` / `cellHeight 17` mirror the terminal char cell.
 
 **Radius** (small radii read as a precision instrument):
 `grid 0` (terminal) · `input 3` · `button 5` · `card 5` · `dialog 8`.
 
-**Elevation** — tint first; shadow only for true popovers:
+**Elevation** - tint first; shadow only for true popovers:
 `floor` (ink) · `panel` (tint + 1px line) · `popover 8.dp` (menus / dialogs).
 
-**Motion** — `instant 0ms` (cursor, key echo) · `fast 90ms` (hover, press) ·
+**Motion** - `instant 0ms` (cursor, key echo) · `fast 90ms` (hover, press) ·
 `base 160ms` (menus, panels) · `cursorBlink 530ms`. Easing
 `cubic-bezier(0.2, 0, 0, 1)`. Honor `prefers-reduced-motion` /
 the OS reduce-motion setting: the cursor stops blinking, panels cut instead of slide.
@@ -214,15 +214,15 @@ the OS reduce-motion setting: the cursor stops blinking, panels cut instead of s
 
 The active item always wears amber. A few canonical specs:
 
-- **Tab** — selected tab shows a 4.dp bottom marker: `signal` when focused,
+- **Tab** - selected tab shows a 4.dp bottom marker: `signal` when focused,
   `line` when not (the system's **signature** element).
-- **Button** — primary = `signal` fill + `onSignal` text, used once per view;
+- **Button** - primary = `signal` fill + `onSignal` text, used once per view;
   secondary = transparent + `lineStrong` border; ghost = transparent;
   destructive = `alert`, outlined until hover then committed.
-- **Text field** — `ink` fill, `lineStrong` border, focus ring `signal`.
-- **Context menu** — `raised` surface, `lineStrong` border, hover = `signalWash`.
-- **Dialog** — `panel`, `dialog` radius, 24.dp padding, popover elevation.
-- **Scrollbar** — thumb `#ffffff30` over a 12%-white track; search hits = amber
+- **Text field** - `ink` fill, `lineStrong` border, focus ring `signal`.
+- **Context menu** - `raised` surface, `lineStrong` border, hover = `signalWash`.
+- **Dialog** - `panel`, `dialog` radius, 24.dp padding, popover elevation.
+- **Scrollbar** - thumb `#ffffff30` over a 12%-white track; search hits = amber
   markers; command-block status = `ok` / `alert` gutter markers.
 
 ---
@@ -230,7 +230,7 @@ The active item always wears amber. A few canonical specs:
 ## 6. Consuming the tokens (Compose)
 
 Inside a `BossTheme { … }` scope, read tokens via the `BossTheme` accessor
-object — the same pattern as `MaterialTheme.colors`:
+object - the same pattern as `MaterialTheme.colors`:
 
 ```kotlin
 import ai.rever.boss.plugin.ui.BossTheme
@@ -247,7 +247,7 @@ fun Example() {
 }
 ```
 
-### Worked example — `BossTabButton`
+### Worked example - `BossTabButton`
 
 The selected-tab marker is the design system's signature, so it's the reference
 migration (`composeApp/.../components/buttons/BossTabButton.kt`):
@@ -280,13 +280,13 @@ The mono brand voice is **wired to the bundled MesloLGS Nerd Font**: the host's
 `bossTypography(mono = …)`, so all four theme roots (`BossApp`, `main`,
 `AuthScreenContainer`, `SettingsWindow`) render `BossTheme.type.*` in the real
 face. Outside the host (e.g. plugins) the type scale falls back to the platform
-generic monospace. The sans role is the platform default — bundle Inter and pass
+generic monospace. The sans role is the platform default - bundle Inter and pass
 `bossTypography(mono = …, sans = …)` to brand it further.
 
 ### Migration note
 
 `BossColors` (the legacy flat object and its top-level aliases like
-`BossDarkAccent`) now **delegate to `BossPalette`** with names unchanged — so
+`BossDarkAccent`) now **delegate to `BossPalette`** with names unchanged - so
 existing components re-skin automatically with zero edits. New and touched code
 should prefer the semantic `BossTheme.colors.*` accessors. Spacing, radius,
 elevation, and motion tokens are consumed by the migrated components above;
@@ -309,7 +309,7 @@ raw-palette names `chalk` / `mist` / `muted`.
 | composeApp re-exports + MesloLGS font injection | `composeApp/.../components/misc/BossTheme.kt` |
 | Terminal theme + ANSI palette | BossTerm `…/settings/theme/BuiltinThemes.kt`, `BuiltinColorPalettes.kt` (`boss-blueprint` is the default, `boss-operator` alongside it) |
 | Terminal defaults | BossTerm `…/settings/TerminalSettings.kt` (`activeThemeId = "boss-blueprint"`, and the fg/bg/selection defaults must match that theme) |
-| Terminal chrome tokens | BossTerm `…/settings/theme/UiTheme.kt` (`EXACT_TOKENS` — both BOSS identities skip derivation) |
+| Terminal chrome tokens | BossTerm `…/settings/theme/UiTheme.kt` (`EXACT_TOKENS` - both BOSS identities skip derivation) |
 
 **Defaults:** the host default is `blueprint` (`BossThemes.DEFAULT_ID`) and the
 BossTerm default is `boss-blueprint` (`DEFAULT_THEME_ID` /
@@ -327,6 +327,6 @@ have to agree:
 | Rust host | `BossConsoleRust/crates/boss-core/src/theme.rs` |
 
 The Rust mirror reads and writes **the same** `~/.boss/app-theme-settings.json`,
-and a file that omits `appThemeId` means "the default" — so its `ThemeId::DEFAULT`
+and a file that omits `appThemeId` means "the default" - so its `ThemeId::DEFAULT`
 must move whenever `BossThemes.DEFAULT_ID` does, or the two hosts render different
 themes from identical settings.

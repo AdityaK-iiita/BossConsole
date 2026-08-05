@@ -70,7 +70,7 @@ val fetchApiPluginJar =
             val exit = process.waitFor()
             check(exit == 0 && target.isFile && target.length() > 0) {
                 "Failed to download $url (curl exit $exit): $output\n" +
-                    "Is v$version released? Distribution is store/GitHub-releases only — no Maven fallback. " +
+                    "Is v$version released? Distribution is store/GitHub-releases only - no Maven fallback. " +
                     "For local dev, build the jar in a sibling boss_plugins/boss-plugin-api checkout."
             }
         }

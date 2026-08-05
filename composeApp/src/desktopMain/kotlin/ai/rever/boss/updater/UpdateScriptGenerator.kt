@@ -199,7 +199,7 @@ object UpdateScriptGenerator {
 
             # Last line of defence before an irreversible rm -rf: refuse to install
             # a build this Mac cannot launch. Nothing upstream gates on OS version —
-            # the release manifest carries no minimum — so without this an update
+            # the release manifest carries no minimum - so without this an update
             # that raises the floor deletes the working app, copies one Launch
             # Services will refuse to open, and leaves no in-app way back.
             #
@@ -209,7 +209,7 @@ object UpdateScriptGenerator {
             # proceed: a plist that can't be parsed must not block every update.
             # Gate on PlistBuddy's exit status AND the shape of what it printed.
             # A missing key makes it print `Print: Entry, ":LSMinimumSystemVersion",
-            # Does Not Exist` to STDOUT and exit 1 — so `2>/dev/null` does not
+            # Does Not Exist` to STDOUT and exit 1 - so `2>/dev/null` does not
             # suppress it and a bare -n test would pass that sentence to sort -V,
             # blocking the update instead of failing open. The pattern match also
             # keeps DMG-controlled text out of the osascript literal below.
@@ -232,7 +232,7 @@ object UpdateScriptGenerator {
             if [ -n "${'$'}MIN_OS" ]; then
                 if [ "${'$'}(printf '%s\n%s\n' "${'$'}MIN_OS" "${'$'}CUR_OS" | sort -V | head -n 1)" != "${'$'}MIN_OS" ]; then
                     echo "This BOSS release requires macOS ${'$'}MIN_OS or later; this Mac runs ${'$'}CUR_OS."
-                    echo "Update cancelled — your current installation has been left untouched."
+                    echo "Update cancelled - your current installation has been left untouched."
                     hdiutil detach "${'$'}VOLUME" -quiet
                     # BOSS has already quit by the time this script runs, and these
                     # echoes only reach the updater log. Aborting silently would look

@@ -369,7 +369,7 @@ Deno.test("only api-key CREATION is gated on api_key.create", () => {
   assert(callIdx < scopesIdx, "the gate must be in the create handler (the one validating scopes)")
   assertFalse(
     src.slice(callIdx, scopesIdx).includes("getUserFromToken("),
-    "another handler starts between the gate and scope validation — the gate is in the wrong one",
+    "another handler starts between the gate and scope validation - the gate is in the wrong one",
   )
 })
 

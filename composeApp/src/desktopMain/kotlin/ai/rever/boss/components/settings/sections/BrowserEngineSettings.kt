@@ -81,7 +81,7 @@ internal fun StagedInstallOutcome.message(defaultVersion: String): String =
             if (appliesOnRestart) {
                 "Engine $version is staged. It is not in use until BOSS restarts."
             } else {
-                "Engine $version is staged, but this build requires $defaultVersion — " +
+                "Engine $version is staged, but this build requires $defaultVersion - " +
                     "it will be replaced on the next launch."
             }
         }
@@ -193,7 +193,7 @@ fun BrowserEngineSettings() {
             description =
                 "The engine version must match the app's JxBrowser version " +
                     "($defaultVersion). Pinning a different version is intended for recovery " +
-                    "and testing only — the browser may fail to start with a mismatched engine. " +
+                    "and testing only - the browser may fail to start with a mismatched engine. " +
                     "Nothing changes until you click Install.",
         ) {
             // The current selection is always appended if the listing doesn't contain
@@ -229,7 +229,7 @@ fun BrowserEngineSettings() {
                         }
 
                         versionListing?.failedSources?.isNotEmpty() == true -> {
-                            "Published engine versions — list may be incomplete " +
+                            "Published engine versions - list may be incomplete " +
                                 "(${versionListing?.failedSources?.joinToString()} unavailable)"
                         }
 
@@ -335,7 +335,7 @@ fun BrowserEngineSettings() {
                     // promotePendingInstall swaps it in at startup, so a missed note
                     // reads like the install failed and invites a second one.
                     SettingsButtonRow(
-                        label = "Staged — restart to apply",
+                        label = "Staged - restart to apply",
                         buttonText = "Restart BOSS",
                         // Confirmed, not immediate. This quits the app ~500ms later
                         // with no undo, and the repo already handles that this way

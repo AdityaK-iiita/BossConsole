@@ -88,7 +88,7 @@ class RenderRecoverySeamTest {
 
         assertTrue(
             escalatedAt != null,
-            "a permanently broken scene never escalated — the app would spin forever, " +
+            "a permanently broken scene never escalated - the app would spin forever, " +
                 "which is the failure RenderCrashPolicy exists to prevent",
         )
     }

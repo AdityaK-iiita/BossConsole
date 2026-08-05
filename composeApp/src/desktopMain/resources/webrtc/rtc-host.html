@@ -78,7 +78,7 @@
   };
 
   // Capture the shared tab's pixels (host auto-selects it in StartCaptureSessionCallback)
-  // and push them onto the pre-negotiated video transceiver — no renegotiation.
+  // and push them onto the pre-negotiated video transceiver - no renegotiation.
   window.__bossRtcStartVideo = function () {
     if (!pc || !navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) { return 'unsupported'; }
     navigator.mediaDevices.getDisplayMedia({ video: true, audio: false }).then(function (stream) {
@@ -92,7 +92,7 @@
         try { B().videoState('replaceTrack done'); } catch (_) {}
       } else {
         pc.addTrack(track, stream);
-        try { B().videoState('addTrack fallback (no videoTx — needs renegotiation)'); } catch (_) {}
+        try { B().videoState('addTrack fallback (no videoTx - needs renegotiation)'); } catch (_) {}
       }
     }).catch(function (e) { try { B().videoError(String(e && e.name || e)); } catch (_) {} });
     return 'ok';

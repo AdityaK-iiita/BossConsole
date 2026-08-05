@@ -95,7 +95,7 @@ enum class SettingsSection(
     ),
     THEME(
         displayName = "Theme",
-        description = "App color theme — " + BossThemes.all.joinToString { it.name },
+        description = "App color theme - " + BossThemes.all.joinToString { it.name },
         icon = Icons.Outlined.Palette,
     ),
     WINDOW_APPEARANCE(

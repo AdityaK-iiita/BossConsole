@@ -27,7 +27,7 @@ object JxBrowserConfig {
             ?: run {
                 logger.error(
                     LogCategory.BROWSER,
-                    "JxBrowser license key not configured — set JXBROWSER_LICENSE_KEY " +
+                    "JxBrowser license key not configured - set JXBROWSER_LICENSE_KEY " +
                         "(env var) or jxbrowser.license.key in local.properties. " +
                         "Browser features will be unavailable.",
                 )

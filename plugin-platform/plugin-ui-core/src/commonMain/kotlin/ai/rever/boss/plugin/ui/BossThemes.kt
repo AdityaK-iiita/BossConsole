@@ -189,7 +189,7 @@ object BossThemes {
         BossAppTheme(
             id = "blueprint",
             name = "Blueprint",
-            blurb = "Electric blue on ink — the bossconsole.ai look",
+            blurb = "Electric blue on ink - the bossconsole.ai look",
             isLight = false,
             colors = BossBlueprintColorScheme,
             material = darkMaterial(BossBlueprintColorScheme),
@@ -198,7 +198,7 @@ object BossThemes {
         BossAppTheme(
             id = "blueprint-light",
             name = "Blueprint Light",
-            blurb = "Paper and blue — the light half of the site",
+            blurb = "Paper and blue - the light half of the site",
             isLight = true,
             colors = BossBlueprintLightColorScheme,
             material = lightMaterial(BossBlueprintLightColorScheme),
@@ -207,7 +207,7 @@ object BossThemes {
         BossAppTheme(
             id = "operator",
             name = "Operator",
-            blurb = "Amber signal on ink — the original identity",
+            blurb = "Amber signal on ink - the original identity",
             isLight = false,
             colors = BossDarkColorScheme,
             material = darkMaterial(BossDarkColorScheme),

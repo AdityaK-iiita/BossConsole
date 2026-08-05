@@ -58,7 +58,7 @@ internal fun osFloorMessage(
         !current.isNullOrBlank() &&
         compareVersions(current, required) < 0
     ) {
-        "This update requires macOS $required or later — this Mac runs macOS $current. " +
+        "This update requires macOS $required or later - this Mac runs macOS $current. " +
             "Your current version of BOSS has been kept."
     } else {
         null

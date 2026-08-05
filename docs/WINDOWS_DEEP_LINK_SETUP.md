@@ -22,7 +22,7 @@ Registration is done by the **running app**, not by the MSI. That is a deliberat
 limitation, not a preference: the Compose Desktop Gradle plugin exposes no WiX
 authoring hook (no `--resource-dir` override, no registry DSL), so the installer
 cannot own the `boss:` keys without hand-maintaining a full jpackage `main.wxs`
-replacement — which is tied to the JDK version that built it and cannot be verified
+replacement - which is tied to the JDK version that built it and cannot be verified
 outside a Windows + WiX runner.
 
 Consequences and the mitigations in place:
@@ -31,8 +31,8 @@ Consequences and the mitigations in place:
 |---|---|
 | Fresh install, first launch | App registers `HKCU\Software\Classes\boss` (`WindowsProtocolHandler.registerProtocol`) |
 | Moved/reinstalled to a new path | Startup re-registers when the stored command points at a missing exe (self-heal) |
-| Another BOSS install still present and valid | Left alone — the app never steals a working registration |
-| Command present but unreadable here (`REG_EXPAND_SZ`, unquoted, or the registry read failed) | Never *deleted* just because this code cannot read it — but see the caveat below |
+| Another BOSS install still present and valid | Left alone - the app never steals a working registration |
+| Command present but unreadable here (`REG_EXPAND_SZ`, unquoted, or the registry read failed) | Never *deleted* just because this code cannot read it - but see the caveat below |
 | Root key present with no `shell\open\command` value (`reg query` reports it absent) | A partial registration this app produced, and removed |
 | **Uninstalled** | The key survives and points at a deleted exe unless cleaned up (below) |
 
@@ -47,7 +47,7 @@ Consequences and the mitigations in place:
 ```powershell
 # Preferred: let the app remove its own registration.
 # BOSS.exe is a GUI-subsystem binary (windows { console = false }), so a plain
-# invocation returns immediately and $LASTEXITCODE is NOT the app's exit code —
+# invocation returns immediately and $LASTEXITCODE is NOT the app's exit code -
 # use the waiting form to observe the result:
 (Start-Process -FilePath "$env:LOCALAPPDATA\BOSS\BOSS.exe" `
     -ArgumentList '--unregister-protocol' -Wait -PassThru).ExitCode
@@ -60,10 +60,10 @@ Exit codes: `0` nothing left to clean (removed, or nothing was registered, or no
 Windows host), `1` the registration was deliberately left in place (another live install,
 or a command that could not be parsed), `2` the `reg delete` itself failed. An MSI custom
 action waits for the process, so the contract is observable where it matters. There is no
-console output — the BossLogger log file is the only human-readable signal.
+console output - the BossLogger log file is the only human-readable signal.
 
 Run this **before** uninstalling, or wire it as an uninstall action when installer-owned
-registration lands (tracked as follow-up work to issue #38 — the Rust host is expected
+registration lands (tracked as follow-up work to issue #38 - the Rust host is expected
 to register the protocol from its installer instead).
 
 ## Email Verification Flow

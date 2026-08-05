@@ -72,7 +72,7 @@ class ContextMenuServiceBridgeTest {
 
         assertTrue(
             instanceFields.isEmpty(),
-            "The bridge must stay stateless — nothing in the host reads these registrations. " +
+            "The bridge must stay stateless - nothing in the host reads these registrations. " +
                 "Found instance fields: ${instanceFields.map { it.name }}",
         )
     }

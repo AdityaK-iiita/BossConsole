@@ -352,7 +352,7 @@ class PluginClassLoader(
                 ClassNotFoundException(
                     "Plugin classloader for '$pluginId' is $stateAtRefusal; refusing to resolve " +
                         "'$name' against the host classloader. Something still referenced the " +
-                        "plugin after it was unloaded — that reference is the bug.",
+                        "plugin after it was unloaded - that reference is the bug.",
                     notInPluginJar,
                 )
             // WARN, not ERROR: refusing is the correct outcome and teardown

@@ -69,7 +69,7 @@ class RenderRecoveryToaster(
         fun messageFor(outcome: PluginRenderRecovery.Outcome): String =
             when (outcome) {
                 is PluginRenderRecovery.Outcome.Quarantined -> {
-                    "Paused ${outcome.plugins.joinToString()} — it kept failing to render. " +
+                    "Paused ${outcome.plugins.joinToString()} - it kept failing to render. " +
                         "Restart it from the panel menu."
                 }
 

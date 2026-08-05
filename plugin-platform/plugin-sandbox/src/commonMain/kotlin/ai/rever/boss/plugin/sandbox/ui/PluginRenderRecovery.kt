@@ -195,7 +195,7 @@ object PluginRenderRecovery {
         // not ours to quarantine. The window handler still contains it.
         logger.warn(
             LogCategory.UI,
-            "Unattributed render exception with no plugin panel mounted — not a plugin fault",
+            "Unattributed render exception with no plugin panel mounted - not a plugin fault",
             mapOf("errorType" to error::class.simpleName.orEmpty()),
         )
         return Outcome.NotPluginRelated
@@ -210,7 +210,7 @@ object PluginRenderRecovery {
         cleared.clear()
         logger.warn(
             LogCategory.UI,
-            "Unattributed render exception — rebuilding plugin panels",
+            "Unattributed render exception - rebuilding plugin panels",
             mapOf(
                 "plugins" to affected.joinToString(),
                 "errorType" to error::class.simpleName.orEmpty(),
@@ -244,7 +244,7 @@ object PluginRenderRecovery {
         suspect?.let { wronglyHeld ->
             logger.info(
                 LogCategory.UI,
-                "Fault persisted while suspected — releasing and trying the next plugin",
+                "Fault persisted while suspected - releasing and trying the next plugin",
                 mapOf("released" to wronglyHeld),
             )
             cleared.add(wronglyHeld)
@@ -262,7 +262,7 @@ object PluginRenderRecovery {
             // explains it. Stop churning: the window handler keeps containing it.
             logger.error(
                 LogCategory.UI,
-                "Render fault persists with every mounted plugin ruled out — leaving it contained",
+                "Render fault persists with every mounted plugin ruled out - leaving it contained",
                 mapOf("tried" to cleared.joinToString(), "errorType" to error::class.simpleName.orEmpty()),
                 error,
             )
@@ -273,7 +273,7 @@ object PluginRenderRecovery {
 
         logger.error(
             LogCategory.UI,
-            "Rebuild did not clear the render fault — quarantining one suspect",
+            "Rebuild did not clear the render fault - quarantining one suspect",
             mapOf(
                 "suspect" to next,
                 "alreadyRuledOut" to cleared.joinToString(),
