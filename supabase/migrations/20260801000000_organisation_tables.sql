@@ -205,7 +205,7 @@ ALTER TABLE "public"."organisation_domains" OWNER TO "postgres";
 
 COMMENT ON TABLE "public"."organisation_domains" IS 'Email domains claimed by an organisation. Only verified rows are honoured. domain is globally UNIQUE so domain-based discovery has exactly one answer.';
 
-COMMENT ON COLUMN "public"."organisation_domains"."verification_token" IS 'Expected value of the DNS TXT record at _boss-verify.<domain>, as "boss-org-verification=<token>". Low-value on its own -- it only proves DNS control -- but it is returned solely by the org-admin RPC.';
+COMMENT ON COLUMN "public"."organisation_domains"."verification_token" IS 'Expected value of the DNS TXT record at _boss-verify.<domain>, as "boss-org-verification=<token>". Low-value on its own -- it only proves DNS control -- but it is revoked from authenticated at the column level and returned only by the org-admin RPC.';
 
 COMMENT ON COLUMN "public"."organisation_domains"."verified" IS 'Flipped ONLY by mark_organisation_domain_verified() (service_role). Never settable by a client.';
 
@@ -604,7 +604,35 @@ ALTER TABLE "public"."organisation_handoff_tokens"     ENABLE ROW LEVEL SECURITY
 -- which projects token_prefix and never token_hash.
 
 GRANT SELECT ON TABLE "public"."organisations"                   TO "authenticated";
-GRANT SELECT ON TABLE "public"."organisation_domains"            TO "authenticated";
+-- Column-level, deliberately: NOT the verification token.
+--
+-- The SELECT policy on this table is `is_org_member(org_id) OR verified`, so a
+-- verified row is deliberately readable by any authenticated user - verified
+-- domains are discovery metadata. RLS is row-level, though, so the token rode
+-- along on every one of those rows, and two comments in this batch claimed it
+-- "is revoked from authenticated at the column level and returned only by the org-admin RPC". It was not.
+--
+-- A column-level revoke keeps the row discoverable and the token private, which
+-- is the actual intent, without splitting the table. list_organisation_domains
+-- is SECURITY DEFINER and admin-gated, so the admin path is unaffected.
+-- Two things are needed, and missing either one makes this silently a no-op.
+--
+-- 1. REVOKE the table-level grant first. Supabase sets DEFAULT PRIVILEGES on the
+--    public schema (see pg_default_acl), so every CREATE TABLE here hands
+--    authenticated full table-level SELECT automatically - this migration never
+--    granted it explicitly and it is there anyway.
+-- 2. A column-level REVOKE cannot carve a column out of a table-level grant; the
+--    table grant still wins. So the grant has to be re-issued column by column.
+--
+-- Verified by test rather than by reading: the first attempt did only step 2 and
+-- passed when applied by hand to an already-migrated database, then failed on a
+-- fresh `db reset` where the default ACL had just re-granted the table.
+REVOKE SELECT ON TABLE "public"."organisation_domains" FROM "authenticated";
+
+GRANT SELECT (
+    "id", "org_id", "domain", "is_primary", "verified", "verified_at",
+    "verified_by", "created_by", "created_at"
+) ON TABLE "public"."organisation_domains" TO "authenticated";
 GRANT SELECT ON TABLE "public"."reserved_email_domains"          TO "authenticated";
 GRANT SELECT ON TABLE "public"."organisation_members"            TO "authenticated";
 GRANT SELECT ON TABLE "public"."organisation_roles"              TO "authenticated";

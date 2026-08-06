@@ -8,7 +8,7 @@
 -- breaks every login if it is missing.
 
 begin;
-select plan(37);
+select plan(41);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -318,6 +318,56 @@ select is(
       where e ->> 'slug' = 'pgthpub'),
     'member',
     'an existing member sees member, not join'
+);
+
+-- ===========================================================================
+-- verification_token is not readable by authenticated
+--
+-- The SELECT policy is `is_org_member(org_id) OR verified`, so a verified row is
+-- deliberately visible to any authenticated user. RLS is row-level, so without a
+-- COLUMN-level revoke the token rode along on every one of those rows - while two
+-- comments claimed it was returned solely by the org-admin RPC.
+-- ===========================================================================
+select ok(
+    NOT has_column_privilege('authenticated',
+        'public.organisation_domains', 'verification_token', 'select'),
+    'authenticated cannot read verification_token'
+);
+select ok(
+    has_column_privilege('authenticated', 'public.organisation_domains', 'domain', 'select'),
+    'but the row itself stays discoverable -- verified domains are discovery metadata'
+);
+select ok(
+    has_column_privilege('service_role',
+        'public.organisation_domains', 'verification_token', 'select'),
+    'and the admin path through the SECURITY DEFINER RPC is unaffected'
+);
+
+-- ===========================================================================
+-- Guard 1 re-validates a role's EXISTING permissions on mapping
+--
+-- Guard 2 fires on role_permissions, so alone it only constrains permissions
+-- attached AFTER the mapping. "Create a plain role, grant it role.assign, then
+-- map it in" walked past both.
+-- ===========================================================================
+insert into public.roles (name, description, is_system)
+values ('pgt_preloaded', 'a role that already holds a forbidden permission', false)
+on conflict (name) do nothing;
+
+insert into public.role_permissions (role_id, permission_id)
+select r.id, p.id
+  from public.roles r, public.permissions p
+ where r.name = 'pgt_preloaded' and p.name = 'role.assign'
+on conflict do nothing;
+
+select throws_ok(
+    $$ insert into public.organisation_roles (org_id, role_id, kind)
+       values ((select id from public.organisations where slug='pgthpub'),
+               (select id from public.roles where name='pgt_preloaded'),
+               'custom') $$,
+    'P0001',
+    null,
+    'a role already holding role.assign cannot be mapped into an organisation'
 );
 
 select * from finish();

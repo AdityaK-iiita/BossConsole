@@ -529,13 +529,33 @@ BEGIN
         RAISE EXCEPTION 'organisation_roles: cannot map system role "%" to an organisation', v_name;
     END IF;
 
+    -- The role's EXISTING permissions must also satisfy Guard 2.
+    --
+    -- Guard 2 lives on role_permissions, so on its own it only constrains
+    -- permissions attached AFTER the mapping. Without this clause the sequence
+    -- "create a plain role, grant it role.assign, then map it into an
+    -- organisation" walks straight past both guards. Every caller today creates
+    -- the role fresh and maps before granting, so it is not reachable now - but
+    -- one future "adopt an existing role into an organisation" RPC would make it
+    -- so, and this trigger is exactly where that belongs.
+    IF EXISTS (
+        SELECT 1
+        FROM public.role_permissions rp
+        WHERE rp.role_id = NEW.role_id
+          AND NOT public.is_org_grantable_permission(rp.permission_id)
+    ) THEN
+        RAISE EXCEPTION
+            'organisation_roles: role "%" already holds a permission an organisation role may not carry',
+            v_name;
+    END IF;
+
     RETURN NEW;
 END;
 $$;
 
 ALTER FUNCTION "public"."enforce_org_role_not_system"() OWNER TO "postgres";
 
-COMMENT ON FUNCTION "public"."enforce_org_role_not_system"() IS 'Refuses to map a system role into an organisation. The structural backstop against a slug whose derived role name collides with a global tier such as boss_admin.';
+COMMENT ON FUNCTION "public"."enforce_org_role_not_system"() IS 'Refuses to map into an organisation any role that is a system role, or that already holds a permission Guard 2 forbids. The second clause matters because Guard 2 fires on role_permissions, so it alone only constrains permissions attached AFTER the mapping.';
 
 DROP TRIGGER IF EXISTS "enforce_org_role_not_system" ON "public"."organisation_roles";
 CREATE TRIGGER "enforce_org_role_not_system"
