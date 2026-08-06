@@ -592,7 +592,21 @@ Deno.test("a created invite link is shown once, inline", async () => {
     // response only.
     assertEquals(response.status, 200)
     const body = await response.text()
-    assert(body.includes("/functions/v1/organisation/join/boss_inv_"))
+
+    // ABSOLUTE, with a host. This string's entire purpose is to be copied out of the browser
+    // and sent to someone else, and a bare path is useless the moment it is pasted anywhere.
+    // The token is shown once, so a wrong copy costs a revoke and a re-mint.
+    const link = /value="(https?:\/\/[^"]*\/join\/boss_inv_[^"]*)"/.exec(body)?.[1]
+    assert(link, `invite link is not an absolute url: ${body.match(/\/join\/[^"]*/)?.[0]}`)
+    assert(link.includes("/functions/v1/organisation/join/boss_inv_"))
+
+    // The highlight class must actually apply. `class="card" class="highlight"` parses as the
+    // first attribute only, so the marker on the one-time-credential card silently vanished.
+    assert(
+      body.includes('class="card highlight"'),
+      "the new-invite card must carry both classes in ONE attribute",
+    )
+    assertEquals(/class="[^"]*"\s+class="/.test(body), false, "duplicate class attribute")
   } finally {
     restore()
   }
