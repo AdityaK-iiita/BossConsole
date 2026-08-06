@@ -473,6 +473,24 @@ class CrashRecoveryTest {
     }
 
     @Test
+    fun `a plugin that could not be disabled keeps its crash reporting`() {
+        // Suppression is for a plugin that was actually taken out. This one is still
+        // enabled and still running, so muting it would be the same failure this
+        // feature was accused of once already - permanently silent crash reporting
+        // on the strength of one toast.
+        val fake = FakePluginLayer(known = setOf(OFFENDER), disableSucceeds = false)
+        PluginCrashRecovery.handler = fake.coordinator()
+
+        controller(recoverable).dismiss()
+
+        assertEquals(listOf(OFFENDER), fake.corrections, "the user is told it did not take")
+        assertFalse(
+            PluginRecoveryQuarantine.isQuarantined(OFFENDER),
+            "a plugin still running must still be able to report a crash",
+        )
+    }
+
+    @Test
     fun `a fatal host crash still terminates`() {
         installRecovery(succeeds = true)
 

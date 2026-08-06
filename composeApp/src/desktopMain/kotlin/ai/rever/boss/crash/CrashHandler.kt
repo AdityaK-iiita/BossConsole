@@ -241,7 +241,10 @@ object CrashHandler {
      * would replace the report and Submit would send the wrong crash, losing the
      * fatal one.
      */
-    fun recordContained(throwable: Throwable) {
+    fun recordContained(
+        throwable: Throwable,
+        writeInline: Boolean = false,
+    ) {
         if (isIgnorable(throwable)) return
         try {
             // Signature first, report second. createCrashReport sanitizes the whole
@@ -279,7 +282,16 @@ object CrashHandler {
             // ~/.boss/crash-reports and sweepOldReports would delete the developer's
             // actual reports — the exact hazard the override exists to prevent.
             val dir = containedReportDir()
-            containedWriter.execute { writeContainedReport(dir, signature, throwable) }
+            // Inline when the caller is about to end the process. The writer is a
+            // daemon thread with nothing draining it at shutdown, so a queued task
+            // is dropped or killed mid-write by the exit that follows - and the one
+            // caller that passes true does so precisely because the record is the
+            // justification for that branch existing.
+            if (writeInline) {
+                writeContainedReport(dir, signature, throwable)
+            } else {
+                containedWriter.execute { writeContainedReport(dir, signature, throwable) }
+            }
         } catch (e: Exception) {
             // Reporting a contained fault must never itself become a fault.
             logger.warn(
@@ -579,7 +591,9 @@ object CrashHandler {
         val quarantined = !fatal && isSuppressedByQuarantine(attributedPluginId)
         val claimed = !quarantined && tryClaimDialogSlot()
         if (!claimed) {
-            recordContained(throwable)
+            // Written inline for a fatal crash: terminateAfterCrash follows
+            // immediately and would otherwise kill the queued write.
+            recordContained(throwable, writeInline = fatal)
             // A fatal crash cannot queue behind another dialog: the exit is the
             // point, not the prompt. (Not reached when `quarantined`, which is
             // false for every fatal crash.)

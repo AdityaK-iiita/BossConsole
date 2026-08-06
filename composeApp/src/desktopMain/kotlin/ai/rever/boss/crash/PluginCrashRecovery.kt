@@ -327,6 +327,20 @@ class PluginCrashRecoveryCoordinator(
             runCatching { steps.notifyDisableIncomplete(pluginId) }
                 .onFailure { logFailure("report an incomplete disable", pluginId, it) }
         }
+        if (!disabled) {
+            // The plugin is still enabled and still running, so muting it would be
+            // the very failure this feature was accused of and fixed once already:
+            // a live, still-throwing plugin whose crash reporting is silently off
+            // for the rest of the session, on the strength of one toast the user
+            // may not have been looking at. Suppression is for a plugin that was
+            // actually taken out; this one was not.
+            PluginRecoveryQuarantine.clear(pluginId)
+            logger.warn(
+                LogCategory.SYSTEM,
+                "Could not disable the crashed plugin - leaving its crash reporting on",
+                mapOf("pluginId" to pluginId),
+            )
+        }
     }
 
     private fun logFailure(
