@@ -621,26 +621,42 @@ internal fun CrashReportDialog(
                         isSubmitting = true
                         onSubmittingChanged(true)
                         coroutineScope.launch {
-                            // Update report with user input
-                            CrashHandler
-                                .updateReportWithUserInput(
-                                    userNotes = userNotes.takeIf { it.isNotBlank() },
-                                    includeLogs = includeLogs,
-                                )?.let { updatedReport ->
-                                    val result = CrashReportService.submitCrashReport(updatedReport)
-                                    submitResult = result
+                            // try/finally, and the finally is load-bearing now.
+                            // isSubmitting gates all three exits, and the window is
+                            // DO_NOTHING_ON_CLOSE, so a submit that threw anywhere -
+                            // updateReportWithUserInput, or the plumbing around
+                            // submitCrashReport that sits outside its own inner
+                            // catch - used to leave the flag set forever and the
+                            // crash dialog with no way out but killing the process,
+                            // on a machine already in a bad state. Before this
+                            // change the close box always worked, so the same throw
+                            // was survivable.
+                            // Exception, not a narrower type: the point is that
+                            // NOTHING escapes and leaves isSubmitting stuck, and the
+                            // paths involved reach the network, the filesystem and a
+                            // config loader.
+                            @Suppress("TooGenericExceptionCaught")
+                            val submitted =
+                                try {
+                                    submitReport(
+                                        userNotes = userNotes.takeIf { it.isNotBlank() },
+                                        includeLogs = includeLogs,
+                                    ).also { submitResult = it }
+                                } catch (e: Exception) {
+                                    submitResult =
+                                        CrashReportService.SubmitResult.Error(
+                                            "Failed to submit crash report: ${e.message ?: e.javaClass.simpleName}",
+                                        )
+                                    null
+                                } finally {
                                     isSubmitting = false
                                     onSubmittingChanged(false)
+                                }
 
-                                    // If successful, call onSubmit after a brief delay
-                                    if (result is CrashReportService.SubmitResult.Success) {
-                                        kotlinx.coroutines.delay(2000)
-                                        onSubmit(userNotes.takeIf { it.isNotBlank() }, includeLogs)
-                                    }
-                                } ?: run {
-                                submitResult = CrashReportService.SubmitResult.Error("Failed to prepare report")
-                                isSubmitting = false
-                                onSubmittingChanged(false)
+                            // If successful, call onSubmit after a brief delay
+                            if (submitted is CrashReportService.SubmitResult.Success) {
+                                kotlinx.coroutines.delay(SUBMIT_CONFIRMATION_MILLIS)
+                                onSubmit(userNotes.takeIf { it.isNotBlank() }, includeLogs)
                             }
                         }
                     },
@@ -693,6 +709,26 @@ internal fun CrashReportDialog(
         }
     }
 }
+
+/**
+ * Prepare and send the report, or report why it could not be prepared.
+ *
+ * Extracted so the submit handler's `try`/`finally` reads as one statement, and so
+ * "prepare failed" and "send failed" produce the same shape of result rather than
+ * two duplicated reset blocks.
+ */
+private suspend fun submitReport(
+    userNotes: String?,
+    includeLogs: Boolean,
+): CrashReportService.SubmitResult {
+    val updated =
+        CrashHandler.updateReportWithUserInput(userNotes = userNotes, includeLogs = includeLogs)
+            ?: return CrashReportService.SubmitResult.Error("Failed to prepare report")
+    return CrashReportService.submitCrashReport(updated)
+}
+
+/** How long the success message stays up before the dialog takes its exit. */
+private const val SUBMIT_CONFIRMATION_MILLIS = 2000L
 
 /**
  * The dismiss action's label when the crash is recoverable.

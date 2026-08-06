@@ -306,7 +306,22 @@ class DynamicPluginManager(
                 // Independently, not fail-fast: one window refusing must not leave
                 // the plugin enabled in the rest.
                 val result = runCatching { manager.disablePlugin(pluginId) }
-                if (result.getOrNull()?.isSuccess == true) anyDisabled = true
+                if (result.getOrNull()?.isSuccess == true) {
+                    anyDisabled = true
+                    continue
+                }
+                // Logged per manager, not just counted. This path ends in the user
+                // being told the plugin "may return on restart", and without the
+                // cause the only thing a bug report carries is that summary line.
+                val cause = result.exceptionOrNull() ?: result.getOrNull()?.exceptionOrNull()
+                companionLogger.warn(
+                    LogCategory.SYSTEM,
+                    "A manager refused to disable a crashed plugin",
+                    mapOf(
+                        "pluginId" to pluginId,
+                        "error" to (cause?.message ?: cause?.let { it::class.simpleName } ?: "no reason given"),
+                    ),
+                )
             }
             companionLogger.info(
                 LogCategory.SYSTEM,

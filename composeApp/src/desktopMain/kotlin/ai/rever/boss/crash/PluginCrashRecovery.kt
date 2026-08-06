@@ -161,12 +161,21 @@ class PluginCrashRecoveryCoordinator(
         // Both halves must hold before this can claim to have recovered: something
         // has to know the plugin, and it has to actually stop rendering. `&&` short
         // circuits, so an unknown plugin is never quarantined.
-        val contained = isActionable(pluginId) && quarantineSafely(pluginId, error)
+        // Marked BEFORE the quarantine step, not after the whole thing succeeds.
+        // The dialog slot is already released by the time this runs, and
+        // quarantineSafely goes through the steps - which in production scan every
+        // live manager first. A second crash from the same plugin inside that
+        // window would claim the freed slot and open a second dialog for a plugin
+        // already being recovered. Marked here rather than inside the steps so
+        // every implementation gets it, and so the crash handler can tell a
+        // recovery quarantine from an ordinary contained render fault.
+        //
+        // Set even if the quarantine below fails: that path terminates, so a marker
+        // left behind outlives nothing.
+        val actionable = isActionable(pluginId)
+        if (actionable) PluginRecoveryQuarantine.mark(pluginId)
+        val contained = actionable && quarantineSafely(pluginId, error)
         if (contained) {
-            // Marked here rather than inside the steps, so every implementation
-            // gets it and the crash handler can tell a recovery quarantine from an
-            // ordinary contained render fault - see PluginCrashRegistry.
-            PluginRecoveryQuarantine.mark(pluginId)
             logger.warn(
                 LogCategory.SYSTEM,
                 "Recovering from plugin crash - disabling the plugin, keeping the app",

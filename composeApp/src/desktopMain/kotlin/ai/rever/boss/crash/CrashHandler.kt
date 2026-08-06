@@ -3,7 +3,6 @@ package ai.rever.boss.crash
 import ai.rever.boss.plugin.loader.PluginClassLoader
 import ai.rever.boss.plugin.pathutils.BossDirectories
 import ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
-import ai.rever.boss.plugin.sandbox.ui.PluginCrashRegistry
 import ai.rever.boss.plugin.sandbox.ui.PluginRecoveryQuarantine
 import ai.rever.boss.utils.AppVersion
 import ai.rever.boss.utils.logging.BossLogger
@@ -43,7 +42,8 @@ import javax.swing.WindowConstants
  * - Collects system information (memory, OS, Java version)
  * - Sanitizes sensitive data from stack traces
  * - Exposes pending crash report via StateFlow for UI
- * - Chains to original handler for proper JVM termination
+ * - Recovers from a crash attributable to a dynamic plugin by disabling it,
+ *   and terminates only for a fatal host crash (see [CrashDisposition])
  */
 object CrashHandler {
     private val logger = BossLogger.forComponent("CrashHandler")
@@ -646,19 +646,28 @@ object CrashHandler {
         // was survivable, and a crash we could have recovered from must not become
         // fatal merely because the window that would have said so failed to open.
         val disposition = dispositionFor(throwable, report)
+        // frame and controller are built OUTSIDE the try so the failure path can
+        // reach them. Declared inside, the catch could only call resolveCrash
+        // directly - and a throw landing after `isVisible = true` (toFront and
+        // requestFocus both run after it, and both fail on a hostile window
+        // manager) then recovered the crash while leaving a live dialog on screen,
+        // whose every exit resolved it a *second* time. By then the background
+        // unload can have made the plugin unknown, so that second pass fails and
+        // terminates a session which had already been recovered - the exact
+        // sequence CrashDialogController.finished exists to prevent, reintroduced
+        // through the one route that skipped the controller.
+        val frame = JFrame(crashWindowTitle(disposition))
+        val controller =
+            CrashDialogController(
+                disposition = disposition,
+                error = throwable,
+                disposeWindow = { frame.dispose() },
+            )
         try {
-            val frame = JFrame(crashWindowTitle(disposition))
             // DO_NOTHING, not DISPOSE: the close box has to run the same action the
             // visible button does. Left on DISPOSE it silently dropped the report and
             // recovered nothing, which is how the three exits came to disagree.
             frame.defaultCloseOperation = WindowConstants.DO_NOTHING_ON_CLOSE
-
-            val controller =
-                CrashDialogController(
-                    disposition = disposition,
-                    error = throwable,
-                    disposeWindow = { frame.dispose() },
-                )
             frame.addWindowListener(controller.windowClosingAdapter())
 
             val composePanel = ComposePanel()
@@ -705,18 +714,15 @@ object CrashHandler {
             logger.error(LogCategory.SYSTEM, "Failed to show crash dialog window", error = e)
             System.err.println("Failed to show crash dialog: ${e.message}")
             e.printStackTrace()
-            // The slot was claimed for a window that does not exist, and this path
-            // does not go through CrashDialogController, which is what normally
-            // gives it back. Leaking it here is not cosmetic: a recoverable crash
-            // recovers, the process keeps running with the slot held, and every
-            // later crash - including a genuinely fatal one - is routed silently to
-            // disk with nothing shown to the user ever again.
-            releaseDialogSlot()
-            // No dialog, so nobody is going to press anything - take the same exit
-            // the dialog would have taken. For a plugin crash that means disabling
-            // the plugin and staying up; resolveCrash still terminates if that
-            // cannot be done, and for a host crash it terminates as it always did.
-            resolveCrash(disposition, throwable)
+            // Through the controller, exactly like the three visible exits: it
+            // disposes the window (which may be half-built, or fully shown), gives
+            // the dialog slot back, and resolves once. A dialog left on screen here
+            // would otherwise be able to resolve the same crash a second time.
+            runCatching { controller.dismiss() }
+                .onFailure { secondary ->
+                    logger.error(LogCategory.SYSTEM, "Crash dialog teardown failed", error = secondary)
+                    terminateAfterCrash()
+                }
         }
     }
 

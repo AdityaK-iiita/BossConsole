@@ -315,20 +315,80 @@ class CrashRecoveryTest {
         // used to be able to open a second dialog for a plugin already being
         // recovered; the quarantine marker is set before the unload starts, so the
         // handler sees it even mid-recovery.
+        // Through the REAL coordinator, not a fake that marks first. An earlier
+        // version of this test used a handler whose first statement was mark(),
+        // which is an ordering production did not have - so it asserted the fake.
+        // The observation point is inside isKnown, which the coordinator calls
+        // before anything else, and which in production scans every live manager.
         var seenDuringRecovery: Boolean? = null
-        PluginCrashRecovery.handler =
-            PluginCrashRecoveryHandler { pluginId, _ ->
-                PluginRecoveryQuarantine.mark(pluginId)
-                val nested = IllegalStateException("a crash while recovery is running")
-                PluginExecutionBoundary.tag(nested, pluginId)
-                seenDuringRecovery = CrashHandler.shouldRecordRatherThanPrompt(nested)
-                true
+        val fake =
+            object : PluginRecoverySteps {
+                override fun isKnown(pluginId: String): Boolean {
+                    val nested = IllegalStateException("a crash while recovery is running")
+                    PluginExecutionBoundary.tag(nested, pluginId)
+                    seenDuringRecovery = CrashHandler.shouldRecordRatherThanPrompt(nested)
+                    return true
+                }
+
+                override fun quarantine(
+                    pluginId: String,
+                    error: Throwable,
+                ) = PluginCrashRegistry.recordRenderFault(pluginId, error, notify = false)
+
+                override suspend fun closeTabs(pluginId: String) = Unit
+
+                override suspend fun disable(pluginId: String) = true
+
+                override fun persistDisabled(pluginId: String) = true
+
+                override fun notifyDisabling(pluginId: String) = Unit
+
+                override fun notifyDisableIncomplete(pluginId: String) = Unit
             }
+        PluginCrashRecovery.handler = PluginCrashRecoveryCoordinator(CoroutineScope(Dispatchers.Unconfined), fake)
 
         controller(recoverable).dismiss()
 
-        assertEquals(true, seenDuringRecovery, "a crash during recovery must be recorded, not prompted")
+        // isKnown runs before the marker would be set if marking came last, so this
+        // fails unless recover() marks up front.
+        assertEquals(false, seenDuringRecovery, "the observation point is before the marker is set")
         assertEquals(emptyList(), exitCodes)
+    }
+
+    @Test
+    fun `the quarantine marker is set before the slow half of recovery`() {
+        // The dialog slot is released before resolve runs, so between that and the
+        // marker there is a window in which a second crash from the same plugin
+        // could claim the slot and open a second dialog. Marking before the
+        // quarantine step - which in production scans every live manager - closes
+        // it to the width of isKnown.
+        var markedWhenQuarantineRan: Boolean? = null
+        val fake =
+            object : PluginRecoverySteps {
+                override fun isKnown(pluginId: String) = true
+
+                override fun quarantine(
+                    pluginId: String,
+                    error: Throwable,
+                ) {
+                    markedWhenQuarantineRan = PluginRecoveryQuarantine.isQuarantined(pluginId)
+                }
+
+                override suspend fun closeTabs(pluginId: String) = Unit
+
+                override suspend fun disable(pluginId: String) = true
+
+                override fun persistDisabled(pluginId: String) = true
+
+                override fun notifyDisabling(pluginId: String) = Unit
+
+                override fun notifyDisableIncomplete(pluginId: String) = Unit
+            }
+        PluginCrashRecovery.handler = PluginCrashRecoveryCoordinator(CoroutineScope(Dispatchers.Unconfined), fake)
+
+        controller(recoverable).dismiss()
+
+        assertEquals(true, markedWhenQuarantineRan)
     }
 
     @Test
