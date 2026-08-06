@@ -109,11 +109,18 @@ interface PluginRecoverySteps {
  *
  * ### Why the split between synchronous and background work
  *
- * The synchronous half is what makes the app *safe*: the plugin is marked crashed,
- * so every window's [ai.rever.boss.plugin.sandbox.ui.PluginErrorBoundary] swaps to
- * its fallback and stops rendering plugin content. That has to happen before this
- * returns, because the caller disposes the crash dialog immediately afterwards and
- * the user is looking at the app again.
+ * The synchronous half is what makes the app *safe*: the plugin is recorded as
+ * crashed before this returns, because the caller disposes the crash dialog
+ * immediately afterwards and the user is looking at the app again.
+ *
+ * Precisely: `recordRenderFault` writes the thread-safe map synchronously, so
+ * `hasCrashed` is true the moment this returns - which is what
+ * `CrashHandler.shouldRecordRatherThanPrompt` reads. The Compose-observable state
+ * that actually swaps every window's
+ * [ai.rever.boss.plugin.sandbox.ui.PluginErrorBoundary] to its fallback is flipped
+ * on the next EDT cycle via `invokeLater`, so the *visible* swap lands a frame
+ * later. Both are fine here; the ordering guarantee rests on the map, not on the
+ * repaint.
  *
  * Unloading is the slow half — closing tabs across every window on the EDT,
  * stopping sandboxes, rewriting `installed.json` — and it is launched rather than

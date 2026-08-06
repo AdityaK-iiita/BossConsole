@@ -1240,8 +1240,11 @@ class DynamicPluginManager(
 
                     wasAlreadyEnabled = _pluginStates.value[pluginId]?.enabled == true
 
-                    // Register the plugin. Nothing catches this one, so attribution is what
-                    // decides whether a plugin that throws on enable costs the user the app.
+                    // Attributed for the duration of register(), so a callback the
+                    // plugin wires up and invokes synchronously from here is
+                    // attributed to it. NOT because this escapes uncaught - the
+                    // catch below turns it into Result.failure - which an earlier
+                    // version of this comment claimed and was wrong about.
                     PluginExecutionBoundary.runAttributed(pluginId) {
                         loadedPlugin.instance.register(trackingContext)
                     }
@@ -1249,8 +1252,22 @@ class DynamicPluginManager(
                     // Enable sandbox
                     sandboxManager.enablePlugin(pluginId)
 
-                    // Clear any prior incompatible state on successful re-enable
+                    // Clear prior crash state on successful re-enable, on BOTH axes.
+                    //
+                    // clearIncompatible alone left hasCrashed(pluginId) true, so a
+                    // plugin the user deliberately re-enabled came back still
+                    // showing PluginErrorFallback instead of its content, and they
+                    // had to find "Restart" inside that fallback. Crash recovery
+                    // made that reachable in one click: its notice tells the user to
+                    // re-enable from Toolbox, and without this the instruction does
+                    // not do what it says.
+                    //
+                    // It also un-suppresses the crash dialog for this plugin -
+                    // CrashHandler.shouldRecordRatherThanPrompt skips prompting
+                    // while hasCrashed is true, which is right for a plugin the user
+                    // has already dealt with and wrong once they have re-armed it.
                     PluginCrashRegistry.clearIncompatible(pluginId)
+                    PluginCrashRegistry.clearCrash(pluginId)
 
                     // Update state
                     val currentInfo = _pluginStates.value[pluginId]

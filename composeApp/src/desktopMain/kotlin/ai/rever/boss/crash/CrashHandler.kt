@@ -156,6 +156,18 @@ object CrashHandler {
     private val dialogVisible = AtomicBoolean(false)
 
     /**
+     * Give the dialog slot back, once the crash window is gone.
+     *
+     * Called from [CrashDialogController.finish] on every exit rather than from the
+     * one branch of [resolveCrash] that returns - the slot describes the window,
+     * and a route that returned without exiting would otherwise silence every later
+     * crash dialog for the life of the process.
+     */
+    internal fun releaseDialogSlot() {
+        dialogVisible.set(false)
+    }
+
+    /**
      * Install the global crash handler.
      * Safe to call multiple times - only installs once.
      */
@@ -215,10 +227,11 @@ object CrashHandler {
     /**
      * Record a crash report for something already contained and recovered from.
      *
-     * The window exception handler cannot use [handleCrash]: that shows a dialog
-     * whose every exit terminates — dismiss, submit and Escape all reach
-     * [terminateAfterCrash], and clean-and-restart deletes the data directory
-     * first — so a recovered fault would end the session on Escape.
+     * The window exception handler cannot use [handleCrash]: that shows a dialog,
+     * and a fault the render path has already contained and recovered from must
+     * not interrupt the user to ask about it. (Every exit from that dialog used to
+     * terminate as well; a plugin-attributed crash now recovers instead - see
+     * [CrashDisposition] - but a *contained* fault should still never reach it.)
      *
      * It must not skip reporting either. That handler sees *all* unattributed
      * Compose exceptions, so a host-side layout bug would otherwise produce a log
@@ -534,7 +547,7 @@ object CrashHandler {
      * [recordContained] dedupes by signature, so a fault repeating every frame
      * costs one file and a log line on a curve.
      */
-    private fun shouldRecordRatherThanPrompt(throwable: Throwable): Boolean {
+    internal fun shouldRecordRatherThanPrompt(throwable: Throwable): Boolean {
         val quarantined = attributePluginId(throwable)?.let { PluginCrashRegistry.hasCrashed(it) } == true
         // Short-circuit, so the dialog slot is only claimed when the crash is
         // actually going to open one.
@@ -590,7 +603,6 @@ object CrashHandler {
             val recovered = PluginCrashRecovery.recover(disposition.pluginId, error)
             if (recovered) {
                 clearPendingReport()
-                dialogVisible.set(false)
                 logger.info(
                     LogCategory.SYSTEM,
                     "Continued without the crashed plugin - app left running",
@@ -654,11 +666,10 @@ object CrashHandler {
                         if (disposition is CrashDisposition.RecoverablePlugin) {
                             null
                         } else {
-                            {
-                                logger.info(LogCategory.SYSTEM, "User requested clean data and restart")
-                                frame.dispose()
-                                cleanDataAndRestart()
-                            }
+                            // Through the controller, so it shares the once-only
+                            // guard with the other three exits instead of keeping
+                            // its own copy of dispose-then-act.
+                            { controller.cleanAndRestart { cleanDataAndRestart() } }
                         },
                 )
             }

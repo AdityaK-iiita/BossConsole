@@ -61,8 +61,12 @@ object PluginExecutionBoundary {
      * host, which can call another plugin: a panel of plugin A rendering a
      * status-bar item contributed by plugin B. Popping must restore A rather than
      * clear the marker outright.
+     *
+     * A plain ThreadLocal, not `withInitial`: [currentPluginId] is read from the
+     * crash path on arbitrary threads, and an initialised one would plant an empty
+     * deque on every thread that ever asks and never take it back.
      */
-    private val executing = ThreadLocal.withInitial { ArrayDeque<String>() }
+    private val executing = ThreadLocal<ArrayDeque<String>>()
 
     /** Weak-keyed so a tag can never keep the throwable (and its stack) alive. */
     private val tags: MutableMap<Throwable, String> =
@@ -97,7 +101,7 @@ object PluginExecutionBoundary {
         pluginId: String,
         block: () -> T,
     ): T {
-        val stack = executing.get()
+        val stack = executing.get() ?: ArrayDeque<String>().also { executing.set(it) }
         stack.addLast(pluginId)
         try {
             return block()
@@ -150,7 +154,7 @@ object PluginExecutionBoundary {
     }
 
     /** The plugin this thread is executing right now, innermost first, or null. */
-    fun currentPluginId(): String? = executing.get().lastOrNull()
+    fun currentPluginId(): String? = executing.get()?.lastOrNull()
 
     /**
      * The plugin that defined [owner], or null when the host did.
@@ -165,10 +169,15 @@ object PluginExecutionBoundary {
      */
     fun pluginIdOfOwner(owner: Any?): String? {
         val loader = owner?.javaClass?.classLoader ?: return null
-        // computeIfAbsent, so a miss is cached too - the whole point of the cache
-        // is that host-owned lambdas, the common case, stop paying for reflection
-        // on every recomposition. WeakHashMap stores the null result as a present
-        // key, which is what makes the miss stick.
+        // containsKey/get/put rather than computeIfAbsent, and deliberately:
+        // computeIfAbsent does NOT store a null result, so every host-owned
+        // classloader - the common case - would re-run the reflection on every
+        // recomposition, which is the exact cost this cache exists to remove.
+        // Caching the miss needs a present key with a null value.
+        //
+        // The synchronized block is the same monitor the map already uses
+        // (Collections.synchronizedMap locks on itself), so this is not double
+        // locking; it makes the check-then-put one atomic step.
         return synchronized(ownerPluginIds) {
             if (ownerPluginIds.containsKey(loader)) {
                 ownerPluginIds[loader]

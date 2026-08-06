@@ -1,5 +1,6 @@
 package ai.rever.boss.crash
 
+import ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
 import ai.rever.boss.plugin.sandbox.ui.PluginCrashRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +27,12 @@ import kotlin.test.assertTrue
  *
  * [CrashHandler.processExit] is swapped for a recorder rather than mocked away -
  * a test that calls the real one takes the suite with it.
+ *
+ * This class mutates process-global singletons ([CrashHandler.processExit],
+ * [PluginCrashRecovery.handler], the dialog slot and [PluginCrashRegistry]) and
+ * restores them in teardown. That holds only while this module runs tests in one
+ * fork; enabling `maxParallelForks` would let a parallel class observe or lose
+ * these, so re-check here before turning that on.
  */
 class CrashRecoveryTest {
     private companion object {
@@ -50,6 +57,7 @@ class CrashRecoveryTest {
     fun tearDown() {
         CrashHandler.processExit = { code -> System.exit(code) }
         CrashHandler.setPendingReportForTest(null)
+        CrashHandler.releaseDialogSlot()
         PluginCrashRecovery.handler = null
         PluginCrashRegistry.clearCrash(OFFENDER)
         PluginCrashRegistry.clearCrash(BYSTANDER)
@@ -155,6 +163,50 @@ class CrashRecoveryTest {
         assertEquals(listOf(OFFENDER), recovered)
         assertEquals(emptyList(), exitCodes)
         assertEquals(CrashOutcome.Recovered(OFFENDER), outcome)
+    }
+
+    @Test
+    fun `the dialog slot is released on every exit, so a later crash still prompts`() {
+        installRecovery(succeeds = true)
+        // Claim the slot the way a first crash does.
+        assertFalse(CrashHandler.shouldRecordRatherThanPrompt(error), "the first crash should prompt")
+
+        controller(recoverable).dismiss()
+
+        // Releasing only on the recovered branch put this invariant in another file
+        // with nothing asserting it: any exit that returned without terminating
+        // would have silenced every crash dialog for the rest of the process.
+        assertFalse(
+            CrashHandler.shouldRecordRatherThanPrompt(RuntimeException("a later, unrelated crash")),
+            "a crash after the dialog closed must be able to open a new one",
+        )
+        CrashHandler.releaseDialogSlot()
+    }
+
+    @Test
+    fun `a second crash while the dialog is open is recorded rather than stacked`() {
+        assertFalse(CrashHandler.shouldRecordRatherThanPrompt(error), "the first crash claims the slot")
+
+        // A plugin throwing from a paint or a timer produces one of these per frame.
+        // A second window on top of the first hides it and neither can be reached.
+        assertTrue(CrashHandler.shouldRecordRatherThanPrompt(RuntimeException("second crash")))
+
+        CrashHandler.releaseDialogSlot()
+    }
+
+    @Test
+    fun `a crash from an already-quarantined plugin never opens a dialog`() {
+        PluginCrashRegistry.recordRenderFault(OFFENDER, error, notify = false)
+        val fromQuarantined = IllegalStateException("its timer is still running")
+        PluginExecutionBoundary.tag(fromQuarantined, OFFENDER)
+
+        assertTrue(
+            CrashHandler.shouldRecordRatherThanPrompt(fromQuarantined),
+            "a disabled plugin's lingering thread must not prompt on every throw",
+        )
+        // And the slot was not claimed, so an unrelated crash can still prompt.
+        assertFalse(CrashHandler.shouldRecordRatherThanPrompt(RuntimeException("host crash")))
+        CrashHandler.releaseDialogSlot()
     }
 
     @Test

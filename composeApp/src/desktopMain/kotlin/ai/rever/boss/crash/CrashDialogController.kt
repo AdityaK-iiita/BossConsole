@@ -101,12 +101,36 @@ internal class CrashDialogController(
      */
     private val finished = AtomicBoolean(false)
 
+    /**
+     * The destructive escape hatch, routed through the same once-only guard.
+     *
+     * It used to run inline in the handler, which is the "every route carries its
+     * own copy of the logic" shape this class exists to remove - and it sat outside
+     * the guard, so it could interleave with another exit. [action] terminates, so
+     * nothing here needs to resolve an outcome.
+     */
+    fun cleanAndRestart(action: () -> Unit) {
+        if (!finished.compareAndSet(false, true)) {
+            logger.debug(LogCategory.SYSTEM, "Ignoring clean-and-restart on a crash dialog already closed")
+            return
+        }
+        logger.info(LogCategory.SYSTEM, "User requested clean data and restart")
+        disposeWindow()
+        action()
+    }
+
     private fun finish(): CrashOutcome {
         if (!finished.compareAndSet(false, true)) {
             logger.debug(LogCategory.SYSTEM, "Ignoring a second exit from a crash dialog already closed")
             return lastOutcome
         }
         disposeWindow()
+        // Released here rather than inside the one branch of resolveCrash that
+        // returns: the slot is about the *window*, which is now gone, and tying its
+        // release to "recovery succeeded" put the invariant in another file with
+        // nothing asserting it. A disposition that ever returned without exiting
+        // would otherwise suppress every later crash dialog for the whole process.
+        CrashHandler.releaseDialogSlot()
         return resolve(disposition, error).also { lastOutcome = it }
     }
 
