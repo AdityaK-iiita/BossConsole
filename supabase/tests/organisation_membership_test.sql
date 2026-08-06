@@ -8,7 +8,7 @@
 -- two entry points agreeing with it.
 
 begin;
-select plan(37);
+select plan(39);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures: one organisation per join policy, plus a domain-verified one.
@@ -377,6 +377,29 @@ select ok(
     has_function_privilege('authenticated',
         'public.my_effective_share_role_ids()', 'execute'),
     'but the self-subject form is, so the secret_shares policy still works'
+);
+
+-- An unverified domain may not be primary, and must not surface as one.
+select is(
+    (select public.set_primary_organisation_domain(
+        (select d.id from public.organisation_domains d
+           join public.organisations o on o.id = d.org_id
+          where o.slug='pgtreq' and d.domain='memcorp.test'),
+        '50000000-0000-0000-0000-000000000001') ->> 'success'),
+    'true',
+    'a VERIFIED domain can be made primary'
+);
+select public.add_organisation_domain(
+    (select id from public.organisations where slug='pgtreq'),
+    'unverified.test', false, '50000000-0000-0000-0000-000000000001');
+select is(
+    (select public.set_primary_organisation_domain(
+        (select d.id from public.organisation_domains d
+           join public.organisations o on o.id = d.org_id
+          where o.slug='pgtreq' and d.domain='unverified.test'),
+        '50000000-0000-0000-0000-000000000001') ->> 'error'),
+    'A domain must be verified before it can be made primary',
+    'an UNVERIFIED domain cannot -- enforced in the RPC, not only in the edge function'
 );
 
 select * from finish();

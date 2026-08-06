@@ -8,7 +8,7 @@
 -- "invalid or expired".
 
 begin;
-select plan(27);
+select plan(28);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -291,6 +291,18 @@ select is(
 );
 
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+
+-- uses must not double-count on a re-admit.
+--
+-- The re-click-after-removal path deliberately falls through and re-admits, which is exactly the
+-- case that produced one redemption row and two increments while the UPDATE was unconditional -
+-- burning a use of a capped link on somebody who had already consumed one.
+select is(
+    (select i.uses from public.organisation_invites i
+       where i.token_prefix = (select r ->> 'token_prefix' from t_rejoin))::int,
+    1,
+    'a re-admit through the same link does not increment uses a second time'
+);
 
 select * from finish();
 rollback;

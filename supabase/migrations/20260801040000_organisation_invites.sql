@@ -230,11 +230,20 @@ BEGIN
         PERFORM public.assign_org_member_role_internal(v_inv.org_id, v_user_id);
     END IF;
 
+    -- The increment is GUARDED on the redemption actually inserting.
+    --
+    -- The comment above claimed ON CONFLICT DO NOTHING kept uses from double-counting, but the
+    -- UPDATE was unconditional, so it did not. A member who is removed and re-clicks a still-live
+    -- link now takes the fall-through path deliberately, which is exactly the case that produced
+    -- one redemption row and two increments - burning a use of a capped link on somebody who had
+    -- already consumed one.
     INSERT INTO public.organisation_invite_redemptions (invite_id, user_id)
     VALUES (v_inv.id, v_user_id)
     ON CONFLICT (invite_id, user_id) DO NOTHING;
 
-    UPDATE public.organisation_invites SET uses = uses + 1 WHERE id = v_inv.id;
+    IF FOUND THEN
+        UPDATE public.organisation_invites SET uses = uses + 1 WHERE id = v_inv.id;
+    END IF;
 
     RETURN jsonb_build_object('success', true, 'org_id', v_inv.org_id::text,
         'slug', v_slug, 'name', v_name, 'status', 'active');

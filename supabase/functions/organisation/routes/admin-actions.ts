@@ -22,6 +22,7 @@ import { callForActor } from "../utils/org-rpc.ts"
 import { loadAdminPageData } from "../services/org.ts"
 import { htmlResponse, redirectResponse } from "../utils/responses.ts"
 import { clientKey, rateLimit } from "../utils/rate-limit.ts"
+import { publicBaseUrl } from "../utils/config.ts"
 import { checkbox, field, intField, uuidField } from "../utils/request.ts"
 import { requireCsrfBody, requireOrgAdmin, requireOrgSession } from "./guards.ts"
 import { adminPage } from "../views/admin.ts"
@@ -281,7 +282,11 @@ adminActionRoutes.post("/o/:slug/admin/invites/create", async (ctx) => {
   const data = await loadAdminPageData(session.sub, session.org)
   if (!data.ok) return redirectTo(facts, session.slug, { ok: "invite_created" })
 
-  const inviteUrl = `${facts.basePath}/join/${encodeURIComponent(token)}`
+  // An ABSOLUTE url: this one is copied out of the browser and sent to someone else, so a bare
+  // path is unusable, and the token is shown exactly once.
+  const inviteUrl = `${
+    publicBaseUrl(ctx.req.url, ctx.req.header("x-forwarded-host") ?? ctx.req.header("host") ?? null, facts.secure)
+  }/join/${encodeURIComponent(token)}`
 
   return htmlResponse((nonce) =>
     adminPage({

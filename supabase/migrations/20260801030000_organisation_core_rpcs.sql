@@ -1751,6 +1751,18 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'error', 'Domain not found');
     END IF;
 
+    -- Only a VERIFIED domain may be primary. routes/domains.ts refuses this too, but that check
+    -- is the friendly-error layer: this RPC is GRANTed to authenticated, so an org admin can call
+    -- it straight over PostgREST and skip the edge function entirely. The invariant has to live
+    -- here or it is not an invariant.
+    IF NOT EXISTS (
+        SELECT 1 FROM public.organisation_domains d
+        WHERE d.id = p_domain_id AND d.verified
+    ) THEN
+        RETURN jsonb_build_object('success', false, 'error',
+            'A domain must be verified before it can be made primary');
+    END IF;
+
     UPDATE public.organisation_domains SET is_primary = false WHERE org_id = v_org_id;
     UPDATE public.organisation_domains SET is_primary = true  WHERE id = p_domain_id;
 
@@ -2001,8 +2013,11 @@ BEGIN
                public.user_can_publish_org_plugin(v_actor, o.id) AS can_publish,
                (SELECT count(*) FROM public.organisation_members mm
                  WHERE mm.org_id = o.id AND mm.status = 'active') AS member_count,
+               -- AND d.verified: its two siblings (search_organisations,
+               -- get_organisation_detail) both filter on it and this one had drifted, so a bare
+               -- unverified claim surfaced as the organisation's domain in the desktop list.
                (SELECT d.domain FROM public.organisation_domains d
-                 WHERE d.org_id = o.id AND d.is_primary LIMIT 1) AS primary_domain,
+                 WHERE d.org_id = o.id AND d.is_primary AND d.verified LIMIT 1) AS primary_domain,
                COALESCE((
                    SELECT array_agg(r.name ORDER BY r.name)
                    FROM public.user_roles ur

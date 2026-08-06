@@ -55,6 +55,35 @@ export function publicPath(route: string): string {
   return `${publicBasePath()}${suffix}`
 }
 
+/**
+ * Absolute, browser-usable base for links that LEAVE this browser.
+ *
+ * publicBasePath() returns a path, which is right for a Location header or a form action and
+ * wrong for anything copied and sent to someone else: an invite link rendered as
+ * `/functions/v1/organisation/join/...` has no host and is useless the moment it is pasted
+ * anywhere. Since the invite token is shown exactly once, getting this wrong costs a revoke and
+ * a re-mint.
+ *
+ * ORG_PUBLIC_BASE_URL overrides; otherwise the request's own origin, which is correct because
+ * the admin is reading the page at that origin.
+ */
+export function publicBaseUrl(requestUrl: string, forwardedHost: string | null, secure: boolean): string {
+  const configured = Deno.env.get("ORG_PUBLIC_BASE_URL")?.trim()
+  if (configured) return configured.replace(/\/+$/, "") + publicBasePath()
+
+  const host = forwardedHost?.split(",")[0]?.trim() ||
+    (() => {
+      try {
+        return new URL(requestUrl).host
+      } catch {
+        return ""
+      }
+    })()
+
+  const scheme = secure ? "https" : "http"
+  return host ? `${scheme}://${host}${publicBasePath()}` : publicBasePath()
+}
+
 export function deepLinkScheme(): string {
   const configured = Deno.env.get("ORG_DEEP_LINK_SCHEME")?.trim()
   return configured && configured.length > 0 ? configured : DEFAULT_DEEP_LINK_SCHEME

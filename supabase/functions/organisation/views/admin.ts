@@ -74,7 +74,7 @@ ${domainsCard(action, csrf, domains)}`,
  */
 function newInviteCard(url: string): string {
   return `
-<section class="card" class="highlight">
+<section class="card highlight">
   <h2>Invite link created</h2>
   <p class="hint">This is the only time the link is shown. Only its hash is stored, so it cannot be recovered later.</p>
   <input type="text" class="mono" readonly value="${esc(url)}" aria-label="Invite link">
