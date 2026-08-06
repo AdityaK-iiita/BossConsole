@@ -1,11 +1,9 @@
 package ai.rever.boss.crash
 
+import ai.rever.boss.crash.pluginprobe.PluginProbeJar
 import ai.rever.boss.plugin.loader.PluginClassLoader
 import ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
-import java.io.File
 import java.lang.reflect.InvocationTargetException
-import java.util.jar.JarEntry
-import java.util.jar.JarOutputStream
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -23,48 +21,20 @@ import kotlin.test.assertTrue
  */
 class CrashHandlerAttributionTest {
     private companion object {
-        const val PLUGIN_ID = "test.plugin.probe"
+        const val PLUGIN_ID = PluginProbeJar.PLUGIN_ID
 
         /** Deliberately different from [PLUGIN_ID], so "the tag won" is distinguishable. */
         const val BOUNDARY_PLUGIN_ID = "test.plugin.boundary"
-        const val PROBE_CLASS = "ai.rever.boss.crash.pluginprobe.PluginProbe"
-        const val EXCEPTION_CLASS = "ai.rever.boss.crash.pluginprobe.ProbeException"
-
-        /** File facade holding `probeAction()`, whose lambda is the thing under test. */
-        const val PROBE_KT_CLASS = "ai.rever.boss.crash.pluginprobe.PluginProbeKt"
+        const val PROBE_CLASS = PluginProbeJar.PROBE_CLASS
+        const val EXCEPTION_CLASS = PluginProbeJar.EXCEPTION_CLASS
     }
 
-    private val jarFile: File = buildProbeJar()
-    private val loader =
-        PluginClassLoader(
-            pluginId = PLUGIN_ID,
-            urls = arrayOf(jarFile.toURI().toURL()),
-            parent = javaClass.classLoader,
-        )
+    /** Shared with the context-menu wiring test; see [PluginProbeJar]. */
+    private val probe = PluginProbeJar.open(javaClass.classLoader)
+    private val loader get() = probe.loader
 
     @AfterTest
-    fun tearDown() {
-        loader.close()
-        jarFile.delete()
-    }
-
-    /** Copy the fixture .class files from the test classpath into a jar. */
-    private fun buildProbeJar(): File {
-        val jar = File.createTempFile("plugin-probe", ".jar")
-        JarOutputStream(jar.outputStream()).use { out ->
-            for (className in listOf(PROBE_CLASS, EXCEPTION_CLASS, PROBE_KT_CLASS)) {
-                val resource = className.replace('.', '/') + ".class"
-                val bytes =
-                    checkNotNull(javaClass.classLoader.getResourceAsStream(resource)) {
-                        "fixture class $resource not on test classpath"
-                    }.use { it.readBytes() }
-                out.putNextEntry(JarEntry(resource))
-                out.write(bytes)
-                out.closeEntry()
-            }
-        }
-        return jar
-    }
+    fun tearDown() = probe.close()
 
     /** Invoke PluginProbe.<method>() via the plugin loader and return the cause. */
     private fun throwFromPlugin(method: String): Throwable {
@@ -174,11 +144,7 @@ class CrashHandlerAttributionTest {
         // silently un-attributed, with no visible failure until a session dies over
         // a plugin's bug. This is the callback shape the whole feature is built on:
         // ContextMenuItemData.onClick is exactly this.
-        val facade = loader.loadClass(PROBE_KT_CLASS)
-        assertEquals(loader, facade.classLoader, "the facade must be plugin-defined")
-
-        @Suppress("UNCHECKED_CAST")
-        val action = facade.getMethod("probeAction").invoke(null) as () -> Unit
+        val action = probe.action("probeAction")
 
         assertEquals(PLUGIN_ID, PluginExecutionBoundary.pluginIdOfOwner(action))
     }

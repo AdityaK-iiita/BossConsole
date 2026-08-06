@@ -28,3 +28,14 @@ class ProbeException : RuntimeException("custom probe exception")
  * session dies over a plugin's bug.
  */
 fun probeAction(): () -> Unit = { throw IllegalStateException("probe lambda boom") }
+
+/**
+ * A plugin-owned callback that reports back through a host-owned sink.
+ *
+ * The lambda's class is defined by the plugin loader, so `pluginIdOfOwner`
+ * resolves it; the sink is host-owned and reads the *current* attribution scope
+ * from inside the call. That combination is what makes "was this invoked inside
+ * its plugin's scope?" observable from a test without plugin code needing to
+ * reach host internals.
+ */
+fun probeReporter(sink: java.util.function.Consumer<String?>): () -> Unit = { sink.accept("invoked") }

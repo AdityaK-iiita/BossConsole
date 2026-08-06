@@ -50,8 +50,25 @@ fun interface PluginCrashRecoveryHandler {
 object PluginCrashRecovery {
     private val logger = BossLogger.forComponent("PluginCrashRecovery")
 
-    @Volatile
-    var handler: PluginCrashRecoveryHandler? = null
+    private val installed =
+        java.util.concurrent.atomic
+            .AtomicReference<PluginCrashRecoveryHandler?>(null)
+
+    var handler: PluginCrashRecoveryHandler?
+        get() = installed.get()
+        set(value) = installed.set(value)
+
+    /**
+     * Install [build]'s result only if nothing is installed yet.
+     *
+     * The desktop wiring runs once per window, and a plain `if (handler == null)`
+     * let two windows opening together both construct a coordinator. Harmless -
+     * they are equivalent - but a compare-and-set states the intent instead of
+     * relying on it.
+     */
+    fun installIfAbsent(build: () -> PluginCrashRecoveryHandler) {
+        if (installed.get() == null) installed.compareAndSet(null, build())
+    }
 
     /**
      * Whether [pluginId] could actually be recovered right now.

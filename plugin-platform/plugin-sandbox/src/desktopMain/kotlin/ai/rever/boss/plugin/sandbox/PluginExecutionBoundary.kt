@@ -128,6 +128,13 @@ object PluginExecutionBoundary {
      * First tag wins. A throwable crossing several boundaries on its way out
      * (plugin panel factory → sandboxed registry → plugin lifecycle) should keep
      * the innermost attribution, which is the one closest to the fault.
+     *
+     * **Caveat: a reused throwable keeps its first tag.** Some libraries throw a
+     * cached, stackless singleton, and a strongly-held one never leaves the weak
+     * map either. It would carry whichever plugin threw it first, for the life of
+     * the process. Low probability, and the failure direction is "wrong plugin
+     * disabled, app survives" rather than "session lost" - but if a real case turns
+     * up, keying on identity plus a timestamp is the way out.
      */
     fun tag(
         throwable: Throwable,
@@ -210,6 +217,23 @@ object PluginExecutionBoundary {
     private fun resolvePluginId(loader: ClassLoader): String? =
         runCatching { loader.javaClass.getMethod("getPluginId").invoke(loader) as? String }.getOrNull()
             ?: runCatching { loader.javaClass.getField("pluginId").get(loader) as? String }.getOrNull()
+
+    /**
+     * Invoke a plugin-supplied callback with its plugin in scope, allocating nothing.
+     *
+     * The counterpart to [wrapPluginCallback], and the better shape wherever the
+     * host owns the *call* rather than merely holding the reference. Wrapping at
+     * mapping time hands back a fresh closure every time, which for a context menu
+     * means a new one per item per recomposition - the items then compare unequal
+     * and Compose cannot skip the subtree. Attributing at the moment of invocation
+     * costs one cached class lookup and no allocation at all, and covers every
+     * callback that reaches the call site rather than only those that happened to
+     * be built through a wrapping factory.
+     */
+    fun invokeAttributed(action: () -> Unit) {
+        val pluginId = pluginIdOfOwner(action)
+        if (pluginId == null) action() else runAttributed(pluginId) { action() }
+    }
 
     /**
      * Wrap a plugin-supplied callback so a throwable escaping it is attributed.

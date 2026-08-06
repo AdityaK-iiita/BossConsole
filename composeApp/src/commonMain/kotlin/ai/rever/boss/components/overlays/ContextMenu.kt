@@ -4,6 +4,7 @@ import ContextMenuBackground
 import ContextMenuBorder
 import ContextMenuHover
 import ai.rever.boss.platform.ContextMenuHandler
+import ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
 import ai.rever.boss.plugin.ui.BossTheme
 import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
@@ -177,7 +178,14 @@ private fun ContextMenuContent(
                                         Modifier
                                     } else {
                                         Modifier.clickable {
-                                            item.onClick()
+                                            // Attributed at the call, not at the item: a plugin's
+                                            // onClick is a lambda the plugin registered and the HOST
+                                            // invokes, so by the time it throws there is nothing
+                                            // plugin-shaped on the stack and the crash gets blamed on
+                                            // BOSS. Doing it here rather than while mapping the items
+                                            // costs no allocation, so the items stay equal across
+                                            // recompositions and Compose can still skip this subtree.
+                                            PluginExecutionBoundary.invokeAttributed(item.onClick)
                                             onDismissRequest()
                                         }
                                     },
@@ -389,7 +397,8 @@ private fun SubMenuContent(
                                     Modifier
                                 } else {
                                     Modifier.clickable {
-                                        subItem.onClick()
+                                        // Submenu items are plugin-owned just as often; see above.
+                                        PluginExecutionBoundary.invokeAttributed(subItem.onClick)
                                         onDismissRequest()
                                     }
                                 },
