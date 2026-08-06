@@ -103,9 +103,22 @@ actual object PluginLoaderDelegateSetup {
 
                     override fun persistDisabled(pluginId: String) = persistCrashDisable(pluginId)
 
-                    override fun notifyDisabled(pluginId: String) =
+                    // Present tense: nothing has been disabled yet when this fires.
+                    // The unload runs in the background, and the past-tense wording
+                    // this replaced made a claim about work that had not started -
+                    // which was wrong precisely when it mattered, since a disable
+                    // that finds no live manager leaves the plugin back and enabled
+                    // at the next launch.
+                    override fun notifyDisabling(pluginId: String) =
                         StatusMessageManager.showMessage(
-                            "Plugin '$pluginId' crashed and was disabled. Re-enable it from Toolbox.",
+                            "Plugin '$pluginId' crashed and is being disabled. Re-enable it from Toolbox.",
+                            durationMs = CRASH_NOTICE_MILLIS,
+                        )
+
+                    override fun notifyDisableIncomplete(pluginId: String) =
+                        StatusMessageManager.showMessage(
+                            "Plugin '$pluginId' could not be fully disabled and may return on restart. " +
+                                "Disable it from Toolbox.",
                             durationMs = CRASH_NOTICE_MILLIS,
                         )
                 },
@@ -126,21 +139,29 @@ actual object PluginLoaderDelegateSetup {
      * Adding the entry also stops the directory scan re-installing it, since the
      * persisted pass registers a disabled plugin's jar as tracked.
      */
-    private fun persistCrashDisable(pluginId: String) {
-        if (PluginPersistence.isInstalled(pluginId)) {
-            PluginPersistence.setPluginEnabled(pluginId, false)
-            return
+    internal fun persistCrashDisable(
+        pluginId: String,
+        isInstalled: (String) -> Boolean = PluginPersistence::isInstalled,
+        jarPathOf: (String) -> String? = DynamicPluginManager::jarPathOf,
+        setEnabled: (String, Boolean) -> Unit = PluginPersistence::setPluginEnabled,
+        addInstalled: (String, String, Boolean) -> Unit = { id, jar, enabled ->
+            PluginPersistence.addInstalledPlugin(pluginId = id, jarPath = jar, enabled = enabled)
+        },
+    ): Boolean {
+        if (isInstalled(pluginId)) {
+            setEnabled(pluginId, false)
+            return true
         }
-        val jarPath = DynamicPluginManager.jarPathOf(pluginId)
-        if (jarPath == null) {
-            logger.warn(
+        // No entry to update. A jar dropped into the plugins directory by hand has
+        // none, and that is the case this branch exists for.
+        val jarPath = jarPathOf(pluginId)
+        jarPath?.let { addInstalled(pluginId, it, false) }
+            ?: logger.warn(
                 LogCategory.SYSTEM,
                 "Cannot persist the crash-disable - no installed entry and no known jar",
                 mapOf("pluginId" to pluginId),
             )
-            return
-        }
-        PluginPersistence.addInstalledPlugin(pluginId = pluginId, jarPath = jarPath, enabled = false)
+        return jarPath != null
     }
 
     /**

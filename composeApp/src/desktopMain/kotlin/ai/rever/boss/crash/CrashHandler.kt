@@ -504,13 +504,18 @@ object CrashHandler {
                 error = throwable,
             )
 
-            if (shouldRecordRatherThanPrompt(throwable)) {
+            // Resolved once and threaded through. Attribution's slow path walks
+            // twelve causes and asks the plugin classloaders about every frame of
+            // each, on the crashing thread; doing it here and again inside
+            // createCrashReport made a repeat crash pay for it twice.
+            val attributedPluginId = attributePluginId(throwable)
+            if (shouldRecordRatherThanPrompt(throwable, attributedPluginId)) {
                 recordContained(throwable)
                 return
             }
 
             // Create crash report
-            val report = createCrashReport(throwable)
+            val report = createCrashReport(throwable, attributedPluginId)
             _pendingCrashReport.value = report
 
             // Show dialog in a separate window (works even if main UI is broken)
@@ -548,12 +553,15 @@ object CrashHandler {
      * [recordContained] dedupes by signature, so a fault repeating every frame
      * costs one file and a log line on a curve.
      */
-    internal fun shouldRecordRatherThanPrompt(throwable: Throwable): Boolean {
+    internal fun shouldRecordRatherThanPrompt(
+        throwable: Throwable,
+        attributedPluginId: String? = attributePluginId(throwable),
+    ): Boolean {
         // isRecoveryQuarantined, NOT hasCrashed: the latter is also set by the
         // ordinary contained-render-fault path, so gating on it silenced the dialog
         // for any plugin whose panel had ever shown a fallback - still enabled and
         // still running - which is worse than the behaviour this feature replaced.
-        val quarantined = attributePluginId(throwable)?.let { PluginRecoveryQuarantine.isQuarantined(it) } == true
+        val quarantined = attributedPluginId?.let { PluginRecoveryQuarantine.isQuarantined(it) } == true
         // Short-circuit, so the dialog slot is only claimed when the crash is
         // actually going to open one.
         val reason =
@@ -725,7 +733,10 @@ object CrashHandler {
     /**
      * Create a crash report from an exception.
      */
-    private fun createCrashReport(throwable: Throwable): CrashReport {
+    private fun createCrashReport(
+        throwable: Throwable,
+        attributedPluginId: String? = attributePluginId(throwable),
+    ): CrashReport {
         val signature = CrashSignature.generate(throwable)
         val stackTrace = getStackTraceString(throwable)
         val sanitizedStackTrace = LogSanitizer.sanitizeStackTrace(stackTrace)
@@ -739,7 +750,7 @@ object CrashHandler {
             systemInfo = collectSystemInfo(),
             appInfo = collectAppInfo(),
             timestamp = System.currentTimeMillis(),
-            pluginId = attributePluginId(throwable),
+            pluginId = attributedPluginId,
         )
     }
 

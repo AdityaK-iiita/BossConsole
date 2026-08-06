@@ -159,7 +159,18 @@ object PluginExecutionBoundary {
         return null
     }
 
-    /** The plugin this thread is executing right now, innermost first, or null. */
+    /**
+     * The plugin this thread is executing right now, innermost first, or null.
+     *
+     * **Not re-entrancy safe against a nested event pump.** Swing runs a secondary
+     * event loop on the same EDT for modal dialogs, popups and drag loops. If
+     * plugin code inside [runAttributed] opens one, an unrelated *host* exception
+     * dispatched during that pump sees this scope still on the deque and is
+     * attributed to the plugin. Left as is: the tag is consulted first and is
+     * exact, this is only the fallback ahead of the classloader scan, and the
+     * failure direction is "blames a plugin for a host bug" rather than "loses the
+     * session". Worth revisiting if a real case turns up.
+     */
     fun currentPluginId(): String? = executing.get()?.lastOrNull()
 
     /**

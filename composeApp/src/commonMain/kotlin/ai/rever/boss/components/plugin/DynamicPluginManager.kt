@@ -22,6 +22,7 @@ import ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
 import ai.rever.boss.plugin.sandbox.PluginSandboxManager
 import ai.rever.boss.plugin.sandbox.SandboxConfig
 import ai.rever.boss.plugin.sandbox.ui.PluginCrashRegistry
+import ai.rever.boss.plugin.sandbox.ui.PluginRecoveryQuarantine
 import ai.rever.boss.services.auth.AuthStateManager
 import ai.rever.boss.utils.AppVersion
 import ai.rever.boss.utils.logging.BossLogger
@@ -1268,6 +1269,7 @@ class DynamicPluginManager(
                     // has already dealt with and wrong once they have re-armed it.
                     PluginCrashRegistry.clearIncompatible(pluginId)
                     PluginCrashRegistry.clearCrash(pluginId)
+                    PluginRecoveryQuarantine.clear(pluginId)
 
                     // Update state
                     val currentInfo = _pluginStates.value[pluginId]
@@ -1883,8 +1885,19 @@ class DynamicPluginManager(
         _pluginStates.value = _pluginStates.value + (pluginId to info)
     }
 
+    /**
+     * Forget a plugin entirely: its state, and any crash quarantine on it.
+     *
+     * Both uninstall paths land here, which is why the quarantine release lives
+     * here rather than at each of them. Without it, uninstalling a
+     * crash-quarantined plugin and installing a fixed build kept the marker, and
+     * the fixed plugin's next genuine crash would have gone silently to disk with
+     * no dialog and no disable.
+     */
     private fun removePluginState(pluginId: String) {
         _pluginStates.value = _pluginStates.value - pluginId
+        PluginRecoveryQuarantine.clear(pluginId)
+        PluginCrashRegistry.clearCrash(pluginId)
     }
 
     private fun <T> cleanupDeadReferences(list: CopyOnWriteArrayList<WeakReference<T>>) {

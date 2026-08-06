@@ -161,6 +161,11 @@ internal fun CrashReportDialog(
     // close box - can refuse while a submission is in flight. Escape and the
     // button gate on the local state below; this is the same fact, told to the
     // one caller that cannot see it.
+    //
+    // The submit handler also calls this directly on both edges, so the close box's
+    // gate flips in the same instant theirs does. Through a LaunchedEffect alone it
+    // trailed them by a recomposition, which is a window - small, but exactly the
+    // kind a fast double-input walks into.
     LaunchedEffect(isSubmitting) { onSubmittingChanged(isSubmitting) }
 
     // Render directly in the window (no Dialog wrapper needed since this is shown in its own JFrame)
@@ -564,8 +569,13 @@ internal fun CrashReportDialog(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
             ) {
-                // Clean & Restart button
-                if (onCleanAndRestart != null) {
+                // Clean & Restart button. Gated on the disposition as well as the
+                // callback: the caller already passes null for a recoverable crash,
+                // but that left the invariant - "wiping the install is never offered
+                // as the answer to one plugin misbehaving" - resting entirely on a
+                // call site with no test, and a test here could only assert it
+                // vacuously. Now it holds however this is called.
+                if (onCleanAndRestart != null && recoverablePluginId == null) {
                     Button(
                         onClick = onCleanAndRestart,
                         enabled = !isSubmitting,
@@ -609,6 +619,7 @@ internal fun CrashReportDialog(
                 Button(
                     onClick = {
                         isSubmitting = true
+                        onSubmittingChanged(true)
                         coroutineScope.launch {
                             // Update report with user input
                             CrashHandler
@@ -619,6 +630,7 @@ internal fun CrashReportDialog(
                                     val result = CrashReportService.submitCrashReport(updatedReport)
                                     submitResult = result
                                     isSubmitting = false
+                                    onSubmittingChanged(false)
 
                                     // If successful, call onSubmit after a brief delay
                                     if (result is CrashReportService.SubmitResult.Success) {
@@ -628,6 +640,7 @@ internal fun CrashReportDialog(
                                 } ?: run {
                                 submitResult = CrashReportService.SubmitResult.Error("Failed to prepare report")
                                 isSubmitting = false
+                                onSubmittingChanged(false)
                             }
                         }
                     },

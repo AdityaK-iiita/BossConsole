@@ -62,6 +62,10 @@ class CrashRecoveryTest {
         PluginCrashRecovery.handler = null
         PluginCrashRegistry.clearCrash(OFFENDER)
         PluginCrashRegistry.clearCrash(BYSTANDER)
+        // Separately, since clearCrash no longer implies it - a leaked quarantine
+        // marker would silence the crash dialog in whatever test ran next.
+        PluginRecoveryQuarantine.clear(OFFENDER)
+        PluginRecoveryQuarantine.clear(BYSTANDER)
     }
 
     private fun controller(
@@ -238,8 +242,13 @@ class CrashRecoveryTest {
         assertTrue(CrashHandler.shouldRecordRatherThanPrompt(laterCrash), "suppressed while quarantined")
         CrashHandler.releaseDialogSlot()
 
-        // What DynamicPluginManager.enablePlugin does on a deliberate re-arm.
+        // What DynamicPluginManager.enablePlugin does on a deliberate re-arm - both
+        // calls. clearCrash alone deliberately no longer releases the quarantine,
+        // because it has automatic callers (PluginRenderRecovery.releaseSuspect),
+        // and letting a render fault drop the marker would re-open a crash dialog
+        // for a plugin the user had already dealt with.
         PluginCrashRegistry.clearCrash(OFFENDER)
+        PluginRecoveryQuarantine.clear(OFFENDER)
 
         assertFalse(
             CrashHandler.shouldRecordRatherThanPrompt(laterCrash),
@@ -279,6 +288,47 @@ class CrashRecoveryTest {
         controller.isSubmitting = false
         controller.dismiss()
         assertEquals(listOf(OFFENDER), recovered)
+    }
+
+    @Test
+    fun `dispositionFor wires the report's plugin id and the seam's availability`() {
+        val report = report()
+        // classifyCrash is tested to exhaustion on its own; this pins the wiring,
+        // which is where a recoverable crash would quietly become fatal.
+        assertIs<CrashDisposition.FatalHost>(
+            CrashHandler.dispositionFor(error, report),
+            "with no recovery handler installed, even an attributed crash is fatal",
+        )
+
+        installRecovery(succeeds = true)
+
+        assertEquals(CrashDisposition.RecoverablePlugin(OFFENDER), CrashHandler.dispositionFor(error, report))
+        assertIs<CrashDisposition.FatalHost>(
+            CrashHandler.dispositionFor(error, report.copy(pluginId = null)),
+            "a host crash stays fatal however the seam is wired",
+        )
+    }
+
+    @Test
+    fun `a crash arriving during recovery does not re-enter it`() {
+        // The window is gone but resolve is still running. A crash landing here
+        // used to be able to open a second dialog for a plugin already being
+        // recovered; the quarantine marker is set before the unload starts, so the
+        // handler sees it even mid-recovery.
+        var seenDuringRecovery: Boolean? = null
+        PluginCrashRecovery.handler =
+            PluginCrashRecoveryHandler { pluginId, _ ->
+                PluginRecoveryQuarantine.mark(pluginId)
+                val nested = IllegalStateException("a crash while recovery is running")
+                PluginExecutionBoundary.tag(nested, pluginId)
+                seenDuringRecovery = CrashHandler.shouldRecordRatherThanPrompt(nested)
+                true
+            }
+
+        controller(recoverable).dismiss()
+
+        assertEquals(true, seenDuringRecovery, "a crash during recovery must be recorded, not prompted")
+        assertEquals(emptyList(), exitCodes)
     }
 
     @Test
@@ -340,7 +390,7 @@ class CrashRecoveryTest {
     }
 
     @Test
-    fun `recovery tells the user which plugin was disabled`() {
+    fun `recovery tells the user which plugin is being disabled`() {
         val fake = FakePluginLayer(known = setOf(OFFENDER))
         PluginCrashRecovery.handler = fake.coordinator()
 
@@ -348,6 +398,31 @@ class CrashRecoveryTest {
 
         val message = fake.notices.single()
         assertTrue(OFFENDER in message, "the notice must name the plugin: $message")
+        assertEquals(emptyList(), fake.corrections, "a clean unload needs no correction")
+    }
+
+    @Test
+    fun `a disable that does not take is corrected to the user`() {
+        // The first notice fires before any of the unload runs, because the user is
+        // looking at the app the moment the dialog closes. When no live manager
+        // accepts the disable, the plugin is quarantined in memory only and comes
+        // back enabled at the next launch - the opposite of what they were told.
+        val fake = FakePluginLayer(known = setOf(OFFENDER), disableSucceeds = false)
+        PluginCrashRecovery.handler = fake.coordinator()
+
+        controller(recoverable).dismiss()
+
+        assertEquals(listOf(OFFENDER), fake.corrections)
+    }
+
+    @Test
+    fun `a disable that cannot be persisted is corrected to the user`() {
+        val fake = FakePluginLayer(known = setOf(OFFENDER), persistSucceeds = false)
+        PluginCrashRecovery.handler = fake.coordinator()
+
+        controller(recoverable).dismiss()
+
+        assertEquals(listOf(OFFENDER), fake.corrections)
     }
 
     @Test
@@ -394,11 +469,14 @@ class CrashRecoveryTest {
     private class FakePluginLayer(
         private val known: Set<String>,
         private val tabTeardownThrows: Boolean = false,
+        private val disableSucceeds: Boolean = true,
+        private val persistSucceeds: Boolean = true,
     ) : PluginRecoverySteps {
         val tabsClosed = mutableListOf<String>()
         val disabled = mutableListOf<String>()
         val persistedDisabled = mutableListOf<String>()
         val notices = mutableListOf<String>()
+        val corrections = mutableListOf<String>()
 
         override fun isKnown(pluginId: String) = pluginId in known
 
@@ -415,15 +493,20 @@ class CrashRecoveryTest {
 
         override suspend fun disable(pluginId: String): Boolean {
             disabled.add(pluginId)
-            return true
+            return disableSucceeds
         }
 
-        override fun persistDisabled(pluginId: String) {
+        override fun persistDisabled(pluginId: String): Boolean {
             persistedDisabled.add(pluginId)
+            return persistSucceeds
         }
 
-        override fun notifyDisabled(pluginId: String) {
-            notices.add("Plugin '$pluginId' crashed and was disabled. Re-enable it from Toolbox.")
+        override fun notifyDisabling(pluginId: String) {
+            notices.add("Plugin '$pluginId' crashed and is being disabled. Re-enable it from Toolbox.")
+        }
+
+        override fun notifyDisableIncomplete(pluginId: String) {
+            corrections.add(pluginId)
         }
 
         /**

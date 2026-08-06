@@ -54,9 +54,12 @@ class CrashReportDialogRecoveryTest {
 
     @Test
     fun `a recoverable plugin crash never offers to clean the data directory`() {
-        // Passed onCleanAndRestart anyway: the production caller suppresses it, and
-        // this asserts the dialog does not resurrect it from some other path.
-        rule.setContent { Dialog(recoverablePluginId = PLUGIN, offerCleanAndRestart = false) }
+        // offerCleanAndRestart = TRUE on purpose. The production caller passes null
+        // here, but asserting against that combination proved nothing about the
+        // dialog - it only re-stated that null renders nothing. Passing a non-null
+        // callback is the case that would have rendered the button before the
+        // disposition gate was added, so this is the assertion with teeth.
+        rule.setContent { Dialog(recoverablePluginId = PLUGIN, offerCleanAndRestart = true) }
 
         rule.onNodeWithText("Clean Data & Restart").assertDoesNotExist()
         rule.onNodeWithText(DONT_SEND_LABEL).assertDoesNotExist()

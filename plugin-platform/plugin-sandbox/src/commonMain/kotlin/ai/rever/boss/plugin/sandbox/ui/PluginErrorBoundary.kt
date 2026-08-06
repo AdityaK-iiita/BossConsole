@@ -207,14 +207,21 @@ object PluginCrashRegistry {
     /**
      * Clear crash state for a plugin (e.g., after restart or tab close). Safe to call from EDT.
      *
-     * Clears the recovery quarantine too: every caller of this is a deliberate
-     * re-arm (enabling the plugin, Restart or Dismiss in the fallback), and leaving
-     * that marker would keep the crash dialog suppressed for a plugin the user has
-     * explicitly put back.
+     * Deliberately does **not** touch [PluginRecoveryQuarantine]. An earlier version
+     * did, on the claim that every caller here is a deliberate re-arm, and that was
+     * simply false: [PluginRenderRecovery.releaseSuspect] calls this from two fully
+     * automatic paths (`startFreshCycle` and `releaseSuspectAsInnocent`). A render
+     * fault naming a recovering plugin as its suspect would then drop the
+     * quarantine, and that plugin's next throw would open a second crash dialog for
+     * something the user had already dealt with - the exact repetition the
+     * quarantine exists to prevent.
+     *
+     * The quarantine is released only at the genuinely deliberate sites, which call
+     * [PluginRecoveryQuarantine.clear] themselves: enabling the plugin, uninstalling
+     * it, and Restart / Dismiss in the error fallback.
      */
     fun clearCrash(pluginId: String) {
         _crashedPluginsMap.remove(pluginId)
-        PluginRecoveryQuarantine.clear(pluginId)
         _crashedPluginsState.value = _crashedPluginsMap.toMap()
     }
 
@@ -418,6 +425,9 @@ fun PluginErrorBoundary(
                 )
                 error = null
                 PluginCrashRegistry.clearCrash(pluginId)
+                // A deliberate re-arm, so the recovery quarantine goes too - see
+                // PluginCrashRegistry.clearCrash for why this is not folded in there.
+                PluginRecoveryQuarantine.clear(pluginId)
                 onRestart()
             },
             onDismiss = {
@@ -430,6 +440,7 @@ fun PluginErrorBoundary(
                 )
                 error = null
                 PluginCrashRegistry.clearCrash(pluginId)
+                PluginRecoveryQuarantine.clear(pluginId)
             },
         )
     } else {

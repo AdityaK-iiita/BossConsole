@@ -99,11 +99,29 @@ interface PluginRecoverySteps {
     /** Disable it in every live manager; false if none accepted it. */
     suspend fun disable(pluginId: String): Boolean
 
-    /** Record the disable, so a crash-on-load plugin does not return next launch. */
-    fun persistDisabled(pluginId: String)
+    /**
+     * Record the disable, so a crash-on-load plugin does not return next launch.
+     *
+     * @return whether anything was actually written. False is a real outcome, not
+     *   an error: the plugin may not be installed and have no known jar, in which
+     *   case nothing can be recorded and the user needs to hear about it.
+     */
+    fun persistDisabled(pluginId: String): Boolean
 
-    /** Tell the user which plugin went away and how to get it back. */
-    fun notifyDisabled(pluginId: String)
+    /** Tell the user which plugin is going away and how to get it back. */
+    fun notifyDisabling(pluginId: String)
+
+    /**
+     * Tell the user the unload did not fully take.
+     *
+     * The first notice fires before any of the unload has run, because the user is
+     * looking at the app the moment the dialog closes and deserves to know why a
+     * plugin just vanished. When `disableEverywhere` finds no live manager, or the
+     * disable cannot be persisted, the plugin is quarantined in memory only and
+     * will be back at the next launch - the opposite of what they were told. This
+     * is the correction.
+     */
+    fun notifyDisableIncomplete(pluginId: String)
 }
 
 /**
@@ -214,7 +232,7 @@ class PluginCrashRecoveryCoordinator(
     @Suppress("TooGenericExceptionCaught")
     private fun notifySafely(pluginId: String) {
         try {
-            steps.notifyDisabled(pluginId)
+            steps.notifyDisabling(pluginId)
         } catch (t: Throwable) {
             logger.warn(
                 LogCategory.SYSTEM,
@@ -237,16 +255,27 @@ class PluginCrashRecoveryCoordinator(
             runCatching { steps.disable(pluginId) }
                 .onFailure { logFailure("disable the crashed plugin", pluginId, it) }
                 .getOrDefault(false)
-        runCatching { steps.persistDisabled(pluginId) }
-            .onFailure { logFailure("persist the disabled state", pluginId, it) }
+        val persisted =
+            runCatching { steps.persistDisabled(pluginId) }
+                .onFailure { logFailure("persist the disabled state", pluginId, it) }
+                .getOrDefault(false)
         logger.info(
             LogCategory.SYSTEM,
             "Crashed plugin unloaded",
             mapOf(
                 "pluginId" to pluginId,
                 "disabledInManagers" to disabled.toString(),
+                "persisted" to persisted.toString(),
             ),
         )
+        // The user was told the plugin is being disabled before any of this ran.
+        // If it did not take - no live manager accepted the disable, or the state
+        // could not be written - they are owed the correction, or they will meet
+        // the same plugin, enabled, at the next launch.
+        if (!disabled || !persisted) {
+            runCatching { steps.notifyDisableIncomplete(pluginId) }
+                .onFailure { logFailure("report an incomplete disable", pluginId, it) }
+        }
     }
 
     private fun logFailure(
