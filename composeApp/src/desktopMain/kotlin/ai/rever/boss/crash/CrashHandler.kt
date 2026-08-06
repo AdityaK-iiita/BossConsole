@@ -197,10 +197,8 @@ object CrashHandler {
      * Matched by class-name suffix + message so we don't need a compile
      * dependency on ktor/coroutines here.
      */
-    internal fun isIgnorable(throwable: Throwable): Boolean {
-        var t: Throwable? = throwable
-        var depth = 0
-        while (t != null && depth < 12) {
+    internal fun isIgnorable(throwable: Throwable): Boolean =
+        throwable.causeChain().any { t ->
             val name = t.javaClass.name
             val msg = t.message ?: ""
             val benign =
@@ -218,12 +216,8 @@ object CrashHandler {
                                 msg.contains("Connection refused", ignoreCase = true)
                         )
                     )
-            if (benign) return true
-            t = t.cause
-            depth++
+            benign
         }
-        return false
-    }
 
     /**
      * Record a crash report for something already contained and recovered from.
@@ -481,6 +475,10 @@ object CrashHandler {
      * host crash still ends the process. Anything already contained and recovered
      * from by the render path goes to [recordContained] instead of here.
      */
+    // Throwable, not Exception: this function claims the dialog slot and only the
+    // controller gives it back, so an Error escaping between the two would leave
+    // the slot held for the life of the process - see the catch below.
+    @Suppress("TooGenericExceptionCaught")
     private fun handleCrash(
         thread: Thread,
         throwable: Throwable,
@@ -528,10 +526,19 @@ object CrashHandler {
                     showCrashDialogWindow(report, throwable)
                 }
             }
-        } catch (e: Exception) {
+            // Throwable, not Exception. This block claims the dialog slot and the
+            // only thing that gives it back is the controller; an Error escaping
+            // between the two - NoClassDefFoundError or ExceptionInInitializerError
+            // out of Compose or Skiko, UnsatisfiedLinkError, an OOM while the stack
+            // is sanitised - left the process running with the slot held forever,
+            // so every later crash including a fatal one went silently to disk with
+            // no dialog and no exit. Before recovery existed the same throw escaped
+            // too, but there was no slot to leak and the next crash still prompted.
+        } catch (e: Throwable) {
             // If crash handling itself fails, log to stderr and chain
             System.err.println("CrashHandler failed: ${e.message}")
             e.printStackTrace()
+            releaseDialogSlot()
             // Still try to exit cleanly
             processExit(1)
         }
@@ -638,6 +645,7 @@ object CrashHandler {
      * This window is independent of the main Compose UI, so it will display
      * even when the main UI thread has crashed.
      */
+    @Suppress("TooGenericExceptionCaught")
     private fun showCrashDialogWindow(
         report: CrashReport,
         throwable: Throwable,
@@ -710,7 +718,11 @@ object CrashHandler {
             // Bring to front
             frame.toFront()
             frame.requestFocus()
-        } catch (e: Exception) {
+            // Throwable for the same reason as handleCrash's net: this is the path
+            // that runs when the app is already broken, so an Error out of
+            // ComposePanel() or pack() is realistic, and it must still reach the
+            // controller that releases the dialog slot.
+        } catch (e: Throwable) {
             logger.error(LogCategory.SYSTEM, "Failed to show crash dialog window", error = e)
             System.err.println("Failed to show crash dialog: ${e.message}")
             e.printStackTrace()
@@ -782,13 +794,8 @@ object CrashHandler {
         PluginExecutionBoundary.attributionFor(throwable)?.let { return it }
         PluginExecutionBoundary.currentPluginId()?.let { return it }
         return try {
-            val chain = mutableListOf<Throwable>()
-            var t: Throwable? = throwable
-            while (t != null && chain.size < 12 && t !in chain) {
-                chain.add(t)
-                t = t.cause
-            }
-            for (cause in chain.asReversed()) {
+            // Root cause first: the crash origin outranks the layers that wrapped it.
+            for (cause in throwable.causeChain().asReversed()) {
                 (cause.javaClass.classLoader as? PluginClassLoader)?.let { return it.pluginId }
                 for (frame in cause.stackTrace) {
                     PluginClassLoader.findPluginForClass(frame.className)?.let { return it }

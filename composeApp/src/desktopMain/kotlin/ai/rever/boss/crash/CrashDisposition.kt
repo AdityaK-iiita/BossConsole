@@ -55,34 +55,18 @@ fun classifyCrash(
         else -> CrashDisposition.RecoverablePlugin(pluginId)
     }
 
-/** How far [anyCauseIsUncontainable] walks, matching `PluginExecutionBoundary`. */
-private const val MAX_CAUSE_DEPTH = 12
-
 /**
  * [isUncontainable] applied to the whole cause chain, not just the top.
  *
  * The flat check was not enough for the way these actually arrive. Attribution
- * deliberately walks up to twelve causes because wrapping is routine - an
- * `InvocationTargetException` from a reflective call, a `CompletionException` from
- * a future, Compose's own wrappers - so an `OutOfMemoryError` reaching here as
- * `InvocationTargetException(cause = OutOfMemoryError)` got tagged with a plugin
- * id, passed a top-level `is` check, and classified as recoverable. Recovery would
- * then allocate a status message, launch a coroutine and tear down tabs across
- * every window on an already-exhausted heap, which is the exact thing the carve-out
- * exists to prevent.
+ * deliberately walks the causes because wrapping is routine, so an
+ * `OutOfMemoryError` reaching here as `InvocationTargetException(cause = OOM)` got
+ * tagged with a plugin id, passed a top-level `is` check, and classified as
+ * recoverable. Recovery would then allocate a status message, launch a coroutine
+ * and tear down tabs across every window on an already-exhausted heap, which is
+ * the exact thing the carve-out exists to prevent.
  *
- * Bounded and cycle-guarded for the same reason attribution is: a crash handler
- * that hangs is worse than one that misattributes.
+ * Shared with [decideWindowExceptionRoute] through [causeChain], because the two
+ * carve-outs are worthless unless they agree - and for one round they did not.
  */
-private fun anyCauseIsUncontainable(throwable: Throwable): Boolean {
-    var current: Throwable? = throwable
-    var depth = 0
-    val seen = ArrayList<Throwable>(MAX_CAUSE_DEPTH)
-    while (current != null && depth < MAX_CAUSE_DEPTH && seen.none { it === current }) {
-        if (isUncontainable(current)) return true
-        seen.add(current)
-        current = current.cause
-        depth++
-    }
-    return false
-}
+internal fun anyCauseIsUncontainable(throwable: Throwable): Boolean = throwable.causeChain().any { isUncontainable(it) }

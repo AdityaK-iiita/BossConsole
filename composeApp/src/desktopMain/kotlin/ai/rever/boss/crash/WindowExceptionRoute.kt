@@ -29,7 +29,10 @@ enum class WindowExceptionRoute {
  * Order matters and is the point of this function:
  *
  * 1. **Attributed** to a plugin — the interceptor already knows what to do.
- * 2. **Uncontainable** ([isUncontainable]) — escalate before anything else. The
+ * 2. **Uncontainable** ([anyCauseIsUncontainable], the whole cause chain and not
+ *    just the top - a wrapped OutOfMemoryError is still an OutOfMemoryError, and
+ *    this check was flat while its twin in [classifyCrash] was not) — escalate
+ *    before anything else. The
  *    render boundary rethrows [OutOfMemoryError] rather than blaming a plugin for
  *    it, and that carve-out is worthless unless this agrees: containing here
  *    would log, toast, and repaint every window, which under heap exhaustion is
@@ -47,7 +50,7 @@ fun decideWindowExceptionRoute(
 ): WindowExceptionRoute =
     when {
         attributedPluginId != null -> WindowExceptionRoute.PluginHandled
-        isUncontainable(throwable) -> WindowExceptionRoute.Escalate
+        anyCauseIsUncontainable(throwable) -> WindowExceptionRoute.Escalate
         !policy.recordFailureAndShouldContain() -> WindowExceptionRoute.Escalate
         else -> WindowExceptionRoute.Contain
     }

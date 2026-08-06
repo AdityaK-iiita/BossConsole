@@ -440,7 +440,12 @@ fun PluginErrorBoundary(
                 )
                 error = null
                 PluginCrashRegistry.clearCrash(pluginId)
-                PluginRecoveryQuarantine.clear(pluginId)
+                // Deliberately NOT clearing the recovery quarantine. Dismiss hides
+                // this panel; it does not restart or enable anything. If crash
+                // recovery disabled the plugin and a thread of its own is still
+                // throwing, releasing the marker here would re-open a crash dialog
+                // for a plugin that is already off - the repetition the marker
+                // exists to prevent. Restart, above, is the re-arm.
             },
         )
     } else {
