@@ -1,0 +1,302 @@
+package ai.rever.boss.crash
+
+import ai.rever.boss.plugin.sandbox.ui.PluginCrashRegistry
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+/**
+ * Covers what happens when the crash dialog closes.
+ *
+ * Until this change every exit terminated the process: "Don't Send", Escape and
+ * even a *successful* report submission all reached `System.exit(1)`, while the
+ * window's close box quietly disposed the frame and did nothing else. So a plugin
+ * throwing from a context-menu handler cost the user every window, tab and live
+ * terminal session, and which of the three exits they used changed the outcome.
+ *
+ * These tests pin both halves: a plugin crash is survivable, a host crash is
+ * still not, and all three exits do the same thing.
+ *
+ * [CrashHandler.processExit] is swapped for a recorder rather than mocked away -
+ * a test that calls the real one takes the suite with it.
+ */
+class CrashRecoveryTest {
+    private companion object {
+        const val OFFENDER = "ai.rever.boss.plugin.dynamic.probe"
+        const val BYSTANDER = "ai.rever.boss.plugin.dynamic.bystander"
+    }
+
+    private val error = IllegalStateException("plugin action boom")
+    private val exitCodes = mutableListOf<Int>()
+    private val disposed = mutableListOf<String>()
+
+    @BeforeTest
+    fun setUp() {
+        exitCodes.clear()
+        disposed.clear()
+        CrashHandler.processExit = { code -> exitCodes.add(code) }
+        CrashHandler.setPendingReportForTest(null)
+        PluginCrashRecovery.handler = null
+    }
+
+    @AfterTest
+    fun tearDown() {
+        CrashHandler.processExit = { code -> System.exit(code) }
+        CrashHandler.setPendingReportForTest(null)
+        PluginCrashRecovery.handler = null
+        PluginCrashRegistry.clearCrash(OFFENDER)
+        PluginCrashRegistry.clearCrash(BYSTANDER)
+    }
+
+    private fun controller(
+        disposition: CrashDisposition,
+        onDispose: String = "dialog",
+    ) = CrashDialogController(
+        disposition = disposition,
+        error = error,
+        disposeWindow = { disposed.add(onDispose) },
+    )
+
+    private val recoverable = CrashDisposition.RecoverablePlugin(OFFENDER)
+
+    /** A recovery seam that reports success without needing a plugin manager. */
+    private fun installRecovery(succeeds: Boolean): MutableList<String> {
+        val recovered = mutableListOf<String>()
+        PluginCrashRecovery.handler =
+            PluginCrashRecoveryHandler { pluginId, _ ->
+                recovered.add(pluginId)
+                succeeds
+            }
+        return recovered
+    }
+
+    @Test
+    fun `dismissing a plugin crash does not exit the process`() {
+        val recovered = installRecovery(succeeds = true)
+
+        val outcome = controller(recoverable).dismiss()
+
+        assertEquals(emptyList(), exitCodes, "a recoverable plugin crash must never reach System.exit")
+        assertEquals(CrashOutcome.Recovered(OFFENDER), outcome)
+        assertEquals(listOf(OFFENDER), recovered)
+        assertEquals(listOf("dialog"), disposed, "the crash window must be disposed either way")
+    }
+
+    @Test
+    fun `dismissing a plugin crash clears the pending report`() {
+        installRecovery(succeeds = true)
+        CrashHandler.setPendingReportForTest(report())
+
+        controller(recoverable).dismiss()
+
+        // A report left pending would be picked up by the next submission and sent
+        // as if it were that crash.
+        assertNull(CrashHandler.pendingCrashReport.value)
+    }
+
+    @Test
+    fun `submitting a report does not terminate after a recoverable plugin crash`() {
+        installRecovery(succeeds = true)
+
+        val outcome = controller(recoverable).submit(userNotes = "clicked the menu item", includeLogs = true)
+
+        assertEquals(emptyList(), exitCodes, "reporting a plugin bug must not cost the session")
+        assertEquals(CrashOutcome.Recovered(OFFENDER), outcome)
+    }
+
+    @Test
+    fun `the close box takes the same action as the visible button`() {
+        val recovered = installRecovery(succeeds = true)
+
+        // The production listener, invoked directly - the event argument is unused,
+        // so this needs no display. Before this change the close box was wired to
+        // DISPOSE_ON_CLOSE and did none of the below.
+        controller(recoverable).windowClosingAdapter().windowClosing(null)
+
+        assertEquals(emptyList(), exitCodes)
+        assertEquals(listOf(OFFENDER), recovered)
+        assertEquals(listOf("dialog"), disposed)
+    }
+
+    @Test
+    fun `a fatal host crash still terminates`() {
+        installRecovery(succeeds = true)
+
+        val outcome = controller(CrashDisposition.FatalHost).dismiss()
+
+        assertEquals(listOf(1), exitCodes)
+        assertIs<CrashOutcome.Terminated>(outcome)
+        assertEquals(listOf("dialog"), disposed)
+    }
+
+    @Test
+    fun `a plugin crash whose recovery fails terminates rather than cleaning data`() {
+        installRecovery(succeeds = false)
+
+        val outcome = controller(recoverable).dismiss()
+
+        assertIs<CrashOutcome.Terminated>(outcome)
+        // Exit code 1 is termination; clean-and-restart exits 0 after deleting the
+        // data directory. Falling back to *that* automatically would wipe every
+        // plugin, workspace and setting over one plugin's bug.
+        assertEquals(listOf(1), exitCodes)
+    }
+
+    @Test
+    fun `a plugin crash with no recovery seam terminates`() {
+        // PluginCrashRecovery.handler is null here (headless run, or a crash before
+        // the plugin layer is wired). Dismissing must not pretend to have recovered.
+        val outcome = controller(recoverable).dismiss()
+
+        assertIs<CrashOutcome.Terminated>(outcome)
+        assertEquals(listOf(1), exitCodes)
+    }
+
+    @Test
+    fun `recovery disables the offending plugin and leaves every other plugin alone`() {
+        val fake = FakePluginLayer(known = setOf(OFFENDER, BYSTANDER))
+        PluginCrashRecovery.handler = fake.coordinator()
+
+        val outcome = controller(recoverable).dismiss()
+
+        assertEquals(CrashOutcome.Recovered(OFFENDER), outcome)
+        assertEquals(emptyList(), exitCodes)
+        // The offender: quarantined so its surfaces stop rendering plugin content,
+        // its tabs closed, disabled in every window, and the disable persisted so it
+        // does not come back and crash again on the next launch.
+        assertTrue(PluginCrashRegistry.hasCrashed(OFFENDER), "the crashed plugin must be quarantined")
+        assertEquals(listOf(OFFENDER), fake.tabsClosed)
+        assertEquals(listOf(OFFENDER), fake.disabled)
+        assertEquals(listOf(OFFENDER), fake.persistedDisabled)
+        // The bystander: untouched on every axis. Quarantining everything mounted
+        // was the first attempt at this elsewhere in the codebase and it closed
+        // users' terminal and browser tabs over an unrelated plugin's bug.
+        assertFalse(PluginCrashRegistry.hasCrashed(BYSTANDER), "an unaffected plugin must keep running")
+        assertFalse(BYSTANDER in fake.disabled)
+        assertFalse(BYSTANDER in fake.tabsClosed)
+    }
+
+    @Test
+    fun `recovery tells the user which plugin was disabled`() {
+        val fake = FakePluginLayer(known = setOf(OFFENDER))
+        PluginCrashRecovery.handler = fake.coordinator()
+
+        controller(recoverable).dismiss()
+
+        val message = fake.notices.single()
+        assertTrue(OFFENDER in message, "the notice must name the plugin: $message")
+    }
+
+    @Test
+    fun `a crash blamed on a plugin nothing knows about is not silently swallowed`() {
+        val fake = FakePluginLayer(known = emptySet())
+        PluginCrashRecovery.handler = fake.coordinator()
+
+        val outcome = controller(recoverable).dismiss()
+
+        // Nothing to disable means nothing was made safe, so this has to terminate.
+        // Returning "recovered" here would dismiss the dialog over a plugin that is
+        // still live and still crashing.
+        assertIs<CrashOutcome.Terminated>(outcome)
+        assertEquals(listOf(1), exitCodes)
+        assertFalse(PluginCrashRegistry.hasCrashed(OFFENDER))
+    }
+
+    @Test
+    fun `a failed unload does not turn a successful recovery into a termination`() {
+        // The plugin is already quarantined and rendering nothing by the time the
+        // unload runs; killing the app because the tab teardown threw would undo the
+        // only thing the user was promised.
+        val fake = FakePluginLayer(known = setOf(OFFENDER), tabTeardownThrows = true)
+        PluginCrashRecovery.handler = fake.coordinator()
+
+        val outcome = controller(recoverable).dismiss()
+
+        assertEquals(CrashOutcome.Recovered(OFFENDER), outcome)
+        assertEquals(emptyList(), exitCodes)
+        // And the rest of the unload still ran rather than aborting at the failure.
+        assertEquals(listOf(OFFENDER), fake.disabled)
+        assertEquals(listOf(OFFENDER), fake.persistedDisabled)
+    }
+
+    /**
+     * Stands in for the plugin layer the desktop wiring supplies.
+     *
+     * The real steps are a per-window manager, an EDT tab teardown and a rewrite of
+     * `installed.json`; the coordinator takes them as lambdas precisely so this test
+     * does not have to build a window to ask whether dismissing a crash kills the
+     * app. Quarantine is NOT faked - it calls the real [PluginCrashRegistry], since
+     * "the offending plugin is quarantined and the bystander is not" is the claim.
+     */
+    private class FakePluginLayer(
+        private val known: Set<String>,
+        private val tabTeardownThrows: Boolean = false,
+    ) : PluginRecoverySteps {
+        val tabsClosed = mutableListOf<String>()
+        val disabled = mutableListOf<String>()
+        val persistedDisabled = mutableListOf<String>()
+        val notices = mutableListOf<String>()
+
+        override fun isKnown(pluginId: String) = pluginId in known
+
+        /** Not faked: "the offender is quarantined and the bystander is not" is the claim. */
+        override fun quarantine(
+            pluginId: String,
+            error: Throwable,
+        ) = PluginCrashRegistry.recordRenderFault(pluginId, error, notify = false)
+
+        override suspend fun closeTabs(pluginId: String) {
+            tabsClosed.add(pluginId)
+            if (tabTeardownThrows) error("teardown failed")
+        }
+
+        override suspend fun disable(pluginId: String): Boolean {
+            disabled.add(pluginId)
+            return true
+        }
+
+        override fun persistDisabled(pluginId: String) {
+            persistedDisabled.add(pluginId)
+        }
+
+        override fun notifyDisabled(pluginId: String) {
+            notices.add("Plugin '$pluginId' crashed and was disabled. Re-enable it from Toolbox.")
+        }
+
+        /**
+         * Unconfined so the launched unload runs to completion inline, which is what
+         * lets the assertions above read its effects without a delay or a latch.
+         */
+        fun coordinator() = PluginCrashRecoveryCoordinator(CoroutineScope(Dispatchers.Unconfined), this)
+    }
+
+    private fun report() =
+        CrashReport(
+            signature = "sig",
+            exceptionType = "IllegalStateException",
+            exceptionMessage = "plugin action boom",
+            stackTrace = "at plugin.Boom.invoke",
+            systemInfo =
+                SystemInfo(
+                    osName = "TestOS",
+                    osVersion = "1",
+                    osArch = "test",
+                    javaVersion = "21",
+                    javaVendor = "test",
+                    heapUsedMB = 1,
+                    heapMaxMB = 2,
+                    nonHeapUsedMB = 1,
+                    availableProcessors = 1,
+                ),
+            appInfo = AppInfo(version = "0.0.0", platform = "macOS", isDebug = true),
+            timestamp = 0L,
+            pluginId = OFFENDER,
+        )
+}

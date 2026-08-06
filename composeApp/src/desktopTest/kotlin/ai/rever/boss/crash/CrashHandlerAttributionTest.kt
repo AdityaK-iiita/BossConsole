@@ -1,6 +1,7 @@
 package ai.rever.boss.crash
 
 import ai.rever.boss.plugin.loader.PluginClassLoader
+import ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
 import java.io.File
 import java.lang.reflect.InvocationTargetException
 import java.util.jar.JarEntry
@@ -23,6 +24,9 @@ import kotlin.test.assertTrue
 class CrashHandlerAttributionTest {
     private companion object {
         const val PLUGIN_ID = "test.plugin.probe"
+
+        /** Deliberately different from [PLUGIN_ID], so "the tag won" is distinguishable. */
+        const val BOUNDARY_PLUGIN_ID = "test.plugin.boundary"
         const val PROBE_CLASS = "ai.rever.boss.crash.pluginprobe.PluginProbe"
         const val EXCEPTION_CLASS = "ai.rever.boss.crash.pluginprobe.ProbeException"
     }
@@ -141,5 +145,31 @@ class CrashHandlerAttributionTest {
         val wrapped = RuntimeException("outer host", IllegalStateException("mid host", throwFromPlugin("boom")))
         assertEquals(PLUGIN_ID, CrashHandler.attributePluginId(wrapped))
         assertTrue(wrapped.cause?.cause != null)
+    }
+
+    @Test
+    fun `a boundary tag attributes a crash whose stack holds no plugin frames`() {
+        // The case the stack scan cannot answer, and the reason the boundary
+        // exists: a plugin registers a callback, the HOST invokes it, and by the
+        // time the uncaught handler looks there is nothing plugin-defined on the
+        // stack. Only what was recorded on the way in still knows.
+        val hostLookingCrash = RuntimeException("thrown through host frames only")
+        assertNull(CrashHandler.attributePluginId(hostLookingCrash), "precondition: the stack blames nobody")
+
+        PluginExecutionBoundary.tag(hostLookingCrash, BOUNDARY_PLUGIN_ID)
+
+        assertEquals(BOUNDARY_PLUGIN_ID, CrashHandler.attributePluginId(hostLookingCrash))
+    }
+
+    @Test
+    fun `a boundary tag outranks the stack scan`() {
+        // Both sources have an answer. The tag was taken at the call the host
+        // actually made; the stack merely shows whose code happened to be running,
+        // which for a shared helper or a callback relayed between plugins is not
+        // the same thing.
+        val crash = throwFromPlugin("boom")
+        PluginExecutionBoundary.tag(crash, BOUNDARY_PLUGIN_ID)
+
+        assertEquals(BOUNDARY_PLUGIN_ID, CrashHandler.attributePluginId(crash))
     }
 }

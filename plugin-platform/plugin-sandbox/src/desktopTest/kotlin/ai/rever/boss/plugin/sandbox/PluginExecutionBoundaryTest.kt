@@ -1,0 +1,204 @@
+package ai.rever.boss.plugin.sandbox
+
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
+
+/**
+ * Covers [PluginExecutionBoundary], the answer to "whose fault was this?" for a
+ * crash the stack can no longer explain.
+ *
+ * The property that matters is the awkward one: attribution has to survive the
+ * stack unwinding completely. The global uncaught-exception handler runs *after*
+ * every frame is gone and every `finally` has run, so a mechanism that only knows
+ * the answer while the plugin is on the stack answers "the host" at exactly the
+ * moment it is asked - and the app gets torn down for a plugin's bug. Half these
+ * tests exist to pin that specific ordering.
+ */
+class PluginExecutionBoundaryTest {
+    private companion object {
+        const val PLUGIN = "ai.rever.boss.plugin.dynamic.probe"
+        const val OTHER_PLUGIN = "ai.rever.boss.plugin.dynamic.other"
+    }
+
+    @BeforeTest
+    fun setUp() = PluginExecutionBoundary.resetForTest()
+
+    @AfterTest
+    fun tearDown() = PluginExecutionBoundary.resetForTest()
+
+    @Test
+    fun `attribution survives the stack unwinding`() {
+        // Exactly the shape of the real path: the throwable is caught far outside
+        // the boundary, with nothing of the plugin left on the stack, which is
+        // where the uncaught handler looks at it.
+        val escaped =
+            assertFailsWith<IllegalStateException> {
+                PluginExecutionBoundary.runAttributed(PLUGIN) { error("boom") }
+            }
+
+        assertEquals(PLUGIN, PluginExecutionBoundary.attributionFor(escaped))
+    }
+
+    @Test
+    fun `a wrapped exception still names the plugin`() {
+        val inner =
+            assertFailsWith<IllegalStateException> {
+                PluginExecutionBoundary.runAttributed(PLUGIN) { error("boom") }
+            }
+        // Plugin faults routinely arrive wrapped - InvocationTargetException from
+        // a reflective call, CompletionException from a future, Compose's own
+        // wrappers - and the tag sits on the cause, not the wrapper.
+        val wrapped = RuntimeException("while doing the thing", inner)
+
+        assertEquals(PLUGIN, PluginExecutionBoundary.attributionFor(wrapped))
+    }
+
+    @Test
+    fun `a self-referential cause chain terminates`() {
+        // initCause cannot make a real cycle, but a getCause override can, and a
+        // crash handler that hangs is worse than one that misattributes.
+        val looping =
+            object : RuntimeException("loops") {
+                override val cause: Throwable get() = this
+            }
+
+        assertNull(PluginExecutionBoundary.attributionFor(looping))
+    }
+
+    @Test
+    fun `the innermost boundary wins`() {
+        // A plugin calling the host calling another plugin. Blame belongs to the
+        // one that actually threw, not the one further out that merely relayed it.
+        val escaped =
+            assertFailsWith<IllegalStateException> {
+                PluginExecutionBoundary.runAttributed(OTHER_PLUGIN) {
+                    PluginExecutionBoundary.runAttributed(PLUGIN) { error("inner boom") }
+                }
+            }
+
+        assertEquals(PLUGIN, PluginExecutionBoundary.attributionFor(escaped))
+    }
+
+    @Test
+    fun `a host throwable is attributed to nobody`() {
+        assertNull(PluginExecutionBoundary.attributionFor(IllegalStateException("host bug")))
+    }
+
+    @Test
+    fun `the current scope is exposed during the call and cleared after it`() {
+        var seenInside: String? = null
+        PluginExecutionBoundary.runAttributed(PLUGIN) {
+            seenInside = PluginExecutionBoundary.currentPluginId()
+        }
+
+        assertEquals(PLUGIN, seenInside)
+        // Cleared, not merely popped to some previous value: this runs on a pooled
+        // thread in production (the EDT, a dispatcher), so a scope left behind
+        // would blame this plugin for the next unrelated crash on the same thread.
+        assertNull(PluginExecutionBoundary.currentPluginId())
+    }
+
+    @Test
+    fun `the scope is cleared even when the call throws`() {
+        runCatching {
+            PluginExecutionBoundary.runAttributed(PLUGIN) { error("boom") }
+        }
+
+        assertNull(PluginExecutionBoundary.currentPluginId())
+    }
+
+    @Test
+    fun `the scope does not leak to other threads`() {
+        val inside = CountDownLatch(1)
+        val released = CountDownLatch(1)
+        var otherThreadSaw: String? = "unset"
+
+        val worker =
+            Thread {
+                inside.await(5, TimeUnit.SECONDS)
+                otherThreadSaw = PluginExecutionBoundary.currentPluginId()
+                released.countDown()
+            }
+        worker.start()
+        PluginExecutionBoundary.runAttributed(PLUGIN) {
+            inside.countDown()
+            released.await(5, TimeUnit.SECONDS)
+        }
+        worker.join(5_000)
+
+        assertNull(otherThreadSaw, "a plugin scope must not be visible from an unrelated thread")
+    }
+
+    @Test
+    fun `a host-owned callback is returned unchanged`() {
+        val hostAction = {}
+
+        // Identity, not just behaviour: every context-menu item goes through this,
+        // and host items must not pay for an extra frame or an extra allocation.
+        assertSame(hostAction, PluginExecutionBoundary.wrapPluginCallback(hostAction))
+    }
+
+    @Test
+    fun `a plugin-owned callback is wrapped and its throwable tagged`() {
+        // A classloader that looks like a PluginClassLoader to the reflective
+        // lookup - a public `pluginId` field is the whole contract, which is what
+        // keeps this module free of a plugin-loader dependency.
+        val loader = FakePluginClassLoader(PLUGIN, javaClass.classLoader)
+        val action = loader.loadThrowingAction()
+
+        val wrapped = PluginExecutionBoundary.wrapPluginCallback(action)
+        val escaped = assertFailsWith<IllegalStateException> { wrapped() }
+
+        assertTrue(wrapped !== action, "a plugin callback must be wrapped")
+        assertEquals(PLUGIN, PluginExecutionBoundary.attributionFor(escaped))
+    }
+
+    @Test
+    fun `the first tag wins`() {
+        val error = IllegalStateException("boom")
+        PluginExecutionBoundary.tag(error, PLUGIN)
+        PluginExecutionBoundary.tag(error, OTHER_PLUGIN)
+
+        // Re-tagging on the way out through outer layers must not overwrite the
+        // attribution taken closest to the fault.
+        assertEquals(PLUGIN, PluginExecutionBoundary.attributionFor(error))
+    }
+
+    /**
+     * Stands in for `PluginClassLoader` without depending on it.
+     *
+     * `wrapPluginCallback` reads a public `pluginId` field off the *defining*
+     * classloader of the lambda, so the fixture has to genuinely define the class
+     * the lambda belongs to - hence a real classloader that loads the action class
+     * from this test's own bytes rather than delegating to the parent.
+     */
+    private class FakePluginClassLoader(
+        @JvmField val pluginId: String,
+        parent: ClassLoader,
+    ) : ClassLoader(parent) {
+        fun loadThrowingAction(): () -> Unit {
+            val name = ThrowingAction::class.java.name
+            val bytes =
+                checkNotNull(parent.getResourceAsStream(name.replace('.', '/') + ".class")) {
+                    "fixture class not on the test classpath"
+                }.use { it.readBytes() }
+
+            @Suppress("UNCHECKED_CAST")
+            val defined = defineClass(name, bytes, 0, bytes.size) as Class<out () -> Unit>
+            return defined.getDeclaredConstructor().newInstance()
+        }
+    }
+
+    /** A plugin-authored callback: public, no-arg constructor, throws when invoked. */
+    class ThrowingAction : () -> Unit {
+        override fun invoke(): Unit = error("plugin action boom")
+    }
+}

@@ -10,6 +10,7 @@ import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.rememberScrollbarAdapter
@@ -25,6 +26,8 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
@@ -57,6 +60,11 @@ import kotlinx.coroutines.launch
  * (deliberately small) crash window.
  *
  * @param crashReport The crash report to display
+ * @param recoverablePluginId Set when this crash is attributable to a dynamic plugin that can be
+ *   disabled instead of taking the app down with it. It changes what the dialog *says* and what its
+ *   exits *mean*: dismissing continues without that plugin rather than ending the session, so
+ *   "Don't Send" (accurate only when the next thing that happens is termination) becomes
+ *   [CONTINUE_WITHOUT_PLUGIN_LABEL]. Null for a fatal host crash, which behaves as it always has.
  * @param onDismiss Called when user dismisses without submitting
  * @param onSubmit Called when user wants to submit the report
  * @param initialSubmitResult Seeds the submit-result card. Production leaves this null and lets the
@@ -70,6 +78,7 @@ internal fun CrashReportDialog(
     crashReport: CrashReport,
     onDismiss: () -> Unit,
     onSubmit: (userNotes: String?, includeLogs: Boolean) -> Unit,
+    recoverablePluginId: String? = null,
     onCleanAndRestart: (() -> Unit)? = null,
     initialSubmitResult: CrashReportService.SubmitResult? = null,
 ) {
@@ -122,11 +131,22 @@ internal fun CrashReportDialog(
     // overlapping text.
     val scrollbarGutter = scrollbarStyle.thickness + 4.dp
 
+    // Escape is one of three ways out of this window and has to be as reliable as the other two.
+    // `onKeyEvent` only fires for a focused subtree, so without an owner of its own it worked or
+    // not depending on whether some child (the notes field) happened to hold focus — a dismissal
+    // route that silently does nothing is worse than one that isn't offered.
+    val dialogFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { dialogFocus.requestFocus() } }
+
+    val dismissLabel = if (recoverablePluginId != null) CONTINUE_WITHOUT_PLUGIN_LABEL else DONT_SEND_LABEL
+
     // Render directly in the window (no Dialog wrapper needed since this is shown in its own JFrame)
     Card(
         modifier =
             Modifier
                 .fillMaxSize()
+                .focusRequester(dialogFocus)
+                .focusable()
                 .onKeyEvent { event ->
                     if (event.type == KeyEventType.KeyDown && event.key == Key.Escape && !isSubmitting) {
                         onDismiss()
@@ -155,10 +175,23 @@ internal fun CrashReportDialog(
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
-                    text = "BOSS Has Crashed",
+                    text = if (recoverablePluginId != null) "Plugin Crashed" else "BOSS Has Crashed",
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = BossTheme.colors.textPrimary,
+                )
+            }
+
+            // Says what is about to happen, because the buttons alone cannot: the user needs to
+            // know their windows and other plugins survive this, and which plugin is going away.
+            if (recoverablePluginId != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text =
+                        "BOSS keeps running. '$recoverablePluginId' will be disabled - " +
+                            "your other tabs and plugins are unaffected. Re-enable it from Toolbox.",
+                    fontSize = 13.sp,
+                    color = BossTheme.colors.textSecondary,
                 )
             }
 
@@ -527,16 +560,24 @@ internal fun CrashReportDialog(
                     Spacer(modifier = Modifier.weight(1f))
                 }
 
-                // Don't Send button
+                // Dismiss button. For a recoverable crash this is the *recovery* action rather
+                // than a decline, so it reads as one and is given the foreground colour - the
+                // user who wants their session back must not have to guess that the greyed-out
+                // "Don't Send" is the button that keeps it.
                 TextButton(
                     onClick = onDismiss,
                     enabled = !isSubmitting,
                     colors =
                         ButtonDefaults.textButtonColors(
-                            contentColor = BossTheme.colors.textSecondary,
+                            contentColor =
+                                if (recoverablePluginId != null) {
+                                    BossTheme.colors.textPrimary
+                                } else {
+                                    BossTheme.colors.textSecondary
+                                },
                         ),
                 ) {
-                    Text("Don't Send")
+                    Text(dismissLabel)
                 }
 
                 Spacer(modifier = Modifier.width(12.dp))
@@ -591,7 +632,9 @@ internal fun CrashReportDialog(
                 }
             }
 
-            // Close button after successful submission
+            // Close button after successful submission. Labelled like the dismiss button above,
+            // because it does the same thing: a submitted report is not a reason to lose the
+            // session, so post-submit is the same recovery, not a quit.
             if (submitResult is CrashReportService.SubmitResult.Success) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
@@ -607,13 +650,25 @@ internal fun CrashReportDialog(
                             ),
                         shape = RoundedCornerShape(6.dp),
                     ) {
-                        Text("Close")
+                        Text(if (recoverablePluginId != null) CONTINUE_WITHOUT_PLUGIN_LABEL else "Close")
                     }
                 }
             }
         }
     }
 }
+
+/**
+ * The dismiss action's label when the crash is recoverable.
+ *
+ * Named rather than inlined so the dialog and its test cannot drift: the whole point of the
+ * rename is that the button says what it does, and an assertion holding its own copy of the
+ * string would keep passing while the button said something else.
+ */
+internal const val CONTINUE_WITHOUT_PLUGIN_LABEL = "Continue Without Plugin"
+
+/** The dismiss action's label for a fatal host crash, where dismissing really does end the app. */
+internal const val DONT_SEND_LABEL = "Don't Send"
 
 /** Present only while the body is clipping content; see `isClipping`. */
 internal const val BODY_SCROLLBAR_TAG = "crash-dialog-body-scrollbar"

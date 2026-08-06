@@ -7,6 +7,7 @@ import ai.rever.boss.plugin.api.PanelRegistry
 import ai.rever.boss.plugin.logging.BossLogger
 import ai.rever.boss.plugin.logging.LogCategory
 import ai.rever.boss.plugin.sandbox.PanelSandboxRegistry
+import ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
 import ai.rever.boss.plugin.sandbox.PluginSandbox
 import com.arkivanov.decompose.ComponentContext
 
@@ -42,7 +43,13 @@ class SandboxedPanelRegistry(
         val wrappedFactory: (ComponentContext, PanelInfo) -> PanelComponentWithUI = { ctx, info ->
             try {
                 sandbox.recordHeartbeat()
-                val component = factory(ctx, info)
+                // runAttributed, not a bare call: a factory that throws must carry
+                // the plugin id out with it, because the crash handler sees this
+                // throwable long after these frames have unwound.
+                val component =
+                    PluginExecutionBoundary.runAttributed(sandbox.pluginId) {
+                        factory(ctx, info)
+                    }
                 sandbox.recordSuccess()
                 component
             } catch (e: Throwable) {

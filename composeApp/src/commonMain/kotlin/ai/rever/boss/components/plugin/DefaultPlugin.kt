@@ -80,6 +80,7 @@ import ai.rever.boss.plugin.api.ZoomSettingsProvider
 import ai.rever.boss.plugin.browser.BrowserService
 import ai.rever.boss.plugin.loader.PluginLoadException
 import ai.rever.boss.plugin.pathutils.BossDirectories
+import ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
 import ai.rever.boss.plugin.sandbox.PluginSandboxManager
 import ai.rever.boss.plugin.sandbox.PluginSandboxManagerImpl
 import ai.rever.boss.plugin.sandbox.SandboxConfig
@@ -1642,7 +1643,13 @@ private class DefaultContextMenuProvider : ContextMenuProvider {
                 text = label,
                 icon = icon,
                 subMenu = subMenu?.map { it.toContextMenuItem() },
-                onClick = onClick,
+                // The exact boundary this exists for. ContextMenu invokes onClick bare from a
+                // Compose click handler, so a plugin action that throws reaches the global
+                // uncaught handler with nothing plugin-shaped left on the stack - the host frames
+                // that called it are all that remains, and the crash gets blamed on BOSS. The
+                // lambda's own class was loaded by the plugin's classloader, which is what
+                // wrapPluginCallback reads; host-owned items are returned unwrapped.
+                onClick = PluginExecutionBoundary.wrapPluginCallback(onClick),
             )
         }
 }

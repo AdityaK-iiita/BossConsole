@@ -55,6 +55,11 @@ class InProcessPluginSandbox(
 
     private val exceptionHandler =
         CoroutineExceptionHandler { _, throwable ->
+            // Tag before anything else: a coroutine that fails here may still
+            // reach the global uncaught handler (an undispatched rethrow, a
+            // handler that itself fails), and by then this is the only place that
+            // ever knew whose coroutine it was.
+            PluginExecutionBoundary.tag(throwable, pluginId)
             logger.error(
                 LogCategory.SYSTEM,
                 "Uncaught exception in plugin sandbox",

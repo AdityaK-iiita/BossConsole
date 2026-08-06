@@ -18,6 +18,7 @@ import ai.rever.boss.plugin.loader.DynamicPluginLoaderImpl
 import ai.rever.boss.plugin.loader.PluginBinaryIncompatibilityException
 import ai.rever.boss.plugin.loader.PluginUnloadException
 import ai.rever.boss.plugin.sandbox.PluginErrorClassifier
+import ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
 import ai.rever.boss.plugin.sandbox.PluginSandboxManager
 import ai.rever.boss.plugin.sandbox.SandboxConfig
 import ai.rever.boss.plugin.sandbox.ui.PluginCrashRegistry
@@ -267,6 +268,55 @@ class DynamicPluginManager(
         private fun activeManagers(): List<DynamicPluginManager> {
             liveManagers.removeIf { it.get() == null }
             return liveManagers.mapNotNull { it.get() }
+        }
+
+        /** Whether any live manager has [pluginId] loaded. */
+        fun isPluginKnown(pluginId: String): Boolean = activeManagers().any { it.getPluginInfo(pluginId) != null }
+
+        /** Where [pluginId] was loaded from, per the first live manager that knows it. */
+        fun jarPathOf(pluginId: String): String? =
+            activeManagers()
+                .firstNotNullOfOrNull { it.getPluginInfo(pluginId)?.jarPath }
+
+        /**
+         * Disable [pluginId] in EVERY window's manager.
+         *
+         * Managers are per-window and each owns its own sandbox manager, so a
+         * disable applied to one leaves the plugin live - and still crashing -
+         * in the others. Crash recovery has to cover all of them, for the same
+         * reason the api-layer hot swap does.
+         *
+         * @return true if at least one manager accepted the disable. A window
+         * that never loaded the plugin failing is expected and not a failure of
+         * the operation.
+         */
+        suspend fun disableEverywhere(pluginId: String): Boolean {
+            val managers = activeManagers()
+            if (managers.isEmpty()) {
+                companionLogger.warn(
+                    LogCategory.SYSTEM,
+                    "No live plugin manager to disable a plugin in",
+                    mapOf("pluginId" to pluginId),
+                )
+                return false
+            }
+            var anyDisabled = false
+            for (manager in managers) {
+                // Independently, not fail-fast: one window refusing must not leave
+                // the plugin enabled in the rest.
+                val result = runCatching { manager.disablePlugin(pluginId) }
+                if (result.getOrNull()?.isSuccess == true) anyDisabled = true
+            }
+            companionLogger.info(
+                LogCategory.SYSTEM,
+                "Disabled plugin across windows",
+                mapOf(
+                    "pluginId" to pluginId,
+                    "managers" to managers.size.toString(),
+                    "anyDisabled" to anyDisabled.toString(),
+                ),
+            )
+            return anyDisabled
         }
 
         /**
@@ -793,7 +843,12 @@ class DynamicPluginManager(
                     var registrationFailed = false
                     if (enabled && accessible) {
                         try {
-                            loadedPlugin.instance.register(trackingContext)
+                            // Attributed: register() is where a plugin wires its callbacks, and
+                            // anything it kicks off from there inherits the scope, so a fault on
+                            // this path names the plugin even when its own frames are gone.
+                            PluginExecutionBoundary.runAttributed(manifest.pluginId) {
+                                loadedPlugin.instance.register(trackingContext)
+                            }
                         } catch (e: Throwable) {
                             // Catch Throwable (not just Exception) because binary incompatibility
                             // errors like NoSuchMethodError extend Error, not Exception.
@@ -1185,8 +1240,11 @@ class DynamicPluginManager(
 
                     wasAlreadyEnabled = _pluginStates.value[pluginId]?.enabled == true
 
-                    // Register the plugin
-                    loadedPlugin.instance.register(trackingContext)
+                    // Register the plugin. Nothing catches this one, so attribution is what
+                    // decides whether a plugin that throws on enable costs the user the app.
+                    PluginExecutionBoundary.runAttributed(pluginId) {
+                        loadedPlugin.instance.register(trackingContext)
+                    }
 
                     // Enable sandbox
                     sandboxManager.enablePlugin(pluginId)
