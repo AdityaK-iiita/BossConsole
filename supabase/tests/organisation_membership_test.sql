@@ -8,7 +8,7 @@
 -- two entry points agreeing with it.
 
 begin;
-select plan(39);
+select plan(42);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures: one organisation per join policy, plus a domain-verified one.
@@ -400,6 +400,39 @@ select is(
         '50000000-0000-0000-0000-000000000001') ->> 'error'),
     'A domain must be verified before it can be made primary',
     'an UNVERIFIED domain cannot -- enforced in the RPC, not only in the edge function'
+);
+
+-- An emptied description must actually clear.
+--
+-- COALESCE(p_description, description) treats an explicit empty string as "leave unchanged", so
+-- an admin who cleared the textarea got ?ok=settings_saved with the old text still on the page -
+-- a no-op reported as success, the same shape as the max_uses bug.
+select public.update_organisation_settings(
+    (select id from public.organisations where slug='pgtopen'),
+    p_description => 'something to clear',
+    p_actor_id => '50000000-0000-0000-0000-000000000001');
+select is(
+    (select description from public.organisations where slug='pgtopen'),
+    'something to clear',
+    'a description can be set'
+);
+select public.update_organisation_settings(
+    (select id from public.organisations where slug='pgtopen'),
+    p_description => '',
+    p_actor_id => '50000000-0000-0000-0000-000000000001');
+select is(
+    (select description from public.organisations where slug='pgtopen'),
+    null,
+    'and an EMPTY string clears it rather than silently keeping the old one'
+);
+select public.update_organisation_settings(
+    (select id from public.organisations where slug='pgtopen'),
+    p_name => 'Renamed Open Org',
+    p_actor_id => '50000000-0000-0000-0000-000000000001');
+select is(
+    (select name from public.organisations where slug='pgtopen'),
+    'Renamed Open Org',
+    'while an ABSENT description still leaves it alone'
 );
 
 select * from finish();

@@ -8,7 +8,7 @@
 -- breaks every login if it is missing.
 
 begin;
-select plan(42);
+select plan(49);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -379,6 +379,55 @@ select throws_ok(
     'P0001',
     null,
     'a role already holding role.assign cannot be mapped into an organisation'
+);
+
+-- ===========================================================================
+-- Table grants are the posture the file claims
+--
+-- Supabase's default privileges GRANT ALL ON TABLES to anon and authenticated for
+-- schema public, so every CREATE TABLE here starts fully granted to both. Nothing
+-- asserted any table privilege before, which is why the gap survived four reviews.
+-- ===========================================================================
+select ok(
+    NOT has_table_privilege('anon', 'public.organisations', 'SELECT')
+    AND NOT has_table_privilege('anon', 'public.organisation_members', 'SELECT')
+    AND NOT has_table_privilege('anon', 'public.organisation_invites', 'SELECT'),
+    'anon holds nothing on the organisation tables'
+);
+select ok(
+    NOT has_table_privilege('authenticated', 'public.organisations', 'INSERT')
+    AND NOT has_table_privilege('authenticated', 'public.organisations', 'UPDATE')
+    AND NOT has_table_privilege('authenticated', 'public.organisations', 'DELETE'),
+    'authenticated cannot write organisations -- held off by the GRANT, not only by RLS'
+);
+select ok(
+    NOT has_table_privilege('authenticated', 'public.organisation_members', 'UPDATE')
+    AND NOT has_table_privilege('authenticated', 'public.organisation_roles', 'UPDATE')
+    AND NOT has_table_privilege('authenticated', 'public.organisation_requests', 'DELETE'),
+    'nor the other membership tables'
+);
+
+-- The two credential tables get NOTHING back. token_hash is a SHA-256 of a live
+-- invite token, and the invites migration claims the table "is never selected
+-- directly by the desktop app" - that claim was false until this revoke.
+select ok(
+    NOT has_table_privilege('authenticated', 'public.organisation_invites', 'SELECT'),
+    'authenticated cannot select organisation_invites, so token_hash is unreachable'
+);
+select ok(
+    NOT has_table_privilege('authenticated', 'public.organisation_handoff_tokens', 'SELECT'),
+    'nor organisation_handoff_tokens'
+);
+
+-- ...while the reads the panel actually needs still work.
+select ok(
+    has_table_privilege('authenticated', 'public.organisations', 'SELECT')
+    AND has_table_privilege('authenticated', 'public.organisation_members', 'SELECT'),
+    'authenticated keeps the SELECTs the RLS policies are written for'
+);
+select ok(
+    has_table_privilege('service_role', 'public.organisation_invites', 'SELECT'),
+    'and service_role is unaffected'
 );
 
 select * from finish();

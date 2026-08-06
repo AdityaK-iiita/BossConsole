@@ -63,6 +63,19 @@ export function field(body: Record<string, unknown>, name: string): string | nul
   return trimmed.length > 0 ? trimmed : null
 }
 
+/**
+ * A form field as a trimmed string, preserving the empty string.
+ *
+ * [field] returns null for both "absent" and "present but empty", which is right for the fields
+ * where empty means "leave it alone" and wrong for every field a user can deliberately CLEAR.
+ * Returns null only when the key is genuinely absent, so the caller can send an explicit empty
+ * string and mean it.
+ */
+export function rawField(body: Record<string, unknown>, name: string): string | null {
+  const value = body[name]
+  return typeof value === "string" ? value.trim() : null
+}
+
 /** A checkbox: present means true. */
 export function checkbox(body: Record<string, unknown>, name: string): boolean {
   return typeof body[name] === "string" && (body[name] as string).length > 0

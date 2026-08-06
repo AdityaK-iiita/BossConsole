@@ -23,9 +23,9 @@ import { loadAdminPageData } from "../services/org.ts"
 import { htmlResponse, redirectResponse } from "../utils/responses.ts"
 import { clientKey, rateLimit } from "../utils/rate-limit.ts"
 import { publicBaseUrl } from "../utils/config.ts"
-import { mintSession, newCsrfToken, sessionCookieHeader, verifySession } from "../utils/session.ts"
+import { mintSession, newCsrfToken, sessionCookieHeader } from "../utils/session.ts"
 import { inviteOnlyPage } from "../views/admin.ts"
-import { checkbox, field, intField, uuidField } from "../utils/request.ts"
+import { checkbox, field, intField, rawField, uuidField } from "../utils/request.ts"
 import { requireCsrfBody, requireOrgAdmin, requireOrgSession } from "./guards.ts"
 import { adminPage } from "../views/admin.ts"
 import type { SessionPayload } from "../utils/session.ts"
@@ -141,7 +141,11 @@ adminActionRoutes.post("/o/:slug/admin/settings", async (ctx) => {
   const result = await callForActor("update_organisation_settings", session.sub, {
     p_org_id: session.org,
     p_name: name,
-    p_description: field(body, "description"),
+    // PRESENT-but-empty means clear; only ABSENT means leave unchanged. field() collapses the
+    // two to null and the RPC does COALESCE(p_description, description), so emptying the
+    // textarea reported ?ok=settings_saved with the old text still on the page - the same
+    // no-op-reported-as-success shape as the max_uses bug.
+    p_description: rawField(body, "description"),
     p_visibility: visibility,
     p_join_policy: joinPolicy,
     p_publish_policy: publishPolicy,
@@ -302,15 +306,20 @@ adminActionRoutes.post("/o/:slug/admin/invites/create", async (ctx) => {
   // F5 silently created a second live link while the first stayed live. Rotating the CSRF nonce
   // invalidates the form that is still sitting in the page, so the resubmission is refused by the
   // existing gate rather than needing a new mechanism.
+  // Held in a variable rather than recovered by re-verifying the token just minted. The round
+  // trip was wasteful, but the `?? session.csrf` fallback was the real problem: had it fired,
+  // the page would render the OLD nonce while the cookie carried the new one, so every form on
+  // the freshly-rendered admin page would 403 immediately after the operator was told the invite
+  // was created. Failing into a broken page is worse than failing loudly.
+  const rotatedCsrf = newCsrfToken()
   const rotated = await mintSession({
     sub: session.sub,
     org: session.org,
     slug: session.slug,
-    csrf: newCsrfToken(),
+    csrf: rotatedCsrf,
     pur: session.pur,
   })
   const rotatedCookie = sessionCookieHeader(rotated, facts.secure, facts.basePath)
-  const rotatedCsrf = (await verifySession(rotated))?.csrf ?? session.csrf
 
   // Rendered inline rather than redirected: this response is the only place the plaintext token
   // will ever exist.

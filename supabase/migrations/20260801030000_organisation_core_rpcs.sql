@@ -1960,7 +1960,12 @@ BEGIN
 
     UPDATE public.organisations
        SET name           = COALESCE(btrim(p_name), name),
-           description    = COALESCE(p_description, description),
+           -- NULLIF(p_description, '') is NOT what is wanted here: an empty string is the
+           -- caller explicitly CLEARING the description, and COALESCE would then keep the old
+           -- one. Empty means empty; only a SQL NULL means leave unchanged.
+           description    = CASE WHEN p_description IS NULL THEN description
+                                 WHEN btrim(p_description) = '' THEN NULL
+                                 ELSE p_description END,
            visibility     = COALESCE(p_visibility, visibility),
            join_policy    = COALESCE(p_join_policy, join_policy),
            publish_policy = COALESCE(p_publish_policy, publish_policy),

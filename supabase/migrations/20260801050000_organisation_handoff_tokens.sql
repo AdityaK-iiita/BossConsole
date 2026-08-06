@@ -133,7 +133,7 @@ $$;
 
 ALTER FUNCTION "public"."mint_organisation_handoff_token"("uuid", "text", integer) OWNER TO "postgres";
 
-COMMENT ON FUNCTION "public"."mint_organisation_handoff_token"("uuid", "text", integer) IS 'Mints a single-use, URL-safe, ~5-minute token that hands the caller''s identity to the organisation edge function''s web pages. There is deliberately NO p_user_id parameter -- the subject is always auth.uid(), which is the whole security property. Non-members may mint only for a public organisation.';
+COMMENT ON FUNCTION "public"."mint_organisation_handoff_token"("uuid", "text", integer) IS 'Mints a single-use, URL-safe, ~5-minute token that hands the caller''s identity to the organisation edge function''s web pages. There is deliberately NO p_user_id parameter -- the subject is always auth.uid(), which is the whole security property. Members only -- the public arm was removed because the page it opened refused a non-member anyway.';
 
 REVOKE EXECUTE ON FUNCTION "public"."mint_organisation_handoff_token"("uuid", "text", integer) FROM PUBLIC, "anon";
 GRANT  EXECUTE ON FUNCTION "public"."mint_organisation_handoff_token"("uuid", "text", integer) TO "authenticated", "service_role";

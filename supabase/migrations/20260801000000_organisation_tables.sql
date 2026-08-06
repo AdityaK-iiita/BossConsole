@@ -603,6 +603,26 @@ ALTER TABLE "public"."organisation_handoff_tokens"     ENABLE ROW LEVEL SECURITY
 -- readable by a client. Invites are surfaced by list_organisation_invites,
 -- which projects token_prefix and never token_hash.
 
+-- REVOKE FIRST. Supabase's 20251023000014_grants.sql sets
+-- `ALTER DEFAULT PRIVILEGES ... GRANT ALL ON TABLES TO anon, authenticated` for schema public,
+-- so every CREATE TABLE above already handed BOTH roles ALL privileges - this file never granted
+-- them and they are there anyway. Without these revokes the SELECT grants below are additive
+-- noise, `anon` holds ALL on nine organisation tables, and the writes are held off by RLS alone
+-- rather than by RLS *and* the absence of a grant.
+--
+-- organisation_invites and organisation_handoff_tokens deliberately get NOTHING back: the invite
+-- table holds token_hash and the handoff table holds live credential hashes, and both are only
+-- ever reached through SECURITY DEFINER RPCs.
+REVOKE ALL ON TABLE "public"."organisations"                   FROM "anon", "authenticated";
+REVOKE ALL ON TABLE "public"."organisation_domains"            FROM "anon", "authenticated";
+REVOKE ALL ON TABLE "public"."organisation_members"            FROM "anon", "authenticated";
+REVOKE ALL ON TABLE "public"."organisation_roles"              FROM "anon", "authenticated";
+REVOKE ALL ON TABLE "public"."organisation_requests"           FROM "anon", "authenticated";
+REVOKE ALL ON TABLE "public"."organisation_invites"            FROM "anon", "authenticated";
+REVOKE ALL ON TABLE "public"."organisation_invite_redemptions" FROM "anon", "authenticated";
+REVOKE ALL ON TABLE "public"."organisation_handoff_tokens"     FROM "anon", "authenticated";
+REVOKE ALL ON TABLE "public"."reserved_email_domains"          FROM "anon", "authenticated";
+
 GRANT SELECT ON TABLE "public"."organisations"                   TO "authenticated";
 -- Column-level, deliberately: NOT the verification token.
 --
