@@ -59,7 +59,9 @@ object PluginProbeJar {
         ): () -> Unit {
             val facade = loader.loadClass(FACADE_CLASS)
             check(facade.classLoader == loader) { "the facade must be plugin-defined, or this proves nothing" }
-            val method = facade.methods.first { it.name == function }
+            // single, not first: getMethods() order is unspecified, so an added
+            // overload would otherwise be picked arbitrarily and silently.
+            val method = facade.methods.single { it.name == function }
             return method.invoke(null, *args) as () -> Unit
         }
 

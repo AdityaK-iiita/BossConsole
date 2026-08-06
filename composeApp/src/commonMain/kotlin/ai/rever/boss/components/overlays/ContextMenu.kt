@@ -193,7 +193,12 @@ private fun ContextMenuContent(
                                             try {
                                                 PluginExecutionBoundary.invokeAttributed(item.onClick)
                                             } finally {
-                                                onDismissRequest()
+                                                // runCatching: if dismissing throws while a plugin
+                                                // exception is in flight, a bare call replaces it -
+                                                // and with it the attribution tag - so the crash gets
+                                                // blamed on BOSS, the exact failure this exists to
+                                                // prevent.
+                                                runCatching { onDismissRequest() }
                                             }
                                         }
                                     },
@@ -409,7 +414,7 @@ private fun SubMenuContent(
                                         try {
                                             PluginExecutionBoundary.invokeAttributed(subItem.onClick)
                                         } finally {
-                                            onDismissRequest()
+                                            runCatching { onDismissRequest() }
                                         }
                                     }
                                 },

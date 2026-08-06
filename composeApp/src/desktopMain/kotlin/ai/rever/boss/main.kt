@@ -215,9 +215,11 @@ fun main(args: Array<String>) {
     // somebody else's - and attribution now decides which plugin gets disabled and
     // written out of installed.json. A type check against a class only the host
     // constructs cannot be forged. Installed before any plugin loads.
-    ai.rever.boss.plugin.sandbox.PluginExecutionBoundary.installPluginIdResolver { loader ->
-        (loader as? ai.rever.boss.plugin.loader.PluginClassLoader)?.pluginId
-    }
+    ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
+        .installPluginIdResolver(
+            ai.rever.boss.crash
+                .hostPluginIdResolver(),
+        )
 
     // Register notification callback for plugin crashes.
     // Tab closing is handled directly by PluginCrashRegistry via the closeAction

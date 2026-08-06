@@ -42,6 +42,7 @@ class ContextMenuAttributionTest {
     private companion object {
         const val TARGET_TAG = "context-menu-target"
         const val ITEM_LABEL = "Plugin action"
+        const val HOST_ITEM_LABEL = "Host action"
     }
 
     private val probe = PluginProbeJar.open(javaClass.classLoader)
@@ -58,9 +59,7 @@ class ContextMenuAttributionTest {
         val pluginAction =
             probe.action(
                 "probeReporter",
-                java.util.function.Consumer<String?> {
-                    scopeInsideAction = PluginExecutionBoundary.currentPluginId()
-                },
+                Runnable { scopeInsideAction = PluginExecutionBoundary.currentPluginId() },
             )
         val items = listOf(ContextMenuItem(text = ITEM_LABEL, onClick = pluginAction))
 
@@ -87,17 +86,29 @@ class ContextMenuAttributionTest {
 
     @Test
     fun `the scope does not outlive the action`() {
-        // The menu runs on the EDT, which is pooled and long-lived: a scope left
-        // behind would blame this plugin for the next unrelated crash on that thread.
-        var scopeInsideAction: String? = null
+        // The dispatching thread is pooled and long-lived, so a scope left behind
+        // would blame this plugin for the next unrelated crash on it.
+        //
+        // Observed from a SECOND click rather than from runOnIdle: the scope is
+        // thread-local and runOnIdle lands on the AWT event thread while the click
+        // dispatches on the test worker, so a check there passes whether or not the
+        // scope leaked - exactly the vacuity this suite exists to avoid. Verified,
+        // not assumed: asserting the two threads matched failed with
+        // "expected Test worker but was AWT-EventQueue-0".
+        var pluginThread: Thread? = null
+        var hostThread: Thread? = null
+        var scopeOnSecondClick: String? = "never invoked"
         val pluginAction =
-            probe.action(
-                "probeReporter",
-                java.util.function.Consumer<String?> {
-                    scopeInsideAction = PluginExecutionBoundary.currentPluginId()
-                },
+            probe.action("probeReporter", Runnable { pluginThread = Thread.currentThread() })
+        val hostAction = {
+            hostThread = Thread.currentThread()
+            scopeOnSecondClick = PluginExecutionBoundary.currentPluginId()
+        }
+        val items =
+            listOf(
+                ContextMenuItem(text = ITEM_LABEL, onClick = pluginAction),
+                ContextMenuItem(text = HOST_ITEM_LABEL, onClick = hostAction),
             )
-        val items = listOf(ContextMenuItem(text = ITEM_LABEL, onClick = pluginAction))
 
         rule.setContent {
             Box(
@@ -108,14 +119,18 @@ class ContextMenuAttributionTest {
                         .contextMenu(items = items),
             )
         }
+        clickMenuItem(ITEM_LABEL)
+        clickMenuItem(HOST_ITEM_LABEL)
+
+        assertEquals(pluginThread, hostThread, "precondition: both actions ran on the same thread")
+        assertEquals(null, scopeOnSecondClick, "the plugin's scope must not still be on that thread")
+    }
+
+    /** Right-click the target and pick [label]. */
+    private fun clickMenuItem(label: String) {
         rule.onNodeWithTag(TARGET_TAG).performMouseInput { rightClick() }
         rule.waitForIdle()
-        rule.onNodeWithText(ITEM_LABEL).performClick()
+        rule.onNodeWithText(label).performClick()
         rule.waitForIdle()
-
-        assertEquals(PluginProbeJar.PLUGIN_ID, scopeInsideAction, "precondition: the action did run attributed")
-        rule.runOnIdle {
-            assertEquals(null, PluginExecutionBoundary.currentPluginId(), "and nothing is left on the thread")
-        }
     }
 }

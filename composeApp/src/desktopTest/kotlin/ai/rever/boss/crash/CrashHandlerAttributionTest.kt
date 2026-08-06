@@ -150,6 +150,19 @@ class CrashHandlerAttributionTest {
     }
 
     @Test
+    fun `the resolver main installs identifies a real plugin classloader`() {
+        // The intersection nothing else covers: PluginExecutionBoundaryTest pins
+        // resolver + fake loader, the tests above pin real loader + no resolver. A
+        // typo in the `as?` cast would live exactly here - and because an installed
+        // resolver's answer is final including null, that typo would silently make
+        // every plugin callback unattributed rather than fail loudly.
+        val resolver = hostPluginIdResolver()
+
+        assertEquals(PLUGIN_ID, resolver(probe.loader))
+        assertNull(resolver(javaClass.classLoader), "a host classloader is not a plugin")
+    }
+
+    @Test
     fun `a host-owned object resolves to no plugin`() {
         assertNull(PluginExecutionBoundary.pluginIdOfOwner(this))
     }

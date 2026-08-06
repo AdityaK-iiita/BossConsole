@@ -228,6 +228,23 @@ class PluginExecutionBoundaryTest {
     }
 
     @Test
+    fun `the first resolver install wins`() {
+        // The setter was public once, and this object is reachable from plugin code
+        // (plugin.sandbox is not a shared package, so a child-first miss delegates
+        // to the parent). A second install must not be able to reroute every
+        // attribution in the process.
+        val trusted = TrustedLoader(PLUGIN, javaClass.classLoader)
+        val action = trusted.loadThrowingAction()
+        PluginExecutionBoundary.installPluginIdResolver { loader ->
+            if (loader is TrustedLoader) loader.trustedPluginId else null
+        }
+
+        PluginExecutionBoundary.installPluginIdResolver { OTHER_PLUGIN }
+
+        assertEquals(PLUGIN, PluginExecutionBoundary.pluginIdOfOwner(action), "the first install stands")
+    }
+
+    @Test
     fun `the first tag wins`() {
         val error = IllegalStateException("boom")
         PluginExecutionBoundary.tag(error, PLUGIN)

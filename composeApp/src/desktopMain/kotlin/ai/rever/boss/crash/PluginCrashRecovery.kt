@@ -7,6 +7,18 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /**
+ * The lookup the host installs into [ai.rever.boss.plugin.sandbox.PluginExecutionBoundary].
+ *
+ * A named function rather than a lambda at the call site, so a test can hold the
+ * same object production installs. Written inline, the only thing pinning it was
+ * that `main` happened to call it - delete that line and every test still passes
+ * while attribution silently reverts to the spoofable duck-typed fallback. That is
+ * the same unpinned-wiring bug this change set exists to close, one layer up.
+ */
+internal fun hostPluginIdResolver(): (ClassLoader) -> String? =
+    { loader -> (loader as? ai.rever.boss.plugin.loader.PluginClassLoader)?.pluginId }
+
+/**
  * A plugin id fit to drop into a sentence a user reads.
  *
  * The id comes from a plugin-supplied manifest and every display site shares one
