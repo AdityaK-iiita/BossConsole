@@ -69,6 +69,20 @@ object PluginExecutionBoundary {
         Collections.synchronizedMap(WeakHashMap<Throwable, String>())
 
     /**
+     * Cache of classloader → owning plugin, including **misses**.
+     *
+     * [wrapPluginCallback] runs per context-menu item per recomposition, and for a
+     * host-owned lambda - the common case - an uncached miss builds and throws a
+     * reflective exception, whose cost is filling in a stack trace. Caching the
+     * miss as well as the hit keeps that off the recomposition path.
+     *
+     * Weak keys so a plugin's classloader can still be collected after unload;
+     * values are Strings, which do not reference the key back.
+     */
+    private val ownerPluginIds: MutableMap<ClassLoader, String?> =
+        Collections.synchronizedMap(WeakHashMap<ClassLoader, String?>())
+
+    /**
      * Run [block] as [pluginId], tagging anything that escapes.
      *
      * The tag is attached in a `catch` rather than a `finally` because only an
@@ -146,17 +160,48 @@ object PluginExecutionBoundary {
      * was loaded by the plugin's classloader even though nothing in the *stack*
      * says so at call time.
      *
-     * Resolved reflectively against a `pluginId` field, exactly as
-     * [ai.rever.boss.plugin.sandbox.ui.PluginCrashInterceptor.register] does, so
-     * this module keeps no dependency on `plugin-loader`.
+     * Resolved reflectively so this module keeps no dependency on
+     * `plugin-loader`, and cached per classloader - see [ownerPluginIds].
      */
     fun pluginIdOfOwner(owner: Any?): String? {
         val loader = owner?.javaClass?.classLoader ?: return null
-        // Swallowed wholesale: a host classloader simply has no `pluginId` field
-        // (NoSuchFieldException), and attribution must never be able to break the
-        // call it is only describing.
-        return runCatching { loader.javaClass.getField("pluginId").get(loader) as? String }.getOrNull()
+        // computeIfAbsent, so a miss is cached too - the whole point of the cache
+        // is that host-owned lambdas, the common case, stop paying for reflection
+        // on every recomposition. WeakHashMap stores the null result as a present
+        // key, which is what makes the miss stick.
+        return synchronized(ownerPluginIds) {
+            if (ownerPluginIds.containsKey(loader)) {
+                ownerPluginIds[loader]
+            } else {
+                resolvePluginId(loader).also { ownerPluginIds[loader] = it }
+            }
+        }
     }
+
+    /**
+     * Ask a classloader for its plugin id: **getter first**, then a public field.
+     *
+     * The getter is not a fallback, it is the production shape.
+     * `PluginClassLoader` declares `val pluginId: String` as a constructor
+     * property, which compiles to a *private* backing field plus a public
+     * `getPluginId()`, so `getField("pluginId")` throws `NoSuchFieldException` for
+     * every real plugin classloader. Field-only lookup therefore returned null for
+     * exactly the plugins it existed to identify, and the crash it was meant to
+     * attribute would have terminated the app.
+     *
+     * That is not a hypothetical: it shipped in the first version of this file,
+     * and the unit test passed because the fixture declared `@JvmField val
+     * pluginId` - the one form `getField` can see, and the one production does not
+     * use. The fixture now mirrors production and
+     * `CrashHandlerAttributionTest` asserts against a real `PluginClassLoader`.
+     *
+     * The field branch is kept for a loader that does use `@JvmField` or is
+     * written in Java. Failures are swallowed on both branches: a host classloader
+     * has neither member, and attribution must never break the call it describes.
+     */
+    private fun resolvePluginId(loader: ClassLoader): String? =
+        runCatching { loader.javaClass.getMethod("getPluginId").invoke(loader) as? String }.getOrNull()
+            ?: runCatching { loader.javaClass.getField("pluginId").get(loader) as? String }.getOrNull()
 
     /**
      * Wrap a plugin-supplied callback so a throwable escaping it is attributed.
@@ -172,6 +217,7 @@ object PluginExecutionBoundary {
     /** Drop every recorded tag. For tests; production entries expire with their throwable. */
     internal fun resetForTest() {
         tags.clear()
+        ownerPluginIds.clear()
         executing.remove()
     }
 }

@@ -3,6 +3,7 @@ package ai.rever.boss.crash
 import ai.rever.boss.plugin.loader.PluginClassLoader
 import ai.rever.boss.plugin.pathutils.BossDirectories
 import ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
+import ai.rever.boss.plugin.sandbox.ui.PluginCrashRegistry
 import ai.rever.boss.utils.AppVersion
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
@@ -489,14 +490,7 @@ object CrashHandler {
                 error = throwable,
             )
 
-            // A dialog is already up. Stacking another one on top of it hides the
-            // first, and neither can be reached — see [dialogVisible].
-            if (!dialogVisible.compareAndSet(false, true)) {
-                logger.warn(
-                    LogCategory.SYSTEM,
-                    "Crash while the crash dialog is open - recording instead of stacking a second dialog",
-                    mapOf("errorType" to throwable.javaClass.simpleName),
-                )
+            if (shouldRecordRatherThanPrompt(throwable)) {
                 recordContained(throwable)
                 return
             }
@@ -522,6 +516,46 @@ object CrashHandler {
             // Still try to exit cleanly
             processExit(1)
         }
+    }
+
+    /**
+     * Whether this crash should go quietly to disk instead of opening a dialog.
+     *
+     * Two cases, both about not asking the user the same question twice:
+     *
+     * 1. **The plugin is already quarantined.** A plugin taken out for crashing
+     *    does not necessarily stop - a lingering thread or timer of its own keeps
+     *    throwing - and each throw would otherwise open a fresh dialog for a plugin
+     *    the user has already dealt with.
+     * 2. **A dialog is already up.** Stacking a second one hides the first and
+     *    neither can be reached. Claims [dialogVisible] as a side effect when it
+     *    returns false, so the caller owns the slot.
+     *
+     * [recordContained] dedupes by signature, so a fault repeating every frame
+     * costs one file and a log line on a curve.
+     */
+    private fun shouldRecordRatherThanPrompt(throwable: Throwable): Boolean {
+        val quarantined = attributePluginId(throwable)?.let { PluginCrashRegistry.hasCrashed(it) } == true
+        // Short-circuit, so the dialog slot is only claimed when the crash is
+        // actually going to open one.
+        val reason =
+            when {
+                quarantined -> {
+                    "Crash from an already-quarantined plugin - recording instead of prompting again"
+                }
+
+                !dialogVisible.compareAndSet(false, true) -> {
+                    "Crash while the crash dialog is open - recording instead of stacking a second dialog"
+                }
+
+                else -> {
+                    null
+                }
+            }
+        reason?.let {
+            logger.warn(LogCategory.SYSTEM, it, mapOf("errorType" to throwable.javaClass.simpleName))
+        }
+        return reason != null
     }
 
     /**

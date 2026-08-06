@@ -126,6 +126,38 @@ class CrashRecoveryTest {
     }
 
     @Test
+    fun `a second exit from the same dialog does nothing`() {
+        val recovered = installRecovery(succeeds = true)
+        val controller = controller(recoverable)
+
+        val first = controller.dismiss()
+        val second = controller.dismiss()
+
+        // The exits overlap in time: after a successful submission the dialog waits
+        // two seconds before calling onSubmit while every dismiss control stays
+        // live. Recovering twice would quarantine twice, and once the background
+        // unload has made the plugin unknown the second recovery FAILS - which
+        // terminates the app right after a successful recovery.
+        assertEquals(listOf(OFFENDER), recovered, "recovery must run exactly once")
+        assertEquals(emptyList(), exitCodes)
+        assertEquals(listOf("dialog"), disposed)
+        assertEquals(first, second, "a repeat exit replays the outcome rather than deciding a new one")
+    }
+
+    @Test
+    fun `submitting after dismissing does not recover twice`() {
+        val recovered = installRecovery(succeeds = true)
+        val controller = controller(recoverable)
+
+        controller.dismiss()
+        val outcome = controller.submit(userNotes = null, includeLogs = false)
+
+        assertEquals(listOf(OFFENDER), recovered)
+        assertEquals(emptyList(), exitCodes)
+        assertEquals(CrashOutcome.Recovered(OFFENDER), outcome)
+    }
+
+    @Test
     fun `a fatal host crash still terminates`() {
         installRecovery(succeeds = true)
 

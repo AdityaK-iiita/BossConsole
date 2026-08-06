@@ -4,6 +4,7 @@ import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** What actually happened when the crash dialog closed. */
 sealed interface CrashOutcome {
@@ -86,10 +87,32 @@ internal class CrashDialogController(
             }
         }
 
+    /**
+     * Run the exit exactly once.
+     *
+     * The exits are not mutually exclusive in time: after a successful submission
+     * the dialog waits two seconds before calling `onSubmit`, and the dismiss
+     * button, Escape and the post-submit Close button all stay live through it.
+     * A second pass would recover a second time - and if the background unload had
+     * already made the plugin unknown, that second [PluginCrashRecovery.recover]
+     * returns false and terminates the app immediately after a *successful*
+     * recovery. Compose's disposal probably cancels the delayed callback first,
+     * but "does the session survive" is not something to leave resting on that.
+     */
+    private val finished = AtomicBoolean(false)
+
     private fun finish(): CrashOutcome {
+        if (!finished.compareAndSet(false, true)) {
+            logger.debug(LogCategory.SYSTEM, "Ignoring a second exit from a crash dialog already closed")
+            return lastOutcome
+        }
         disposeWindow()
-        return resolve(disposition, error)
+        return resolve(disposition, error).also { lastOutcome = it }
     }
+
+    /** What the single real exit decided; replayed to any later caller. */
+    @Volatile
+    private var lastOutcome: CrashOutcome = CrashOutcome.Terminated
 
     private fun dispositionLabel(): String =
         when (disposition) {

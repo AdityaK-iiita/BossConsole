@@ -148,6 +148,26 @@ class CrashHandlerAttributionTest {
     }
 
     @Test
+    fun `a callback owned by a real plugin classloader resolves to that plugin`() {
+        // The assertion the sandbox-module test cannot make, and the one that
+        // matters: PluginClassLoader declares `val pluginId` as a constructor
+        // property, so the JVM gives it a PRIVATE backing field and a public
+        // getPluginId(). A field-only reflective lookup returns null for every real
+        // plugin - which shipped in the first version of PluginExecutionBoundary
+        // and left every plugin callback unwrapped, so the crash it existed to
+        // attribute would have terminated the app. The unit-test fixture hid it by
+        // declaring @JvmField, the one form getField can see.
+        val instance = loader.loadClass(PROBE_CLASS).getDeclaredConstructor().newInstance()
+
+        assertEquals(PLUGIN_ID, PluginExecutionBoundary.pluginIdOfOwner(instance))
+    }
+
+    @Test
+    fun `a host-owned object resolves to no plugin`() {
+        assertNull(PluginExecutionBoundary.pluginIdOfOwner(this))
+    }
+
+    @Test
     fun `a boundary tag attributes a crash whose stack holds no plugin frames`() {
         // The case the stack scan cannot answer, and the reason the boundary
         // exists: a plugin registers a callback, the HOST invokes it, and by the

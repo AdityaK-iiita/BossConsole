@@ -175,13 +175,21 @@ class PluginExecutionBoundaryTest {
     /**
      * Stands in for `PluginClassLoader` without depending on it.
      *
-     * `wrapPluginCallback` reads a public `pluginId` field off the *defining*
-     * classloader of the lambda, so the fixture has to genuinely define the class
-     * the lambda belongs to - hence a real classloader that loads the action class
-     * from this test's own bytes rather than delegating to the parent.
+     * `wrapPluginCallback` resolves the id off the *defining* classloader of the
+     * lambda, so the fixture has to genuinely define the class the lambda belongs
+     * to - hence a real classloader loading the action class from this test's own
+     * bytes rather than delegating to the parent.
+     *
+     * `pluginId` is a plain Kotlin `val`, **not** `@JvmField`, because that is what
+     * `PluginClassLoader` declares: a constructor property, i.e. a private backing
+     * field plus a public `getPluginId()`. The `@JvmField` this fixture used at
+     * first was the only form a `getField` lookup can see, so it made the test
+     * pass against a production type the code could not actually read. Do not add
+     * it back. `CrashHandlerAttributionTest` pins the same thing against the real
+     * loader, which is the assertion that cannot be faked.
      */
     private class FakePluginClassLoader(
-        @JvmField val pluginId: String,
+        val pluginId: String,
         parent: ClassLoader,
     ) : ClassLoader(parent) {
         fun loadThrowingAction(): () -> Unit {
