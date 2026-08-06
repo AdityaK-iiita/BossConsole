@@ -74,7 +74,7 @@ ${domainsCard(action, csrf, domains)}`,
  */
 function newInviteCard(url: string): string {
   return `
-<section class="card" style="border-color:#F2A93B">
+<section class="card" class="highlight">
   <h2>Invite link created</h2>
   <p class="hint">This is the only time the link is shown. Only its hash is stored, so it cannot be recovered later.</p>
   <input type="text" class="mono" readonly value="${esc(url)}" aria-label="Invite link">
@@ -295,7 +295,7 @@ function rolesCard(action: string, csrf: string, org: OrgDetail, roles: OrgRole[
     <thead><tr><th>Role</th><th>Kind</th><th>Members</th><th></th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
-  <div style="margin-top:18px">${createForm}</div>
+  <div class="spaced">${createForm}</div>
 </section>`
 }
 
@@ -344,7 +344,7 @@ function invitesCard(
     <thead><tr><th>Label</th><th>Grants</th><th>Uses</th><th>Expires</th><th></th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
-  <div style="margin-top:18px">
+  <div class="spaced">
     <form method="post" action="${esc(action)}/invites/create">
       ${csrfField(CSRF_FIELD, csrf)}
       <div class="row">
@@ -427,7 +427,7 @@ function domainsCard(action: string, csrf: string, domains: OrgDomain[]): string
     <thead><tr><th>Domain</th><th>Status</th><th>DNS record</th><th></th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
-  <div style="margin-top:18px">
+  <div class="spaced">
     <form method="post" action="${esc(action)}/domains/add">
       ${csrfField(CSRF_FIELD, csrf)}
       <div class="row">

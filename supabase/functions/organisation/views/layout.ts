@@ -78,6 +78,15 @@ const STYLES = `
   .stat { display: inline-block; margin-right: 22px; }
   .stat b { display: block; font-size: 20px; font-weight: 600; }
   .stat span { color: #9A9A9A; font-size: 12px; }
+
+  /* Utility classes, because every inline style= attribute is DROPPED by our own
+     CSP: style-src is nonce-only, CSP3 falls style-src-attr back to it, and a
+     nonce cannot apply to an attribute. Inline styles rendered nothing and logged
+     a violation on every page. */
+  .spaced { margin-top: 16px; }
+  .tight { margin-top: 12px; }
+  .highlight { border-color: #F2A93B; }
+  .linkish { color: #F2A93B; }
   @media (max-width: 620px) {
     body { padding: 14px; }
     th:nth-child(n+4), td:nth-child(n+4) { display: none; }

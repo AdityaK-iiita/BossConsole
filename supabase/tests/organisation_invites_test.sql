@@ -8,7 +8,7 @@
 -- "invalid or expired".
 
 begin;
-select plan(23);
+select plan(27);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -233,6 +233,64 @@ select is(
     'false',
     'the preview reports valid=false for an unknown token without revealing anything'
 );
+
+-- ===========================================================================
+-- Re-click after removal must re-admit, not dead-end
+--
+-- The redemption row outlives the membership: there is no 'removed' status, so
+-- remove_organisation_member DELETES the member row while the redemption
+-- survives. Keying idempotency on the redemption alone told someone who had
+-- been removed "already a member" and did not re-add them - a dead end they
+-- could never escape through that link.
+-- ===========================================================================
+create temporary table t_rejoin as
+select public.create_organisation_invite(
+    (select id from public.organisations where slug='pgtinv'),
+    null, 'rejoin', 5, 168, '10000000-0000-0000-0000-000000000001') as r;
+
+select set_config('request.jwt.claims',
+    '{"sub":"10000000-0000-0000-0000-000000000003","role":"authenticated"}', true);
+
+select ok(
+    (select public.redeem_organisation_invite((select r ->> 'token' from t_rejoin))
+        ->> 'success')::boolean,
+    'the invite admits the user the first time'
+);
+
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+select public.remove_organisation_member(
+    (select id from public.organisations where slug='pgtinv'),
+    '10000000-0000-0000-0000-000000000003',
+    '10000000-0000-0000-0000-000000000001');
+
+select is(
+    (select count(*)::int from public.organisation_members m
+       join public.organisations o on o.id = m.org_id
+      where o.slug='pgtinv' and m.user_id='10000000-0000-0000-0000-000000000003'
+        and m.status='active'),
+    0,
+    'removal really did drop the membership'
+);
+
+select set_config('request.jwt.claims',
+    '{"sub":"10000000-0000-0000-0000-000000000003","role":"authenticated"}', true);
+
+select is(
+    (select public.redeem_organisation_invite((select r ->> 'token' from t_rejoin))
+        ->> 'already_member'),
+    null,
+    'the same live link does NOT report already_member after removal'
+);
+select is(
+    (select count(*)::int from public.organisation_members m
+       join public.organisations o on o.id = m.org_id
+      where o.slug='pgtinv' and m.user_id='10000000-0000-0000-0000-000000000003'
+        and m.status='active'),
+    1,
+    'it re-admits them instead of dead-ending'
+);
+
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 
 select * from finish();
 rollback;

@@ -598,6 +598,51 @@ Deno.test("a created invite link is shown once, inline", async () => {
   }
 })
 
+Deno.test("an out-of-range max_uses is refused, not silently made unlimited", async () => {
+  const { stub, restore } = setup()
+  try {
+    // intField returns null for out-of-range AND for absent, and null means
+    // "unlimited" downstream - so max_uses=5000 used to produce a link with no
+    // cap at all, the opposite of what was asked for.
+    for (const maxUses of ["0", "5000", "-1", "abc"]) {
+      const response = await app.request(`${BASE}/o/${FIXTURE.slug}/admin/invites/create`, {
+        method: "POST",
+        headers: formHeaders(await sessionCookie()),
+        body: new URLSearchParams({ [CSRF_FIELD]: CSRF, expires_in_hours: "168", max_uses: maxUses }),
+      })
+      assertEquals(
+        response.headers.get("location"),
+        "/functions/v1/organisation/o/acme/admin?err=invalid_input",
+        `max_uses=${maxUses} should be refused`,
+      )
+    }
+    assertEquals(stub.calls.some((c) => c.fn === "create_organisation_invite"), false)
+  } finally {
+    restore()
+  }
+})
+
+Deno.test("an ABSENT max_uses still means unlimited", async () => {
+  const { stub, restore } = setup()
+  try {
+    stub.responses.set("create_organisation_invite", {
+      success: true,
+      token: "boss_inv_abcdefghijklmnopqrstuvwxyz0123456789ABCD",
+      token_prefix: "boss_inv_abcdefg",
+    })
+    await app.request(`${BASE}/o/${FIXTURE.slug}/admin/invites/create`, {
+      method: "POST",
+      headers: formHeaders(await sessionCookie()),
+      body: new URLSearchParams({ [CSRF_FIELD]: CSRF, expires_in_hours: "168" }),
+    })
+    const call = stub.calls.find((c) => c.fn === "create_organisation_invite")
+    assert(call)
+    assertEquals(call.params.p_max_uses, null)
+  } finally {
+    restore()
+  }
+})
+
 Deno.test("an out-of-range expiry is refused before the RPC", async () => {
   const { stub, restore } = setup()
   try {

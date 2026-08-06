@@ -247,6 +247,17 @@ adminActionRoutes.post("/o/:slug/admin/invites/create", async (ctx) => {
   const expiresInHours = intField(body, "expires_in_hours", 1, 720)
   if (expiresInHours === null) return redirectTo(facts, session.slug, { err: "invalid_input" })
 
+  // max_uses is optional, so absent is fine - but PRESENT AND INVALID is not.
+  // intField returns null for both, and null means "unlimited" downstream, so
+  // max_uses=5000 or max_uses=0 used to produce a link with no cap at all: the
+  // exact opposite of what the admin asked for. The min/max on the input are
+  // client-side only.
+  const maxUsesRaw = field(body, "max_uses")
+  const maxUses = intField(body, "max_uses", 1, 1000)
+  if (maxUsesRaw !== null && maxUses === null) {
+    return redirectTo(facts, session.slug, { err: "invalid_input" })
+  }
+
   const result = await callForActor<{ token?: unknown }>(
     "create_organisation_invite",
     session.sub,
@@ -254,7 +265,7 @@ adminActionRoutes.post("/o/:slug/admin/invites/create", async (ctx) => {
       p_org_id: session.org,
       p_role_id: uuidField(body, "role_id"),
       p_label: field(body, "label"),
-      p_max_uses: intField(body, "max_uses", 1, 1000),
+      p_max_uses: maxUses,
       p_expires_in_hours: expiresInHours,
     },
   )

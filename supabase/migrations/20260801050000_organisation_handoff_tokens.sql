@@ -25,7 +25,7 @@
 --   - 20260801000000_organisation_tables.sql
 --   - 20260801010000_organisation_permissions_and_guards.sql (is_org_member)
 --
--- Next migration: 20260801055000_organisation_for_actor_rpcs.sql
+-- Next migration: 20260801060000_organisation_jwt_claims.sql
 -- ============================================================================
 
 
@@ -218,5 +218,5 @@ GRANT  EXECUTE ON FUNCTION "public"."cleanup_expired_organisation_handoff_tokens
 -- ============================================================================
 -- End of File: 20260801050000_organisation_handoff_tokens.sql
 -- ============================================================================
--- Next Migration: 20260801055000_organisation_for_actor_rpcs.sql
+-- Next Migration: 20260801060000_organisation_jwt_claims.sql
 -- ============================================================================

@@ -8,7 +8,7 @@
 --     organisation deriving a role name that already exists globally.
 
 begin;
-select plan(29);
+select plan(36);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -250,6 +250,69 @@ select is(
     (select count(*)::int from public.organisations where slug='pgtrej'),
     0,
     'rejection creates no organisation'
+);
+
+-- ===========================================================================
+-- A refused domain claim must not leave an orphan organisation
+--
+-- A plain RETURN from PL/pgSQL rolls back nothing, so validating the domain
+-- AFTER the organisation, its roles, the hierarchy edges, the grants and the
+-- founder membership have been inserted returned success:false while all of it
+-- committed. The result was an organisation nothing pointed at, silently owned
+-- by the requester, whose slug then blocked every retry.
+-- ===========================================================================
+insert into public.organisation_domains (org_id, domain, is_primary, verified, verification_token, created_by)
+select o.id, 'taken.test', false, false, 'tok', '60000000-0000-0000-0000-000000000003'
+  from public.organisations o where o.slug = 'pgtacme';
+
+select is(
+    (select public.create_organisation_internal(
+        p_slug=>'pgtorphan', p_name=>'Orphan Co',
+        p_owner_id=>'60000000-0000-0000-0000-000000000001',
+        p_domain=>'taken.test') ->> 'error'),
+    'Domain "taken.test" is already claimed by another organisation',
+    'a domain already claimed elsewhere is refused'
+);
+select is(
+    (select count(*)::int from public.organisations where slug = 'pgtorphan'),
+    0,
+    'and NO organisation was left behind -- the refusal happens before the first insert'
+);
+select is(
+    (select count(*)::int from public.roles where name in ('pgtorphan_admin', 'pgtorphan_user')),
+    0,
+    'nor its derived roles, which would block every retry on the slug'
+);
+
+-- Same for a reserved domain, the other late-return path.
+select is(
+    (select public.create_organisation_internal(
+        p_slug=>'pgtorphan2', p_name=>'Orphan Two',
+        p_owner_id=>'60000000-0000-0000-0000-000000000001',
+        p_domain=>'gmail.com') ->> 'error'),
+    '"gmail.com" is a reserved email domain and cannot be claimed by an organisation',
+    'a reserved domain is refused'
+);
+select is(
+    (select count(*)::int from public.organisations where slug = 'pgtorphan2'),
+    0,
+    'and leaves no organisation behind either'
+);
+
+-- The happy path still claims the domain, so the reordering did not disable it.
+select ok(
+    (select public.create_organisation_internal(
+        p_slug=>'pgtdomok', p_name=>'Domain OK',
+        p_owner_id=>'60000000-0000-0000-0000-000000000001',
+        p_domain=>'freshdomain.test') ->> 'success')::boolean,
+    'an unclaimed domain still creates the organisation'
+);
+select is(
+    (select d.domain from public.organisation_domains d
+       join public.organisations o on o.id = d.org_id
+      where o.slug = 'pgtdomok'),
+    'freshdomain.test',
+    'and the domain row is written'
 );
 
 select * from finish();

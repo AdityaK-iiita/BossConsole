@@ -50,7 +50,7 @@
 -- someone sets a plugin non-public. Deploy in that order; the reverse empties the
 -- store for every user.
 --
--- Next migration: none (end of the organisation batch).
+-- Next migration: 20260804000000_organisation_detail_rpc.sql.
 -- ============================================================================
 
 

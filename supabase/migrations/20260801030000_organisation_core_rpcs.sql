@@ -230,6 +230,36 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'error', 'Slug is too long for the derived role names');
     END IF;
 
+    -- The optional domain claim is validated HERE, before the first INSERT, and
+    -- the placement is the whole point.
+    --
+    -- A plain RETURN from PL/pgSQL is a normal return: it rolls back NOTHING.
+    -- Only a propagating exception aborts the transaction. These two checks used
+    -- to sit at step 8, after the organisation, both roles, the hierarchy edges,
+    -- the permission grants, the founder membership and the founder user_roles
+    -- row had all been inserted -- so a refused domain returned success:false
+    -- while all eight inserts committed. That left an orphan organisation nothing
+    -- pointed at, silently owned by the requester, and because the slug was now
+    -- taken the originating request could never be approved on a retry.
+    --
+    -- Reachable in normal operation: two pending requests naming the same domain,
+    -- or a domain added to reserved_email_domains between submit and approve.
+    -- submit_organisation_request checks the domain too, but that check is a
+    -- TOCTOU, which is exactly why the re-check exists.
+    IF p_domain IS NOT NULL AND btrim(p_domain) <> '' THEN
+        v_domain := lower(btrim(p_domain));
+
+        IF EXISTS (SELECT 1 FROM public.reserved_email_domains red WHERE red.domain = v_domain) THEN
+            RETURN jsonb_build_object('success', false, 'error',
+                format('"%s" is a reserved email domain and cannot be claimed by an organisation', v_domain));
+        END IF;
+
+        IF EXISTS (SELECT 1 FROM public.organisation_domains d WHERE d.domain = v_domain) THEN
+            RETURN jsonb_build_object('success', false, 'error',
+                format('Domain "%s" is already claimed by another organisation', v_domain));
+        END IF;
+    END IF;
+
     -- 1. The organisation.
     BEGIN
         INSERT INTO public.organisations (
@@ -299,20 +329,12 @@ BEGIN
     VALUES (p_owner_id, v_admin_role_id, NULL, now())
     ON CONFLICT (user_id, role_id) DO NOTHING;
 
-    -- 8. Optional unverified domain claim.
+    -- 8. Optional unverified domain claim. Already validated above, before the
+    --    first INSERT, so nothing here can return a failure after committing rows.
+    --    The unique index on organisation_domains.domain is the backstop for a
+    --    concurrent claim landing between that check and this insert; it RAISES,
+    --    which does roll the transaction back.
     IF p_domain IS NOT NULL AND btrim(p_domain) <> '' THEN
-        v_domain := lower(btrim(p_domain));
-
-        IF EXISTS (SELECT 1 FROM public.reserved_email_domains red WHERE red.domain = v_domain) THEN
-            RETURN jsonb_build_object('success', false, 'error',
-                format('"%s" is a reserved email domain and cannot be claimed by an organisation', v_domain));
-        END IF;
-
-        IF EXISTS (SELECT 1 FROM public.organisation_domains d WHERE d.domain = v_domain) THEN
-            RETURN jsonb_build_object('success', false, 'error',
-                format('Domain "%s" is already claimed by another organisation', v_domain));
-        END IF;
-
         -- URL-safe: translate()'s 3-character FROM against a 2-character TO also
         -- DELETES the '=' padding.
         v_token := translate(

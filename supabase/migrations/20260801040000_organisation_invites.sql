@@ -182,9 +182,22 @@ BEGIN
     -- it before, and no state changes. It is deliberately returned even for a
     -- revoked or expired invite, because revoking a link is not a mechanism for
     -- ejecting members who already used it -- remove_organisation_member is.
+    --
+    -- AND still a member. The redemption row outlives the membership -- there is
+    -- no 'removed' status, remove_organisation_member deletes the row, and the
+    -- redemption's foreign keys point at the invite and the user, not at the
+    -- membership. Keying only on the redemption meant that someone removed from
+    -- the organisation, or who left, clicking a still-live link they had used
+    -- before was told "already a member" and NOT re-added: a dead end they could
+    -- never escape through that link. Falling through re-admits them via the
+    -- ON CONFLICT DO UPDATE below, and the redemptions insert's ON CONFLICT DO
+    -- NOTHING keeps uses from double-counting.
     IF EXISTS (
         SELECT 1 FROM public.organisation_invite_redemptions red
         WHERE red.invite_id = v_inv.id AND red.user_id = v_user_id
+    ) AND EXISTS (
+        SELECT 1 FROM public.organisation_members m
+        WHERE m.org_id = v_inv.org_id AND m.user_id = v_user_id AND m.status = 'active'
     ) THEN
         RETURN jsonb_build_object('success', true, 'already_member', true,
             'org_id', v_inv.org_id::text, 'slug', v_slug, 'name', v_name);

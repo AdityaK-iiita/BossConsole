@@ -534,7 +534,7 @@ ALTER TABLE "public"."organisation_handoff_tokens" OWNER TO "postgres";
 
 COMMENT ON TABLE "public"."organisation_handoff_tokens" IS 'Short-lived single-use tokens that hand a desktop session to the organisation edge function''s web pages. Minted by the authenticated user for THEMSELVES only (mint has no p_user_id parameter -- that is the security property); consumed only by service_role.';
 
-COMMENT ON COLUMN "public"."organisation_handoff_tokens"."purpose" IS 'Which page the token is good for, e.g. org_view or org_admin. Bound into the edge function''s session cookie so an org_view handoff cannot reach the admin page even if the membership probe says admin.';
+COMMENT ON COLUMN "public"."organisation_handoff_tokens"."purpose" IS 'Which page the token is good for, e.g. org_view or org_admin. Informational ONLY. It is carried into the session cookie as `pur`, but it is not an authority: the admin page gates on a live user_is_org_admin probe alone, so an org_view handoff reaches /admin whenever the user genuinely is an admin. Do not treat it as a second gate -- session.ts is explicit that pur carries none.';
 
 COMMENT ON COLUMN "public"."organisation_handoff_tokens"."consumed_at" IS 'Set by the single atomic UPDATE ... WHERE consumed_at IS NULL RETURNING inside consume_organisation_handoff_token. That statement IS the single-use primitive -- no read-then-write race, no advisory lock.';
 
