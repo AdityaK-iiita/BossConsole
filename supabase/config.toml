@@ -391,6 +391,19 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/crash-report/deno.json"
 entrypoint = "./functions/crash-report/index.ts"
+
+[functions.organisation]
+enabled = true
+# MUST be false: these are browser page loads that authenticate with a COOKIE,
+# not an Authorization header, so verify_jwt=true would 401 every one of them
+# (UNAUTHORIZED_NO_AUTH_HEADER) before the function ran. The function does its
+# own authorization and does more of it than the gateway could: a single-use
+# handoff token is exchanged for an HMAC-signed HttpOnly session cookie, and
+# every request re-derives authority with a live user_is_org_admin /
+# user_is_org_member probe rather than trusting anything the cookie claims.
+verify_jwt = false
+import_map = "./functions/organisation/deno.json"
+entrypoint = "./functions/organisation/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/redirect/*.html" ]

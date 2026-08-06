@@ -91,3 +91,38 @@ jobs:
       - name: 🧹 Lint (advisory)
         continue-on-error: true
         run: deno lint
+
+  organisation:
+    name: 🏛️ Organisation function — check & test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: supabase/functions/organisation
+    # Each function gets its own job because `working-directory` scopes both the
+    # `find` and the `deno test` -- adding this function's directory to an
+    # existing job would not have run it. That is exactly how the plugin-store
+    # suite sat unexecuted (see the note on that job).
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v7
+
+      - name: 🦕 Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: 🔎 Type check
+        run: find . -name '*.ts' -print0 | sort -z | xargs -0 -r deno check
+
+      - name: 🧪 Tests
+        # --allow-env: the suite sets ORG_SESSION_SECRET and ORG_PUBLIC_BASE_PATH
+        # to exercise the fail-closed path and the cookie Path.
+        # --allow-net: resolving the remote hono / supabase-js dependencies.
+        # --allow-read: the duplicate-class guard scans views/ on disk, because the
+        # previous version only inspected one rendered page and missed two files.
+        run: deno test --allow-env --allow-net --allow-read
+
+      - name: 🧹 Lint
+        # Gating, unlike the two jobs above: this function is new, so it starts
+        # with no findings to grandfather. Keep it that way.
+        run: deno lint
