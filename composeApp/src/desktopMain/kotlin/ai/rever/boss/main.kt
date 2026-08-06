@@ -209,6 +209,16 @@ fun main(args: Array<String>) {
     ai.rever.boss.plugin.sandbox.ui
         .installCrashInterceptor()
 
+    // Teach the attribution boundary how to identify a plugin classloader for real.
+    // Without this it falls back to asking the loader for its own id, which a plugin
+    // that defines classes through a nested loader of its own could answer with
+    // somebody else's - and attribution now decides which plugin gets disabled and
+    // written out of installed.json. A type check against a class only the host
+    // constructs cannot be forged. Installed before any plugin loads.
+    ai.rever.boss.plugin.sandbox.PluginExecutionBoundary.pluginIdResolver = { loader ->
+        (loader as? ai.rever.boss.plugin.loader.PluginClassLoader)?.pluginId
+    }
+
     // Register notification callback for plugin crashes.
     // Tab closing is handled directly by PluginCrashRegistry via the closeAction
     // registered in BossMainPanelContent. This callback only shows the status message.

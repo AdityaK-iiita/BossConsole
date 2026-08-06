@@ -50,7 +50,7 @@ fun classifyCrash(
 ): CrashDisposition =
     when {
         pluginId.isNullOrBlank() -> CrashDisposition.FatalHost
-        anyCauseIsUncontainable(throwable) -> CrashDisposition.FatalHost
+        throwable.hasUncontainableCause() -> CrashDisposition.FatalHost
         !recoveryAvailable -> CrashDisposition.FatalHost
         else -> CrashDisposition.RecoverablePlugin(pluginId)
     }
@@ -69,4 +69,4 @@ fun classifyCrash(
  * Shared with [decideWindowExceptionRoute] through [causeChain], because the two
  * carve-outs are worthless unless they agree - and for one round they did not.
  */
-internal fun anyCauseIsUncontainable(throwable: Throwable): Boolean = throwable.causeChain().any { isUncontainable(it) }
+internal fun Throwable.hasUncontainableCause(): Boolean = chainOfCauses().any { isUncontainable(it) }

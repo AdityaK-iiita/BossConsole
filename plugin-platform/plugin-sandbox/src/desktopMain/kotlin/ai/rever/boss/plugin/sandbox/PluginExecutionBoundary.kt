@@ -48,13 +48,6 @@ import java.util.WeakHashMap
  */
 object PluginExecutionBoundary {
     /**
-     * How far [attributionFor] walks a cause chain. Matches the bound
-     * `CrashHandler.isIgnorable` and `attributePluginId` already use, and stops a
-     * self-referential chain from spinning.
-     */
-    private const val MAX_CAUSE_DEPTH = 12
-
-    /**
      * Plugin ids currently being executed on this thread, innermost last.
      *
      * A stack rather than a single slot because plugin code calls back into the
@@ -87,10 +80,56 @@ object PluginExecutionBoundary {
      * unloaded plugin classloaders; a `WeakHashMap` fixed that but put a lock back
      * on the hot path. Null values are cached, which is the point.
      */
-    private val ownerPluginIds =
-        object : ClassValue<String?>() {
-            override fun computeValue(type: Class<*>): String? = type.classLoader?.let(::resolvePluginId)
+
+    /**
+     * The host's authoritative loader → plugin id lookup, installed at startup.
+     *
+     * Attribution now selects which plugin gets **disabled and written out of
+     * `installed.json`**, not merely which one a report is labelled with, so
+     * "whatever this classloader claims its id is" is too weak a question. A plugin
+     * that defines classes through a nested loader of its own - a scripting engine,
+     * an embedded framework - controls what that loader answers, and could get an
+     * unrelated plugin disabled by crashing.
+     *
+     * The host installs `{ (it as? PluginClassLoader)?.pluginId }`, which is a type
+     * check against a class only the host constructs, so the answer cannot be
+     * forged. This module keeps no dependency on `plugin-loader`; the reflective
+     * duck-typing below stays as the fallback for tests and for any context where
+     * nothing has been installed.
+     */
+    @Volatile
+    private var resolver: ((ClassLoader) -> String?)? = null
+
+    /** Bumped on every install so [ownerPluginIds] cannot serve a pre-install answer. */
+    private val resolverGeneration =
+        java.util.concurrent.atomic
+            .AtomicInteger(0)
+
+    var pluginIdResolver: ((ClassLoader) -> String?)?
+        get() = resolver
+        set(value) {
+            resolver = value
+            resolverGeneration.incrementAndGet()
         }
+
+    private val ownerPluginIds =
+        object : ClassValue<Resolved>() {
+            override fun computeValue(type: Class<*>): Resolved =
+                Resolved(resolverGeneration.get(), type.classLoader?.let(::resolvePluginId))
+        }
+
+    /**
+     * A cached answer, stamped with the resolver that produced it.
+     *
+     * ClassValue entries cannot be enumerated or bulk-cleared, so without the stamp
+     * a class first seen before the host installed its resolver would keep the
+     * duck-typed answer for the life of the process - and every test that installs
+     * one would depend on which test ran first.
+     */
+    private data class Resolved(
+        val generation: Int,
+        val pluginId: String?,
+    )
 
     /**
      * Run [block] as [pluginId], tagging anything that escapes.
@@ -153,18 +192,7 @@ object PluginExecutionBoundary {
      * wrapper — so a tag on any link in the chain answers for the whole chain.
      * Nearest tag first, so an inner plugin outranks an outer wrapper.
      */
-    fun attributionFor(throwable: Throwable): String? {
-        var current: Throwable? = throwable
-        var depth = 0
-        val seen = ArrayList<Throwable>(MAX_CAUSE_DEPTH)
-        while (current != null && depth < MAX_CAUSE_DEPTH && seen.none { it === current }) {
-            tags[current]?.let { return it }
-            seen.add(current)
-            current = current.cause
-            depth++
-        }
-        return null
-    }
+    fun attributionFor(throwable: Throwable): String? = throwable.causeChain().firstNotNullOfOrNull { tags[it] }
 
     /**
      * The plugin this thread is executing right now, innermost first, or null.
@@ -191,7 +219,19 @@ object PluginExecutionBoundary {
      * Resolved reflectively so this module keeps no dependency on
      * `plugin-loader`, and cached per classloader - see [ownerPluginIds].
      */
-    fun pluginIdOfOwner(owner: Any?): String? = owner?.let { ownerPluginIds.get(it.javaClass) }
+    fun pluginIdOfOwner(owner: Any?): String? {
+        val type = owner?.javaClass ?: return null
+        val cached = ownerPluginIds.get(type)
+        // Recomputed once when the resolver changed since this class was last seen.
+        val fresh =
+            if (cached.generation == resolverGeneration.get()) {
+                cached
+            } else {
+                ownerPluginIds.remove(type)
+                ownerPluginIds.get(type)
+            }
+        return fresh.pluginId
+    }
 
     /**
      * Ask a classloader for its plugin id: **getter first**, then a public field.
@@ -214,9 +254,16 @@ object PluginExecutionBoundary {
      * written in Java. Failures are swallowed on both branches: a host classloader
      * has neither member, and attribution must never break the call it describes.
      */
-    private fun resolvePluginId(loader: ClassLoader): String? =
-        runCatching { loader.javaClass.getMethod("getPluginId").invoke(loader) as? String }.getOrNull()
+    private fun resolvePluginId(loader: ClassLoader): String? {
+        pluginIdResolver?.let { authoritative ->
+            // Installed in production: a type check the host owns. Its answer is
+            // final, including a null - falling through to duck-typing here would
+            // hand back the spoofing route the resolver exists to close.
+            return runCatching { authoritative(loader) }.getOrNull()
+        }
+        return runCatching { loader.javaClass.getMethod("getPluginId").invoke(loader) as? String }.getOrNull()
             ?: runCatching { loader.javaClass.getField("pluginId").get(loader) as? String }.getOrNull()
+    }
 
     /**
      * Invoke a plugin-supplied callback with its plugin in scope, allocating nothing.
@@ -256,6 +303,7 @@ object PluginExecutionBoundary {
     /** Drop every recorded tag. For tests; production entries expire with their throwable. */
     internal fun resetForTest() {
         tags.clear()
+        pluginIdResolver = null
         // ownerPluginIds is deliberately not reset: a ClassValue entry is keyed on
         // the Class, so it can only be stale if the class itself changed, which
         // cannot happen within a run. Clearing it would need a per-class remove and

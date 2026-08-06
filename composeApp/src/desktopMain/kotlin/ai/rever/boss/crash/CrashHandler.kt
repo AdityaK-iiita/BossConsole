@@ -199,7 +199,7 @@ object CrashHandler {
      * dependency on ktor/coroutines here.
      */
     internal fun isIgnorable(throwable: Throwable): Boolean =
-        throwable.causeChain().any { t ->
+        throwable.chainOfCauses().any { t ->
             val name = t.javaClass.name
             val msg = t.message ?: ""
             val benign =
@@ -877,7 +877,7 @@ object CrashHandler {
         PluginExecutionBoundary.currentPluginId()?.let { return it }
         return try {
             // Root cause first: the crash origin outranks the layers that wrapped it.
-            for (cause in throwable.causeChain().asReversed()) {
+            for (cause in throwable.chainOfCauses().asReversed()) {
                 (cause.javaClass.classLoader as? PluginClassLoader)?.let { return it.pluginId }
                 for (frame in cause.stackTrace) {
                     PluginClassLoader.findPluginForClass(frame.className)?.let { return it }

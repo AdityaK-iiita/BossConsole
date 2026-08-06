@@ -194,6 +194,40 @@ class PluginExecutionBoundaryTest {
     }
 
     @Test
+    fun `an installed resolver overrules what a classloader claims about itself`() {
+        // Attribution now selects which plugin gets disabled and written out of
+        // installed.json, so "whatever this loader says its id is" is too weak. A
+        // plugin defining classes through a nested loader of its own - a scripting
+        // engine, an embedded framework - controls that answer and could name a
+        // rival. With the host's resolver installed, only what the host recognises
+        // counts, and this loader is not it.
+        val spoofing = FakePluginClassLoader(OTHER_PLUGIN, javaClass.classLoader)
+        val action = spoofing.loadThrowingAction()
+        PluginExecutionBoundary.pluginIdResolver = { loader ->
+            // Stands in for `(loader as? PluginClassLoader)?.pluginId`: a type check
+            // against something only the host constructs.
+            if (loader is TrustedLoader) loader.trustedPluginId else null
+        }
+
+        assertNull(
+            PluginExecutionBoundary.pluginIdOfOwner(action),
+            "a loader the host does not recognise attributes to nobody, whatever it claims",
+        )
+        assertSame(action, PluginExecutionBoundary.wrapPluginCallback(action), "and so it is not wrapped")
+    }
+
+    @Test
+    fun `an installed resolver is what identifies a recognised loader`() {
+        val trusted = TrustedLoader(PLUGIN, javaClass.classLoader)
+        val action = trusted.loadThrowingAction()
+        PluginExecutionBoundary.pluginIdResolver = { loader ->
+            if (loader is TrustedLoader) loader.trustedPluginId else null
+        }
+
+        assertEquals(PLUGIN, PluginExecutionBoundary.pluginIdOfOwner(action))
+    }
+
+    @Test
     fun `the first tag wins`() {
         val error = IllegalStateException("boom")
         PluginExecutionBoundary.tag(error, PLUGIN)
@@ -220,8 +254,16 @@ class PluginExecutionBoundaryTest {
      * it back. `CrashHandlerAttributionTest` pins the same thing against the real
      * loader, which is the assertion that cannot be faked.
      */
-    private class FakePluginClassLoader(
-        val pluginId: String,
+
+    /**
+     * Defines [ThrowingAction] in itself, so the action's class - and therefore its
+     * classloader - is this loader rather than the test's.
+     *
+     * `defineClass` is protected, so a subclass can call it directly; going through
+     * reflection instead fails under the module system ("java.base does not opens
+     * java.lang"), which is worth stating because it looks like the obvious route.
+     */
+    private abstract class DefiningLoader(
         parent: ClassLoader,
     ) : ClassLoader(parent) {
         fun loadThrowingAction(): () -> Unit {
@@ -236,6 +278,28 @@ class PluginExecutionBoundaryTest {
             return defined.getDeclaredConstructor().newInstance()
         }
     }
+
+    /**
+     * Stands in for `PluginClassLoader` when NO resolver is installed.
+     *
+     * `pluginId` is a plain Kotlin `val`, **not** `@JvmField`, because that is what
+     * `PluginClassLoader` declares: a constructor property, i.e. a private backing
+     * field plus a public `getPluginId()`. The `@JvmField` this fixture used at
+     * first was the only form a `getField` lookup can see, so it made the test pass
+     * against a production shape the code could not actually read. Do not add it
+     * back. `CrashHandlerAttributionTest` pins the same thing against the real
+     * loader, which is the assertion that cannot be faked.
+     */
+    private class FakePluginClassLoader(
+        val pluginId: String,
+        parent: ClassLoader,
+    ) : DefiningLoader(parent)
+
+    /** A loader the fake resolver recognises, standing in for `PluginClassLoader`. */
+    private class TrustedLoader(
+        val trustedPluginId: String,
+        parent: ClassLoader,
+    ) : DefiningLoader(parent)
 
     /** A plugin-authored callback: public, no-arg constructor, throws when invoked. */
     class ThrowingAction : () -> Unit {
