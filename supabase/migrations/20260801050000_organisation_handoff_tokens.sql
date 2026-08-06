@@ -78,12 +78,22 @@ BEGIN
             RETURN jsonb_build_object('success', false, 'error', 'Organisation not found');
         END IF;
 
-        -- Members always; non-members only for a PUBLIC organisation. Without the
-        -- public arm "browse a public org, then request to join" is impossible,
-        -- because the page you would browse is the one you cannot open.
-        -- Authority for what the page then SHOWS is re-derived per request by the
-        -- edge function -- this check only decides who may open it at all.
-        IF NOT public.is_org_member(p_org_id) AND v_visibility <> 'public' THEN
+        -- MEMBERS ONLY.
+        --
+        -- This used to admit a non-member for a PUBLIC organisation, with the
+        -- rationale that "browse a public org, then request to join" would
+        -- otherwise be impossible. That flow does not exist: the page such a
+        -- token opens refuses them twice - routes/org-page.ts on the live
+        -- is_org_member probe, and get_organisation_detail, which is
+        -- member-gated. So the arm bought nothing and the comment described a
+        -- feature the next reader would assume worked.
+        --
+        -- If a visitor view with a "Request to join" action is ever built, widen
+        -- this again THEN, together with the page that honours it.
+        --
+        -- Authority for what the page SHOWS is still re-derived per request by
+        -- the edge function; this only decides who may open it at all.
+        IF NOT public.is_org_member(p_org_id) THEN
             RETURN jsonb_build_object('success', false, 'error', 'Organisation not found');
         END IF;
     END IF;

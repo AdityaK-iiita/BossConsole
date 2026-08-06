@@ -246,7 +246,9 @@ function membersCard(
 
 function rolesCard(action: string, csrf: string, org: OrgDetail, roles: OrgRole[]): string {
   const customCount = org.custom_role_count ?? 0
-  const maxCustom = org.max_custom_roles ?? 0
+  // 25 matches create_organisation_role COALESCE(v_max, 25); the column is NOT NULL
+  // DEFAULT 25, so this only fires if the field is absent from the projection.
+  const maxCustom = org.max_custom_roles ?? 25
   const atCap = maxCustom > 0 && customCount >= maxCustom
 
   const rows = roles.map((role) => `
@@ -446,4 +448,31 @@ function selectOption(value: string, label: string, current: string): string {
   return `<option value="${esc(value)}"${
     current === value ? " selected" : ""
   }>${esc(label)}</option>`
+}
+
+/**
+ * The invite link on its own, for when the admin page data could not be loaded.
+ *
+ * The invite already exists and is live at this point, so redirecting would lose its plaintext
+ * forever while reporting success - the admin would have to find it by prefix and revoke it. The
+ * url does not depend on any of that page data, so it can always be shown.
+ */
+export function inviteOnlyPage(
+  nonce: string,
+  basePath: string,
+  slug: string,
+  inviteUrl: string,
+): string {
+  return layout({
+    title: "Invite link created - BOSS",
+    nonce,
+    body: `
+<header class="page"><h1>Invite link created</h1></header>
+${newInviteCard(inviteUrl)}
+<section class="card">
+  <p class="hint">The rest of the configuration page could not be loaded just now. The invite
+  above is live and is shown only once, so copy it before reloading.</p>
+  <a href="${esc(basePath)}/o/${esc(encodeURIComponent(slug))}/admin">Back to configuration</a>
+</section>`,
+  })
 }

@@ -58,8 +58,10 @@ export function attrUrl(url: string, allowedSchemes: readonly string[] = []): st
   const trimmed = String(url ?? "").trim()
   if (trimmed.length === 0) return "#"
 
-  // Protocol-relative: the browser reads //host/path as another origin.
-  if (trimmed.startsWith("//")) return "#"
+  // Protocol-relative: the browser reads //host/path as another origin. Backslash counts -
+  // browsers normalise a leading /\ (and \\) to // for special schemes, so `/\evil.com` is
+  // cross-origin while still passing a naive startsWith("/") test.
+  if (/^[/\\]{2}/.test(trimmed)) return "#"
 
   // Same-origin absolute path -- the normal case for every link we emit.
   if (trimmed.startsWith("/")) return esc(trimmed)

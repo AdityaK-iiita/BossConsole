@@ -23,6 +23,8 @@ import { loadAdminPageData } from "../services/org.ts"
 import { htmlResponse, redirectResponse } from "../utils/responses.ts"
 import { clientKey, rateLimit } from "../utils/rate-limit.ts"
 import { publicBaseUrl } from "../utils/config.ts"
+import { mintSession, newCsrfToken, sessionCookieHeader, verifySession } from "../utils/session.ts"
+import { inviteOnlyPage } from "../views/admin.ts"
 import { checkbox, field, intField, uuidField } from "../utils/request.ts"
 import { requireCsrfBody, requireOrgAdmin, requireOrgSession } from "./guards.ts"
 import { adminPage } from "../views/admin.ts"
@@ -125,13 +127,24 @@ adminActionRoutes.post("/o/:slug/admin/settings", async (ctx) => {
 
   const publishRoleId = uuidField(body, "publish_role_id")
 
+  let visibility: string | null
+  let joinPolicy: string | null
+  let publishPolicy: string | null
+  try {
+    visibility = oneOf(field(body, "visibility"), ["private", "public"])
+    joinPolicy = oneOf(field(body, "join_policy"), ["invite_only", "request_to_join", "open"])
+    publishPolicy = oneOf(field(body, "publish_policy"), ["owner_only", "admins", "members"])
+  } catch {
+    return redirectTo(facts, session.slug, { err: "invalid_input" })
+  }
+
   const result = await callForActor("update_organisation_settings", session.sub, {
     p_org_id: session.org,
     p_name: name,
     p_description: field(body, "description"),
-    p_visibility: oneOf(field(body, "visibility"), ["private", "public"]),
-    p_join_policy: oneOf(field(body, "join_policy"), ["invite_only", "request_to_join", "open"]),
-    p_publish_policy: oneOf(field(body, "publish_policy"), ["owner_only", "admins", "members"]),
+    p_visibility: visibility,
+    p_join_policy: joinPolicy,
+    p_publish_policy: publishPolicy,
     p_publish_role_id: publishRoleId,
     // An empty <select> means "use the policy", which COALESCE cannot express:
     // NULL already means "leave unchanged" for every other parameter.
@@ -276,31 +289,57 @@ adminActionRoutes.post("/o/:slug/admin/invites/create", async (ctx) => {
   const token = typeof result.data.token === "string" ? result.data.token : null
   if (!token) return redirectTo(facts, session.slug, { err: "rejected" })
 
-  // Rendered inline rather than redirected: this response is the only place the
-  // plaintext token will ever exist. The URL is built from the configured base
-  // path so it is the one the BROWSER can actually use.
-  const data = await loadAdminPageData(session.sub, session.org)
-  if (!data.ok) return redirectTo(facts, session.slug, { ok: "invite_created" })
-
   // An ABSOLUTE url: this one is copied out of the browser and sent to someone else, so a bare
   // path is unusable, and the token is shown exactly once.
   const inviteUrl = `${
     publicBaseUrl(ctx.req.url, ctx.req.header("x-forwarded-host") ?? ctx.req.header("host") ?? null, facts.secure)
   }/join/${encodeURIComponent(token)}`
 
+  // A FRESH session, so reloading this page cannot mint a second invite.
+  //
+  // This handler answers 200 rather than 303 because the plaintext token exists for exactly one
+  // response - which means the browser's reload button re-submits the form, and an admin hitting
+  // F5 silently created a second live link while the first stayed live. Rotating the CSRF nonce
+  // invalidates the form that is still sitting in the page, so the resubmission is refused by the
+  // existing gate rather than needing a new mechanism.
+  const rotated = await mintSession({
+    sub: session.sub,
+    org: session.org,
+    slug: session.slug,
+    csrf: newCsrfToken(),
+    pur: session.pur,
+  })
+  const rotatedCookie = sessionCookieHeader(rotated, facts.secure, facts.basePath)
+  const rotatedCsrf = (await verifySession(rotated))?.csrf ?? session.csrf
+
+  // Rendered inline rather than redirected: this response is the only place the plaintext token
+  // will ever exist.
+  const data = await loadAdminPageData(session.sub, session.org)
+
+  // If the page read fails the invite still EXISTS and is live, so redirecting would lose its
+  // plaintext forever while telling the admin it worked - they would have to hunt it down by
+  // prefix and revoke it. The url does not depend on `data`, so render the card alone.
+  if (!data.ok) {
+    return htmlResponse(
+      (nonce) => inviteOnlyPage(nonce, facts.basePath, session.slug, inviteUrl),
+      { headers: { "Set-Cookie": rotatedCookie } },
+    )
+  }
+
+  // An ABSOLUTE url: this one is copied out of the browser and sent to someone else, so a bare
+  // path is unusable, and the token is shown exactly once.
   return htmlResponse((nonce) =>
     adminPage({
       nonce,
       basePath: facts.basePath,
-      csrf: session.csrf,
+      csrf: rotatedCsrf,
       org: data.org,
       members: data.members,
       roles: data.roles,
       domains: data.domains,
       invites: data.invites,
       newInviteUrl: inviteUrl,
-    })
-  )
+    }), { headers: { "Set-Cookie": rotatedCookie } })
 })
 
 adminActionRoutes.post("/o/:slug/admin/invites/revoke", async (ctx) => {
@@ -320,9 +359,20 @@ adminActionRoutes.post("/o/:slug/admin/invites/revoke", async (ctx) => {
   return finish(facts, session.slug, result.ok, "invite_revoked")
 })
 
-/** The value if it is in the allowed set, else null ("leave unchanged"). */
+/**
+ * The value if it is in the allowed set; null when ABSENT ("leave unchanged").
+ *
+ * Throws [InvalidEnum] for a value that is present but unrecognised, rather than silently
+ * mapping it to "leave unchanged" and answering with a success banner. That is the same rule
+ * max_uses follows a hundred lines up, and for the same reason: the caller asked for something
+ * specific and a no-op reported as success is the opposite of the answer.
+ */
 function oneOf(value: string | null, allowed: readonly string[]): string | null {
-  return value !== null && allowed.includes(value) ? value : null
+  if (value === null) return null
+  if (allowed.includes(value)) return value
+  throw new InvalidEnum()
 }
+
+class InvalidEnum extends Error {}
 
 export { prepare, redirectTo }

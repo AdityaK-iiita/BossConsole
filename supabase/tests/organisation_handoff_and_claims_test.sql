@@ -8,7 +8,7 @@
 -- breaks every login if it is missing.
 
 begin;
-select plan(41);
+select plan(42);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -202,7 +202,12 @@ select is(
     'an expired but unconsumed token is refused'
 );
 
--- A non-member cannot mint for a private organisation.
+-- A non-member cannot mint, for a private OR a public organisation.
+--
+-- The public arm used to be allowed, on the rationale that "browse a public org, then request to
+-- join" needed it. That flow does not exist - the page such a token opens refuses a non-member
+-- twice, on the live is_org_member probe and again in get_organisation_detail - so the arm
+-- granted a token that could only ever 404.
 select set_config('request.jwt.claims',
     '{"sub":"70000000-0000-0000-0000-000000000003","role":"authenticated"}', true);
 select ok(
@@ -210,6 +215,12 @@ select ok(
         (select id from public.organisations where slug='pgthpriv'), 'org_view', 300)
         ->> 'success')::boolean,
     'a non-member cannot mint a token for a private organisation'
+);
+select ok(
+    NOT (select public.mint_organisation_handoff_token(
+        (select id from public.organisations where slug='pgthpub'), 'org_view', 300)
+        ->> 'success')::boolean,
+    'nor for a PUBLIC one -- the page would refuse them anyway'
 );
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 

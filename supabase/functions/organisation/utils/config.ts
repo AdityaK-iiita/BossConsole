@@ -93,8 +93,8 @@ export function deepLinkScheme(): string {
  * The HMAC keys for the session cookie, newest first.
  *
  * ORG_SESSION_SECRET signs; ORG_SESSION_SECRET_PREV only verifies, so a
- * rotation does not log every open page out. Verification tries them in order
- * and stops at the first that matches.
+ * rotation does not log every open page out. Verification tries them all, deliberately without an early break, so the
+ * loop cost stays independent of WHICH key matched - see session.ts.
  *
  * @throws if ORG_SESSION_SECRET is missing or too short to be a real key.
  */

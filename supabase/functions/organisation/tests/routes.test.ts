@@ -414,12 +414,14 @@ Deno.test("a valid post reaches the RPC with the session subject as the actor", 
   }
 })
 
-Deno.test("an unknown enum value is dropped rather than forwarded", async () => {
+Deno.test("a present but unrecognised enum is refused, not silently dropped", async () => {
   const { stub, restore } = setup()
   try {
-    stub.responses.set("update_organisation_settings", { success: true })
-
-    await app.request(`${BASE}/o/${FIXTURE.slug}/admin/settings`, {
+    // Previously this mapped to null - "leave unchanged" - and still answered
+    // ?ok=settings_saved, so a caller asking for something specific got a success banner for a
+    // no-op. That is the opposite of the rule max_uses follows, and the two sit ~120 lines
+    // apart in the same file.
+    const response = await app.request(`${BASE}/o/${FIXTURE.slug}/admin/settings`, {
       method: "POST",
       headers: formHeaders(await sessionCookie()),
       body: new URLSearchParams({
@@ -429,10 +431,29 @@ Deno.test("an unknown enum value is dropped rather than forwarded", async () => 
       }),
     })
 
+    assertEquals(
+      response.headers.get("location"),
+      "/functions/v1/organisation/o/acme/admin?err=invalid_input",
+    )
+    assertEquals(stub.calls.some((c) => c.fn === "update_organisation_settings"), false)
+  } finally {
+    restore()
+  }
+})
+
+Deno.test("an ABSENT enum still means leave unchanged", async () => {
+  const { stub, restore } = setup()
+  try {
+    stub.responses.set("update_organisation_settings", { success: true })
+
+    await app.request(`${BASE}/o/${FIXTURE.slug}/admin/settings`, {
+      method: "POST",
+      headers: formHeaders(await sessionCookie()),
+      body: new URLSearchParams({ [CSRF_FIELD]: CSRF, name: "Renamed" }),
+    })
+
     const call = stub.calls.find((c) => c.fn === "update_organisation_settings")
     assert(call)
-    // null means "leave unchanged", which is the safe reading of a value we
-    // do not recognise.
     assertEquals(call.params.p_visibility, null)
   } finally {
     restore()
@@ -607,6 +628,76 @@ Deno.test("a created invite link is shown once, inline", async () => {
       "the new-invite card must carry both classes in ONE attribute",
     )
     assertEquals(/class="[^"]*"\s+class="/.test(body), false, "duplicate class attribute")
+  } finally {
+    restore()
+  }
+})
+
+Deno.test("reloading the invite page cannot mint a second invite", async () => {
+  const { stub, restore } = setup()
+  try {
+    stub.responses.set("create_organisation_invite", {
+      success: true,
+      token: "boss_inv_abcdefghijklmnopqrstuvwxyz0123456789ABCD",
+      token_prefix: "boss_inv_abcdefg",
+    })
+
+    const cookie = await sessionCookie()
+    const body = () => new URLSearchParams({ [CSRF_FIELD]: CSRF, expires_in_hours: "168" })
+
+    const first = await app.request(`${BASE}/o/${FIXTURE.slug}/admin/invites/create`, {
+      method: "POST",
+      headers: formHeaders(cookie),
+      body: body(),
+    })
+    assertEquals(first.status, 200)
+
+    // The response rotates the session's CSRF nonce, so the form still sitting in that page is
+    // stale. A browser reload re-POSTs it and must be refused - otherwise F5 silently mints a
+    // second live invite while the first stays live.
+    const rotated = first.headers.get("set-cookie")
+    assert(rotated, "the invite response must rotate the session")
+    const newCookie = rotated.split(";")[0]
+
+    const before = stub.calls.filter((c) => c.fn === "create_organisation_invite").length
+    const reload = await app.request(`${BASE}/o/${FIXTURE.slug}/admin/invites/create`, {
+      method: "POST",
+      headers: formHeaders(newCookie),
+      body: body(),
+    })
+
+    assertEquals(reload.status, 403)
+    assertEquals(
+      stub.calls.filter((c) => c.fn === "create_organisation_invite").length,
+      before,
+      "the reload must not reach the mint RPC",
+    )
+  } finally {
+    restore()
+  }
+})
+
+Deno.test("a failed page read still shows the invite link", async () => {
+  const { stub, restore } = setup()
+  try {
+    stub.responses.set("create_organisation_invite", {
+      success: true,
+      token: "boss_inv_abcdefghijklmnopqrstuvwxyz0123456789ABCD",
+      token_prefix: "boss_inv_abcdefg",
+    })
+    // The invite already exists and is live; losing its plaintext here would leave the admin
+    // hunting it by prefix to revoke it, having been told it worked.
+    stub.errors.set("get_organisation_detail", "connection reset")
+
+    const response = await app.request(`${BASE}/o/${FIXTURE.slug}/admin/invites/create`, {
+      method: "POST",
+      headers: formHeaders(await sessionCookie()),
+      body: new URLSearchParams({ [CSRF_FIELD]: CSRF, expires_in_hours: "168" }),
+    })
+
+    assertEquals(response.status, 200)
+    const text = await response.text()
+    assert(/value="https?:\/\/[^"]*\/join\/boss_inv_/.test(text), "the link must still render")
   } finally {
     restore()
   }
