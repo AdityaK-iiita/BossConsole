@@ -4,6 +4,7 @@ import ai.rever.boss.components.bars.horizontal.StatusMessageManager
 import ai.rever.boss.crash.PluginCrashRecovery
 import ai.rever.boss.crash.PluginCrashRecoveryCoordinator
 import ai.rever.boss.crash.PluginRecoverySteps
+import ai.rever.boss.crash.displayPluginId
 import ai.rever.boss.plugin.PluginLoaderDelegateImpl
 import ai.rever.boss.plugin.PluginPersistence
 import ai.rever.boss.plugin.api.PluginContext
@@ -67,9 +68,10 @@ actual object PluginLoaderDelegateSetup {
         // SplitViewStateRegistry.getAllStates(), and disableEverywhere iterates every
         // live manager. That is a property of the delegate, not of this seam, so it
         // is worth stating rather than re-deriving.
-        if (PluginCrashRecovery.handler == null) {
-            PluginCrashRecovery.handler = createCrashRecovery(delegate)
-        }
+        // installIfAbsent, not check-then-set: register() runs per window and two
+        // windows opening together could both build a coordinator. The loser was
+        // harmless (they are equivalent), but a compare-and-set says so.
+        PluginCrashRecovery.installIfAbsent { createCrashRecovery(delegate) }
 
         logger.debug(LogCategory.SYSTEM, "PluginLoaderDelegate registered successfully")
     }
@@ -117,14 +119,15 @@ actual object PluginLoaderDelegateSetup {
                     // at the next launch.
                     override fun notifyDisabling(pluginId: String) =
                         StatusMessageManager.showMessage(
-                            "Plugin '$pluginId' crashed and is being disabled. Re-enable it from Toolbox.",
+                            "Plugin '${displayPluginId(pluginId)}' crashed and is being disabled. " +
+                                "Re-enable it from Toolbox.",
                             durationMs = CRASH_NOTICE_MILLIS,
                         )
 
                     override fun notifyDisableIncomplete(pluginId: String) =
                         StatusMessageManager.showMessage(
-                            "Plugin '$pluginId' could not be fully disabled and may return on restart. " +
-                                "Disable it from Toolbox.",
+                            "Plugin '${displayPluginId(pluginId)}' could not be fully disabled and may return " +
+                                "on restart. Disable it from Toolbox.",
                             durationMs = CRASH_NOTICE_MILLIS,
                         )
                 },
@@ -156,6 +159,9 @@ actual object PluginLoaderDelegateSetup {
     ): Boolean {
         if (isInstalled(pluginId)) {
             setEnabled(pluginId, false)
+            // True because an entry existed to update. setPluginEnabled returns Unit,
+            // so this cannot observe the write itself - the branch below is the one
+            // that can fail, and does.
             return true
         }
         // No entry to update. A jar dropped into the plugins directory by hand has

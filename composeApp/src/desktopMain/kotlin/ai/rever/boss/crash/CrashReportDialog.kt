@@ -216,7 +216,7 @@ internal fun CrashReportDialog(
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text =
-                        "BOSS keeps running. '$recoverablePluginId' will be disabled - " +
+                        "BOSS keeps running. '${displayPluginId(recoverablePluginId)}' will be disabled - " +
                             "your other tabs and plugins are unaffected. Re-enable it from Toolbox.",
                     fontSize = 13.sp,
                     color = BossTheme.colors.textSecondary,

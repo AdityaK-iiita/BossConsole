@@ -7,6 +7,39 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /**
+ * The lookup the host installs into [ai.rever.boss.plugin.sandbox.PluginExecutionBoundary].
+ *
+ * A named function rather than a lambda at the call site, so a test can hold the
+ * same object production installs. Written inline, the only thing pinning it was
+ * that `main` happened to call it - delete that line and every test still passes
+ * while attribution silently reverts to the spoofable duck-typed fallback. That is
+ * the same unpinned-wiring bug this change set exists to close, one layer up.
+ */
+internal fun hostPluginIdResolver(): (ClassLoader) -> String? =
+    { loader -> (loader as? ai.rever.boss.plugin.loader.PluginClassLoader)?.pluginId }
+
+/**
+ * A plugin id fit to drop into a sentence a user reads.
+ *
+ * The id comes from a plugin-supplied manifest and every display site shares one
+ * status-bar slot, so a long or control-character-bearing id pushes the rest of
+ * the sentence - including where to undo this - out of view. Falls back to a
+ * placeholder rather than rendering `Plugin '' crashed` when nothing survives the
+ * filter.
+ */
+internal fun displayPluginId(pluginId: String): String {
+    val flattened = pluginId.filter { it.isLetterOrDigit() || it in ".-_:" }
+    return when {
+        flattened.isBlank() -> "unknown plugin"
+        flattened.length <= MAX_DISPLAYED_ID -> flattened
+        else -> flattened.take(MAX_DISPLAYED_ID) + "..."
+    }
+}
+
+/** Comfortably fits the real ids (`ai.rever.boss.plugin.dynamic.terminaltab` is 43). */
+private const val MAX_DISPLAYED_ID = 60
+
+/**
  * Takes a crashed plugin out of the running app so the app can keep running.
  *
  * @return true when recovery took effect. False means the crash could not be
@@ -50,8 +83,31 @@ fun interface PluginCrashRecoveryHandler {
 object PluginCrashRecovery {
     private val logger = BossLogger.forComponent("PluginCrashRecovery")
 
-    @Volatile
-    var handler: PluginCrashRecoveryHandler? = null
+    private val installed =
+        java.util.concurrent.atomic
+            .AtomicReference<PluginCrashRecoveryHandler?>(null)
+
+    var handler: PluginCrashRecoveryHandler?
+        get() = installed.get()
+        set(value) = installed.set(value)
+
+    /**
+     * Install [build]'s result only if nothing is installed yet.
+     *
+     * The desktop wiring runs once per window, and a plain `if (handler == null)`
+     * let two windows opening together both construct a coordinator. Harmless -
+     * they are equivalent - but a compare-and-set states the intent instead of
+     * relying on it.
+     */
+    fun installIfAbsent(build: () -> PluginCrashRecoveryHandler) {
+        // What this guarantees: exactly one handler is ever *installed*, and once
+        // installed it is never replaced. Not that build() runs once - updateAndGet
+        // re-runs its function on CAS contention, so a race can still construct a
+        // coordinator that is then discarded. That is fine because construction is
+        // pure; claiming otherwise is what the previous two versions of this comment
+        // got wrong.
+        installed.updateAndGet { existing -> existing ?: build() }
+    }
 
     /**
      * Whether [pluginId] could actually be recovered right now.

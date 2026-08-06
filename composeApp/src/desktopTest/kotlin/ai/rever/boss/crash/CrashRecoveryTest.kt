@@ -310,7 +310,7 @@ class CrashRecoveryTest {
     }
 
     @Test
-    fun `a crash arriving during recovery does not re-enter it`() {
+    fun `the quarantine marker is not yet set when recovery starts scanning managers`() {
         // The window is gone but resolve is still running. A crash landing here
         // used to be able to open a second dialog for a plugin already being
         // recovered; the quarantine marker is set before the unload starts, so the
@@ -347,8 +347,11 @@ class CrashRecoveryTest {
 
         controller(recoverable).dismiss()
 
-        // isKnown runs before the marker would be set if marking came last, so this
-        // fails unless recover() marks up front.
+        // Named for what it asserts. isKnown runs before the marker is set, so the
+        // marker is NOT what protects this instant - the dialog slot is, and
+        // finish() releases that only after resolve returns. The test that pins the
+        // protection is `the dialog slot is only released once recovery has
+        // quarantined the plugin`; this one pins the ordering that test relies on.
         assertEquals(false, seenDuringRecovery, "the observation point is before the marker is set")
         assertEquals(emptyList(), exitCodes)
     }

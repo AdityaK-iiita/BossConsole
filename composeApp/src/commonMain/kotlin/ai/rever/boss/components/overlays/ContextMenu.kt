@@ -4,6 +4,7 @@ import ContextMenuBackground
 import ContextMenuBorder
 import ContextMenuHover
 import ai.rever.boss.platform.ContextMenuHandler
+import ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
 import ai.rever.boss.plugin.ui.BossPopupAnchoring
 import ai.rever.boss.plugin.ui.BossTheme
 import androidx.compose.foundation.VerticalScrollbar
@@ -186,8 +187,28 @@ private fun ContextMenuContent(
                                         Modifier
                                     } else {
                                         Modifier.clickable {
-                                            item.onClick()
-                                            onDismissRequest()
+                                            // Attributed at the call, not at the item: a plugin's
+                                            // onClick is a lambda the plugin registered and the HOST
+                                            // invokes, so by the time it throws there is nothing
+                                            // plugin-shaped on the stack and the crash gets blamed on
+                                            // BOSS. Doing it here rather than while mapping the items
+                                            // costs no allocation, so the items stay equal across
+                                            // recompositions and Compose can still skip this subtree.
+                                            // finally, because invokeAttributed rethrows: a plugin
+                                            // action that throws used to take the app with it, so the
+                                            // menu went too. Now the crash is survivable, and without
+                                            // this the menu stays on screen over the crash dialog and
+                                            // outlives the plugin it belongs to.
+                                            try {
+                                                PluginExecutionBoundary.invokeAttributed(item.onClick)
+                                            } finally {
+                                                // runCatching: if dismissing throws while a plugin
+                                                // exception is in flight, a bare call replaces it -
+                                                // and with it the attribution tag - so the crash gets
+                                                // blamed on BOSS, the exact failure this exists to
+                                                // prevent.
+                                                runCatching { onDismissRequest() }
+                                            }
                                         }
                                     },
                                 ).background(
@@ -398,8 +419,12 @@ private fun SubMenuContent(
                                     Modifier
                                 } else {
                                     Modifier.clickable {
-                                        subItem.onClick()
-                                        onDismissRequest()
+                                        // Submenu items are plugin-owned just as often; see above.
+                                        try {
+                                            PluginExecutionBoundary.invokeAttributed(subItem.onClick)
+                                        } finally {
+                                            runCatching { onDismissRequest() }
+                                        }
                                     }
                                 },
                             ).background(

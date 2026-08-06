@@ -129,12 +129,16 @@ object CrashHandler {
     private val _pendingCrashReport = MutableStateFlow<CrashReport?>(null)
 
     /**
-     * Pending crash report to display in the UI.
-     * Observe this in BossApp to show the crash dialog.
+     * The crash currently being reported, for the submit path to attach notes to.
+     *
+     * Single-valued and NOT a UI trigger: the dialog is shown directly, in its own
+     * JFrame, by [showCrashDialogWindow] - nothing observes this to decide whether
+     * to render. That matters because [recordContained] deliberately does not write
+     * here: a contained fault landing mid-typing would replace the report and
+     * Submit would send the wrong crash.
      */
     val pendingCrashReport: StateFlow<CrashReport?> = _pendingCrashReport.asStateFlow()
 
-    private var originalHandler: Thread.UncaughtExceptionHandler? = null
     private var isInstalled = false
 
     /**
@@ -175,9 +179,6 @@ object CrashHandler {
     fun install() {
         if (isInstalled) return
 
-        // Store original handler to chain to it later
-        originalHandler = Thread.getDefaultUncaughtExceptionHandler()
-
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             handleCrash(thread, throwable)
         }
@@ -198,7 +199,7 @@ object CrashHandler {
      * dependency on ktor/coroutines here.
      */
     internal fun isIgnorable(throwable: Throwable): Boolean =
-        throwable.causeChain().any { t ->
+        throwable.chainOfCauses().any { t ->
             val name = t.javaClass.name
             val msg = t.message ?: ""
             val benign =
@@ -537,10 +538,10 @@ object CrashHandler {
             // If already on EDT, show directly; otherwise use invokeAndWait to ensure
             // the dialog is shown before the app can exit
             if (SwingUtilities.isEventDispatchThread()) {
-                showCrashDialogWindow(report, throwable)
+                showCrashDialogWindow(report, throwable, disposition)
             } else {
                 SwingUtilities.invokeAndWait {
-                    showCrashDialogWindow(report, throwable)
+                    showCrashDialogWindow(report, throwable, disposition)
                 }
             }
             // Throwable, not Exception. This block claims the dialog slot and the
@@ -653,10 +654,10 @@ object CrashHandler {
     }
 
     /**
-     * Decide what a crash *is*, given who we could blame and whether the plugin
-     * layer is in a position to act.
-     *
-     * Split out so the dialog and the tests classify through the same call.
+     * Decide what a crash *is*, from a report - a convenience for tests, which have
+     * one in hand. Production classifies once in [handleCrash] and threads the
+     * disposition onward, so the dialog cannot be built from a different answer
+     * than the one the dialog-slot decision used.
      */
     internal fun dispositionFor(
         throwable: Throwable,
@@ -725,11 +726,14 @@ object CrashHandler {
     private fun showCrashDialogWindow(
         report: CrashReport,
         throwable: Throwable,
+        // Passed in rather than recomputed. Both computations call canRecover,
+        // which asks the live managers, so a concurrent unload landing between them
+        // could build the dialog with a different disposition than the one the slot
+        // decision used. Attribution is already threaded through for exactly this
+        // reason. (The failure direction was safe - recoverable to fatal - but
+        // "safe" is not the same as "agrees with itself".)
+        disposition: CrashDisposition,
     ) {
-        // Outside the try: the failure path below has to know whether this crash
-        // was survivable, and a crash we could have recovered from must not become
-        // fatal merely because the window that would have said so failed to open.
-        val disposition = dispositionFor(throwable, report)
         // frame and controller are built OUTSIDE the try so the failure path can
         // reach them. Declared inside, the catch could only call resolveCrash
         // directly - and a throw landing after `isVisible = true` (toFront and
@@ -871,7 +875,7 @@ object CrashHandler {
         PluginExecutionBoundary.currentPluginId()?.let { return it }
         return try {
             // Root cause first: the crash origin outranks the layers that wrapped it.
-            for (cause in throwable.causeChain().asReversed()) {
+            for (cause in throwable.chainOfCauses().asReversed()) {
                 (cause.javaClass.classLoader as? PluginClassLoader)?.let { return it.pluginId }
                 for (frame in cause.stackTrace) {
                     PluginClassLoader.findPluginForClass(frame.className)?.let { return it }

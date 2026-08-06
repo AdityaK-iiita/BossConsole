@@ -209,13 +209,32 @@ fun main(args: Array<String>) {
     ai.rever.boss.plugin.sandbox.ui
         .installCrashInterceptor()
 
+    // Teach the attribution boundary how to identify a plugin classloader for real.
+    // Without this it falls back to asking the loader for its own id, which a plugin
+    // that defines classes through a nested loader of its own could answer with
+    // somebody else's - and attribution now decides which plugin gets disabled and
+    // written out of installed.json. A type check against a class only the host
+    // constructs cannot be forged. Installed before any plugin loads.
+    ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
+        .installPluginIdResolver(
+            ai.rever.boss.crash
+                .hostPluginIdResolver(),
+        )
+
     // Register notification callback for plugin crashes.
     // Tab closing is handled directly by PluginCrashRegistry via the closeAction
     // registered in BossMainPanelContent. This callback only shows the status message.
     ai.rever.boss.plugin.sandbox.ui.PluginCrashRegistry.onCrashNotify = { pluginId, error ->
-        val errorMsg = error.message?.take(60) ?: error.javaClass.simpleName
+        // Both halves are plugin-controlled and share one status-bar slot: the id
+        // comes from a manifest, and the message from plugin code. A newline or a
+        // few hundred characters in either pushes the rest of the line out of view.
+        val errorMsg =
+            (error.message ?: error.javaClass.simpleName)
+                .map { if (it.isISOControl()) ' ' else it }
+                .joinToString("")
+                .take(60)
         ai.rever.boss.components.bars.horizontal.StatusMessageManager.showMessage(
-            "Plugin '$pluginId' crashed: $errorMsg",
+            "Plugin '${ai.rever.boss.crash.displayPluginId(pluginId)}' crashed: $errorMsg",
             durationMs = 8000,
         )
     }

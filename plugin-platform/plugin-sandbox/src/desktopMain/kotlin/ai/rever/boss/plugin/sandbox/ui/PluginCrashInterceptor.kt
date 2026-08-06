@@ -2,6 +2,7 @@ package ai.rever.boss.plugin.sandbox.ui
 
 import ai.rever.boss.plugin.logging.BossLogger
 import ai.rever.boss.plugin.logging.LogCategory
+import ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -236,6 +237,25 @@ object PluginCrashInterceptor {
         throwable: Throwable,
         thread: Thread? = null,
     ): String? {
+        // Strategy 0: what the execution boundary recorded before the throw.
+        //
+        // Consulted first because it is the only exact source - the host tagged the
+        // throwable while calling into the plugin, rather than inferring from frames
+        // that may already be gone. Without it the two attributions in this codebase
+        // could disagree about the same throwable: CrashHandler would say "plugin x"
+        // from the tag while this said "nobody", and the render router would then
+        // Contain or Escalate instead of handing it to the plugin's boundary. Two
+        // copies of one decision drifting apart is the failure this change set spent
+        // several rounds removing elsewhere.
+        //
+        // Still filtered by `interceptors`: this function answers "which registered
+        // boundary should handle it", and a tag naming a plugin with no live
+        // boundary is not an answer to that question.
+        PluginExecutionBoundary
+            .attributionFor(throwable)
+            ?.takeIf { interceptors.containsKey(it) }
+            ?.let { return it }
+
         // Strategy 1: Check thread name for plugin sandbox threads
         val threadName = thread?.name ?: Thread.currentThread().name
         for (pluginId in interceptors.keys) {
