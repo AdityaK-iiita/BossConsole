@@ -44,9 +44,11 @@ export function joinPage(
 <section class="card">
   <p>Open BOSS to accept this invitation.</p>
   <p class="spaced">
-    <a href="${esc(deepLink)}"><button type="button">Open in BOSS</button></a>
+    <!-- attrUrl already escaped this; esc() again would double-encode the & of a second
+       query parameter and break the link. -->
+    <a href="${deepLink}"><button type="button">Open in BOSS</button></a>
   </p>
-  <p class="hint" class="spaced">
+  <p class="hint spaced">
     Nothing happens until you accept it in the app, so this link is safe to open more than once.
   </p>
 </section>`,
@@ -67,7 +69,7 @@ export function invalidInvitePage(nonce: string): string {
 <header class="page"><h1>Invitation unavailable</h1></header>
 <section class="card">
   <p>This invitation link is not valid. It may have expired, been used up, or been revoked.</p>
-  <p class="hint" class="tight">Ask whoever invited you for a fresh link.</p>
+  <p class="hint tight">Ask whoever invited you for a fresh link.</p>
 </section>`,
   })
 }

@@ -118,7 +118,9 @@ jobs:
         # --allow-env: the suite sets ORG_SESSION_SECRET and ORG_PUBLIC_BASE_PATH
         # to exercise the fail-closed path and the cookie Path.
         # --allow-net: resolving the remote hono / supabase-js dependencies.
-        run: deno test --allow-env --allow-net
+        # --allow-read: the duplicate-class guard scans views/ on disk, because the
+        # previous version only inspected one rendered page and missed two files.
+        run: deno test --allow-env --allow-net --allow-read
 
       - name: 🧹 Lint
         # Gating, unlike the two jobs above: this function is new, so it starts

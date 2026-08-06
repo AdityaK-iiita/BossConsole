@@ -29,7 +29,6 @@ const RESULT_MESSAGES: Record<string, string> = {
   role_assigned: "Role assigned.",
   role_created: "Role created.",
   role_deleted: "Role deleted.",
-  invite_created: "Invite link created. Copy it now - it is not shown again.",
   invite_revoked: "Invite link revoked.",
   domain_added: "Domain added. Add the TXT record, then press Verify.",
   domain_removed: "Domain removed.",
@@ -38,11 +37,14 @@ const RESULT_MESSAGES: Record<string, string> = {
   domain_unverified: "The TXT record was not found. DNS changes can take a few minutes.",
 }
 
+// invite_created and dns_failed were removed as unreachable: the invite handler renders its
+// result inline rather than redirecting (the token exists for one response), and the DNS
+// not-found case reports domain_unverified, which is information rather than an error. A key
+// nothing can emit is a message nobody can ever see.
 const ERROR_MESSAGES: Record<string, string> = {
   invalid_input: "That value was not accepted. Check the field and try again.",
   rejected: "The change was refused.",
   rate_limited: "Too many attempts. Please wait a moment and try again.",
-  dns_failed: "The TXT record was not found. DNS changes can take a few minutes.",
 }
 
 adminPageRoutes.get("/o/:slug/admin", async (ctx) => {

@@ -102,6 +102,13 @@ BEGIN
 EXCEPTION WHEN OTHERS THEN
     -- The auth hook must NEVER raise: an exception here fails token issuance for
     -- every login on the instance. Degrade to empty claims instead.
+    --
+    -- But say so. Silently empty claims are indistinguishable from "this user is in
+    -- no organisation", so a missing or revoked supabase_auth_admin grant - the one
+    -- the deployment notes call out - would present only as the switcher never
+    -- appearing, for everyone, with nothing in any log.
+    RAISE WARNING 'get_user_orgs_for_hook failed for %: % (claims degraded to empty)',
+        check_user_id, SQLERRM;
     RETURN jsonb_build_object('orgs', '[]'::jsonb, 'org_admin', '[]'::jsonb);
 END;
 $$;

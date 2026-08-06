@@ -8,7 +8,7 @@ import { getPlugin, getPluginById } from "../services/plugins.ts"
 import { getLatestVersion, getVersion } from "../services/versions.ts"
 import { getSignedDownloadUrl } from "../services/storage.ts"
 import { recordDownload, hashIp } from "../services/downloads.ts"
-import { getUserFromToken } from "../utils/auth.ts"
+import { getUserFromToken, validateApiKey } from "../utils/auth.ts"
 import { isAllowedExternalJarUrl } from "../services/github.ts"
 import type { SupabaseClient } from "@supabase/supabase-js"
 
@@ -67,6 +67,29 @@ async function canInstall(
     return false
   }
   return data === true
+}
+
+/**
+ * The caller's user id for the visibility gate, from a JWT or a plugin API key.
+ *
+ * `getUserFromToken` resolves user JWTs only, so an API-key caller - CI, the publish tooling -
+ * resolved to anonymous. Harmless while every plugin is public+published, because
+ * user_can_view_plugin_row short-circuits that case for a NULL subject. The first `org` or
+ * `unlisted` plugin would have 404'd for them, and the 404 is deliberately indistinguishable
+ * from "no such plugin", so it would have been painful to diagnose from outside.
+ *
+ * Returns null for an anonymous caller, which is correct and still reaches public plugins.
+ */
+async function gateSubject(
+  supabase: SupabaseClient,
+  authHeader: string | undefined,
+  apiKeyHeader: string | undefined,
+): Promise<{ userId: string | null; user: Awaited<ReturnType<typeof getUserFromToken>> }> {
+  const user = await getUserFromToken(supabase, authHeader)
+  if (user) return { userId: user.userId, user }
+
+  const viaKey = await validateApiKey(supabase, apiKeyHeader)
+  return { userId: viaKey?.userId ?? null, user: null }
 }
 
 // ============================================================================
@@ -139,7 +162,11 @@ download.openapi(downloadLatestRoute, async (ctx) => {
       return ctx.json({ error: 'Plugin not found' }, 404)
     }
 
-    const user = await getUserFromToken(supabase, ctx.req.header('Authorization'))
+    const { userId: gateUserId, user } = await gateSubject(
+      supabase,
+      ctx.req.header('Authorization'),
+      ctx.req.header('x-api-key') ?? ctx.req.header('X-API-Key'),
+    )
 
     // Organisation visibility, BEFORE the permission gate and before any
     // download is recorded. 404 rather than 403, deliberately: a plugin the
@@ -147,7 +174,7 @@ download.openapi(downloadLatestRoute, async (ctx) => {
     // exist, or this endpoint enumerates other organisations' private plugin
     // ids. The permission gate below can safely say 403, because by then the
     // caller is known to be allowed to see the plugin at all.
-    if (!await canInstall(supabase, plugin.id, user?.userId ?? null)) {
+    if (!await canInstall(supabase, plugin.id, gateUserId)) {
       return ctx.json({ error: 'Plugin not found' }, 404)
     }
 
@@ -274,7 +301,11 @@ download.openapi(downloadVersionRoute, async (ctx) => {
       return ctx.json({ error: 'Plugin not found' }, 404)
     }
 
-    const user = await getUserFromToken(supabase, ctx.req.header('Authorization'))
+    const { userId: gateUserId, user } = await gateSubject(
+      supabase,
+      ctx.req.header('Authorization'),
+      ctx.req.header('x-api-key') ?? ctx.req.header('X-API-Key'),
+    )
 
     // Organisation visibility, BEFORE the permission gate and before any
     // download is recorded. 404 rather than 403, deliberately: a plugin the
@@ -282,7 +313,7 @@ download.openapi(downloadVersionRoute, async (ctx) => {
     // exist, or this endpoint enumerates other organisations' private plugin
     // ids. The permission gate below can safely say 403, because by then the
     // caller is known to be allowed to see the plugin at all.
-    if (!await canInstall(supabase, plugin.id, user?.userId ?? null)) {
+    if (!await canInstall(supabase, plugin.id, gateUserId)) {
       return ctx.json({ error: 'Plugin not found' }, 404)
     }
 

@@ -102,3 +102,20 @@ Deno.test("cspNonce is unique and base64url", () => {
   }
   assertEquals(seen.size, 200)
 })
+
+Deno.test("no view emits a duplicate class attribute", async () => {
+  // A parser keeps the FIRST class attribute and silently discards the rest, so
+  // `class="card" class="highlight"` drops the second - and these utility classes exist only
+  // because the CSP forbids inline style, meaning the styling vanishes with no error anywhere.
+  //
+  // This has now happened three times: the invite card, then two in join.ts that the previous
+  // guard missed because it only inspected the rendered ADMIN page. Scanning the source of every
+  // view catches them wherever they are written.
+  const dir = new URL("../views/", import.meta.url)
+  for await (const entry of Deno.readDir(dir)) {
+    if (!entry.name.endsWith(".ts")) continue
+    const source = await Deno.readTextFile(new URL(entry.name, dir))
+    const dupes = source.match(/class="[^"]*"[^>]*class="[^"]*"/g) ?? []
+    assertEquals(dupes, [], `${entry.name} has duplicate class attributes: ${dupes.join(", ")}`)
+  }
+})
