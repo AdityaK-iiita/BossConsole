@@ -205,7 +205,7 @@ object PluginCrashRegistry {
     }
 
     /**
-     * Clear crash state for a plugin (e.g., after restart or tab close). Safe to call from EDT.
+     * Clear crash state for a plugin (e.g., after restart or tab close). Safe from any thread.
      *
      * Deliberately does **not** touch [PluginRecoveryQuarantine]. An earlier version
      * did, on the claim that every caller here is a deliberate re-arm, and that was
@@ -218,11 +218,18 @@ object PluginCrashRegistry {
      *
      * The quarantine is released only at the genuinely deliberate sites, which call
      * [PluginRecoveryQuarantine.clear] themselves: enabling the plugin, uninstalling
-     * it, and Restart / Dismiss in the error fallback.
+     * it, and Restart in the error fallback. Not Dismiss - that hides the panel
+     * without restarting or enabling anything, so it is not a re-arm.
      */
     fun clearCrash(pluginId: String) {
         _crashedPluginsMap.remove(pluginId)
-        _crashedPluginsState.value = _crashedPluginsMap.toMap()
+        // The Compose-observable copy is published on the EDT, like recordRenderFault
+        // does. Callers are no longer all on it: removePluginState reaches here from
+        // the suspending uninstall paths, and two threads each doing toMap() and
+        // assigning can drop one another's update.
+        javax.swing.SwingUtilities.invokeLater {
+            _crashedPluginsState.value = _crashedPluginsMap.toMap()
+        }
     }
 
     /** Check if a plugin has crashed (non-composable, thread-safe). */
@@ -276,7 +283,12 @@ object PluginRecoveryQuarantine {
     /** Whether crash recovery took this plugin out. */
     fun isQuarantined(pluginId: String): Boolean = quarantined.contains(pluginId)
 
-    /** Release it, on a deliberate re-arm. Driven by [PluginCrashRegistry.clearCrash]. */
+    /**
+     * Release it, on a deliberate re-arm.
+     *
+     * Called by those sites directly - NOT by [PluginCrashRegistry.clearCrash],
+     * which deliberately leaves this alone because it has automatic callers.
+     */
     fun clear(pluginId: String) {
         quarantined.remove(pluginId)
     }

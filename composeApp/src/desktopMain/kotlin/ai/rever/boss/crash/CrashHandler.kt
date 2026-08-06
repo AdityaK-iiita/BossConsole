@@ -550,26 +550,23 @@ object CrashHandler {
     }
 
     /**
-     * Whether this crash should go quietly to disk instead of opening a dialog.
+     * Take the dialog slot, or record the crash and explain why we are not prompting.
      *
-     * Two cases, both about not asking the user the same question twice:
+     * Two reasons not to prompt, both about not asking the user the same question
+     * twice - and neither applies to a fatal crash, which must always be acted on:
      *
-     * 1. **The plugin is already quarantined.** A plugin taken out for crashing
-     *    does not necessarily stop - a lingering thread or timer of its own keeps
-     *    throwing - and each throw would otherwise open a fresh dialog for a plugin
-     *    the user has already dealt with.
-     * 2. **A dialog is already up.** Stacking a second one hides the first and
-     *    neither can be reached. Claims [dialogVisible] as a side effect when it
-     *    returns false, so the caller owns the slot.
+     * 1. **The plugin is already quarantined.** One recovery disabled does not
+     *    necessarily stop; a thread or timer of its own keeps throwing, and each
+     *    throw would otherwise open a fresh dialog for something already dealt with.
+     * 2. **A dialog is already up.** Stacking a second hides the first and neither
+     *    can be reached.
      *
-     * [recordContained] dedupes by signature, so a fault repeating every frame
-     * costs one file and a log line on a curve.
-     */
-
-    /**
-     * Take the dialog slot, or record the crash and say why we are not prompting.
+     * Either way the crash still reaches [recordContained], which dedupes by
+     * signature, so a fault repeating every frame costs one file and a log line on
+     * a curve.
      *
-     * @return true when the caller owns the slot and should show a dialog.
+     * @return true when the caller now owns the dialog slot and must release it
+     *   (through [CrashDialogController.finish]).
      */
     private fun claimDialogOrRecord(
         throwable: Throwable,

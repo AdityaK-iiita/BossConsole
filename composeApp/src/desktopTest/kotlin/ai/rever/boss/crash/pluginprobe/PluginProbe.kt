@@ -16,3 +16,15 @@ class PluginProbe {
 }
 
 class ProbeException : RuntimeException("custom probe exception")
+
+/**
+ * A lambda created inside plugin-loaded code.
+ *
+ * Kotlin 2.x compiles this to an `invokedynamic` call site backed by a hidden
+ * class, whose `getClassLoader()` is the loader of its host class - the plugin's,
+ * here. `PluginExecutionBoundary.wrapPluginCallback` depends on exactly that, and
+ * a compiler or `-Xlambdas` change flipping it would make every plugin callback
+ * look host-owned, silently un-attributed, with no visible failure until a
+ * session dies over a plugin's bug.
+ */
+fun probeAction(): () -> Unit = { throw IllegalStateException("probe lambda boom") }

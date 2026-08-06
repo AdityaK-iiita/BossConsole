@@ -1,6 +1,5 @@
 package ai.rever.boss.crash
 
-import ai.rever.boss.plugin.sandbox.ui.PluginCrashRegistry
 import ai.rever.boss.plugin.sandbox.ui.PluginRecoveryQuarantine
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
@@ -175,7 +174,7 @@ interface PluginRecoverySteps {
  *
  * Precisely: `recordRenderFault` writes the thread-safe map synchronously, so
  * `hasCrashed` is true the moment this returns - which is what
- * `CrashHandler.shouldRecordRatherThanPrompt` reads. The Compose-observable state
+ * `CrashHandler.isSuppressedByQuarantine` reads. The Compose-observable state
  * that actually swaps every window's
  * [ai.rever.boss.plugin.sandbox.ui.PluginErrorBoundary] to its fallback is flipped
  * on the next EDT cycle via `invokeLater`, so the *visible* swap lands a frame

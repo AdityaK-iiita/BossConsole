@@ -1279,9 +1279,12 @@ class DynamicPluginManager(
                     // not do what it says.
                     //
                     // It also un-suppresses the crash dialog for this plugin -
-                    // CrashHandler.shouldRecordRatherThanPrompt skips prompting
-                    // while hasCrashed is true, which is right for a plugin the user
-                    // has already dealt with and wrong once they have re-armed it.
+                    // CrashHandler.isSuppressedByQuarantine skips prompting while the
+                    // RECOVERY quarantine is set (not hasCrashed, which a plain
+                    // contained render fault also sets and which must never silence
+                    // the dialog for a plugin that is still enabled and running).
+                    // Right for a plugin the user has already dealt with, wrong once
+                    // they have deliberately re-armed it.
                     PluginCrashRegistry.clearIncompatible(pluginId)
                     PluginCrashRegistry.clearCrash(pluginId)
                     PluginRecoveryQuarantine.clear(pluginId)

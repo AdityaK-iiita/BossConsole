@@ -138,6 +138,38 @@ class PluginExecutionBoundaryTest {
     }
 
     @Test
+    fun `a nested scope restores the outer plugin, not null`() {
+        // The real path: a panel of plugin A rendering a status-bar item contributed
+        // by plugin B. Popping B must leave A in scope, or a crash in A's remaining
+        // work is attributed to nobody.
+        val seen = mutableListOf<String?>()
+        PluginExecutionBoundary.runAttributed<Unit>(OTHER_PLUGIN) {
+            seen.add(PluginExecutionBoundary.currentPluginId())
+            PluginExecutionBoundary.runAttributed<Unit>(PLUGIN) {
+                seen.add(PluginExecutionBoundary.currentPluginId())
+            }
+            seen.add(PluginExecutionBoundary.currentPluginId())
+        }
+
+        assertEquals<List<String?>>(listOf(OTHER_PLUGIN, PLUGIN, OTHER_PLUGIN), seen)
+        assertNull(PluginExecutionBoundary.currentPluginId(), "and nothing is left behind at the end")
+    }
+
+    @Test
+    fun `a nested unwind still clears the thread`() {
+        // The `if (stack.isEmpty()) executing.remove()` line is what stops the EDT
+        // accumulating a per-thread deque forever, and only the outermost pop can
+        // reach it.
+        runCatching {
+            PluginExecutionBoundary.runAttributed(OTHER_PLUGIN) {
+                PluginExecutionBoundary.runAttributed(PLUGIN) { error("boom") }
+            }
+        }
+
+        assertNull(PluginExecutionBoundary.currentPluginId())
+    }
+
+    @Test
     fun `a host-owned callback is returned unchanged`() {
         val hostAction = {}
 

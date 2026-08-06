@@ -61,6 +61,12 @@ actual object PluginLoaderDelegateSetup {
         // app down. Until this is wired, a plugin crash classifies as fatal and
         // terminates as it always did - which is the honest behaviour for a run
         // with no plugin layer (headless, or a crash before this point).
+        // register() runs per window, so this captures the FIRST window's delegate for
+        // the process lifetime. Safe because the two things the coordinator uses it
+        // for are window-independent: teardownPluginTabs goes through
+        // SplitViewStateRegistry.getAllStates(), and disableEverywhere iterates every
+        // live manager. That is a property of the delegate, not of this seam, so it
+        // is worth stating rather than re-deriving.
         if (PluginCrashRecovery.handler == null) {
             PluginCrashRecovery.handler = createCrashRecovery(delegate)
         }

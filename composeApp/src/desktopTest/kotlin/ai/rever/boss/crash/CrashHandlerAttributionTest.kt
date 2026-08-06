@@ -29,6 +29,9 @@ class CrashHandlerAttributionTest {
         const val BOUNDARY_PLUGIN_ID = "test.plugin.boundary"
         const val PROBE_CLASS = "ai.rever.boss.crash.pluginprobe.PluginProbe"
         const val EXCEPTION_CLASS = "ai.rever.boss.crash.pluginprobe.ProbeException"
+
+        /** File facade holding `probeAction()`, whose lambda is the thing under test. */
+        const val PROBE_KT_CLASS = "ai.rever.boss.crash.pluginprobe.PluginProbeKt"
     }
 
     private val jarFile: File = buildProbeJar()
@@ -49,7 +52,7 @@ class CrashHandlerAttributionTest {
     private fun buildProbeJar(): File {
         val jar = File.createTempFile("plugin-probe", ".jar")
         JarOutputStream(jar.outputStream()).use { out ->
-            for (className in listOf(PROBE_CLASS, EXCEPTION_CLASS)) {
+            for (className in listOf(PROBE_CLASS, EXCEPTION_CLASS, PROBE_KT_CLASS)) {
                 val resource = className.replace('.', '/') + ".class"
                 val bytes =
                     checkNotNull(javaClass.classLoader.getResourceAsStream(resource)) {
@@ -160,6 +163,24 @@ class CrashHandlerAttributionTest {
         val instance = loader.loadClass(PROBE_CLASS).getDeclaredConstructor().newInstance()
 
         assertEquals(PLUGIN_ID, PluginExecutionBoundary.pluginIdOfOwner(instance))
+    }
+
+    @Test
+    fun `a lambda created inside plugin code resolves to that plugin`() {
+        // Kotlin 2.x compiles a lambda to an invokedynamic call site backed by a
+        // hidden class, and wrapPluginCallback depends on that hidden class
+        // reporting its host's classloader - the plugin's. A compiler or -Xlambdas
+        // change flipping that would make every plugin callback look host-owned and
+        // silently un-attributed, with no visible failure until a session dies over
+        // a plugin's bug. This is the callback shape the whole feature is built on:
+        // ContextMenuItemData.onClick is exactly this.
+        val facade = loader.loadClass(PROBE_KT_CLASS)
+        assertEquals(loader, facade.classLoader, "the facade must be plugin-defined")
+
+        @Suppress("UNCHECKED_CAST")
+        val action = facade.getMethod("probeAction").invoke(null) as () -> Unit
+
+        assertEquals(PLUGIN_ID, PluginExecutionBoundary.pluginIdOfOwner(action))
     }
 
     @Test
