@@ -46,8 +46,25 @@ internal class CrashDialogController(
 ) {
     private val logger = BossLogger.forComponent("CrashHandler")
 
+    /**
+     * True while a report is being submitted.
+     *
+     * The dialog gates Escape and disables the dismiss button on its own copy of
+     * this, but the close box had no gate at all - so closing the window mid-POST
+     * ran the full exit and, for a fatal crash, called `System.exit(1)` out from
+     * under an in-flight submission, losing the report. Before this change the
+     * close box was inert, so that was a regression. The gate belongs in the
+     * action, not in two of the three call sites.
+     */
+    @Volatile
+    var isSubmitting: Boolean = false
+
     /** Shared by "Don't Send" / "Continue Without Plugin", Escape, and the close box. */
     fun dismiss(): CrashOutcome {
+        if (isSubmitting) {
+            logger.info(LogCategory.SYSTEM, "Ignoring a dismiss while the crash report is still submitting")
+            return lastOutcome
+        }
         logger.info(
             LogCategory.SYSTEM,
             "User dismissed crash report without submitting",

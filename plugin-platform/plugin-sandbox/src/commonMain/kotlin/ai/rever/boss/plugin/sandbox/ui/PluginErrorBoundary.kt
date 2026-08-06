@@ -204,9 +204,17 @@ object PluginCrashRegistry {
         }
     }
 
-    /** Clear crash state for a plugin (e.g., after restart or tab close). Safe to call from EDT. */
+    /**
+     * Clear crash state for a plugin (e.g., after restart or tab close). Safe to call from EDT.
+     *
+     * Clears the recovery quarantine too: every caller of this is a deliberate
+     * re-arm (enabling the plugin, Restart or Dismiss in the fallback), and leaving
+     * that marker would keep the crash dialog suppressed for a plugin the user has
+     * explicitly put back.
+     */
     fun clearCrash(pluginId: String) {
         _crashedPluginsMap.remove(pluginId)
+        PluginRecoveryQuarantine.clear(pluginId)
         _crashedPluginsState.value = _crashedPluginsMap.toMap()
     }
 
@@ -231,6 +239,39 @@ object PluginCrashRegistry {
     /** Clear incompatible state (e.g., after plugin update). */
     fun clearIncompatible(pluginId: String) {
         _incompatiblePlugins.remove(pluginId)
+    }
+}
+
+/**
+ * Plugins taken out by app-level **crash recovery**, as opposed to a contained
+ * render fault.
+ *
+ * Both end up in [PluginCrashRegistry], and the crash handler has to tell them
+ * apart. It suppresses the crash dialog for a plugin already dealt with, and
+ * keying that on `hasCrashed` swept up every plugin whose panel had merely tripped
+ * a render boundary: still enabled, still running, fallback showing - and from then
+ * on its uncaught crashes went silently to disk with no dialog, no disable and no
+ * notice, which is worse than the behaviour crash recovery replaced.
+ *
+ * Its own object rather than two more members on [PluginCrashRegistry], which is
+ * already at its function budget, and because "why is this plugin showing a
+ * fallback" and "has the app given up on this plugin" are genuinely different
+ * questions.
+ */
+object PluginRecoveryQuarantine {
+    private val quarantined = ConcurrentHashMap.newKeySet<String>()
+
+    /** Record that crash recovery, not a render fault, took this plugin out. */
+    fun mark(pluginId: String) {
+        quarantined.add(pluginId)
+    }
+
+    /** Whether crash recovery took this plugin out. */
+    fun isQuarantined(pluginId: String): Boolean = quarantined.contains(pluginId)
+
+    /** Release it, on a deliberate re-arm. Driven by [PluginCrashRegistry.clearCrash]. */
+    fun clear(pluginId: String) {
+        quarantined.remove(pluginId)
     }
 }
 

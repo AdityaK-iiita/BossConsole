@@ -80,6 +80,7 @@ internal fun CrashReportDialog(
     onSubmit: (userNotes: String?, includeLogs: Boolean) -> Unit,
     recoverablePluginId: String? = null,
     onCleanAndRestart: (() -> Unit)? = null,
+    onSubmittingChanged: (Boolean) -> Unit = {},
     initialSubmitResult: CrashReportService.SubmitResult? = null,
 ) {
     var userNotes by remember { mutableStateOf("") }
@@ -139,6 +140,12 @@ internal fun CrashReportDialog(
     LaunchedEffect(Unit) { runCatching { dialogFocus.requestFocus() } }
 
     val dismissLabel = if (recoverablePluginId != null) CONTINUE_WITHOUT_PLUGIN_LABEL else DONT_SEND_LABEL
+
+    // Published so the exits that live outside this composition - the window's
+    // close box - can refuse while a submission is in flight. Escape and the
+    // button gate on the local state below; this is the same fact, told to the
+    // one caller that cannot see it.
+    LaunchedEffect(isSubmitting) { onSubmittingChanged(isSubmitting) }
 
     // Render directly in the window (no Dialog wrapper needed since this is shown in its own JFrame)
     Card(

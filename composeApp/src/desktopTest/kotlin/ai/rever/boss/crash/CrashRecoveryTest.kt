@@ -2,6 +2,7 @@ package ai.rever.boss.crash
 
 import ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
 import ai.rever.boss.plugin.sandbox.ui.PluginCrashRegistry
+import ai.rever.boss.plugin.sandbox.ui.PluginRecoveryQuarantine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlin.test.AfterTest
@@ -195,8 +196,9 @@ class CrashRecoveryTest {
     }
 
     @Test
-    fun `a crash from an already-quarantined plugin never opens a dialog`() {
+    fun `a crash from a recovery-quarantined plugin never opens a dialog`() {
         PluginCrashRegistry.recordRenderFault(OFFENDER, error, notify = false)
+        PluginRecoveryQuarantine.mark(OFFENDER)
         val fromQuarantined = IllegalStateException("its timer is still running")
         PluginExecutionBoundary.tag(fromQuarantined, OFFENDER)
 
@@ -207,6 +209,76 @@ class CrashRecoveryTest {
         // And the slot was not claimed, so an unrelated crash can still prompt.
         assertFalse(CrashHandler.shouldRecordRatherThanPrompt(RuntimeException("host crash")))
         CrashHandler.releaseDialogSlot()
+    }
+
+    @Test
+    fun `a plugin that merely tripped a render boundary still gets a dialog`() {
+        // The two quarantines are different. A contained render fault leaves the
+        // plugin ENABLED and running behind a fallback; suppressing its crash
+        // dialog would mean it could misbehave indefinitely with nothing shown -
+        // strictly worse than before crash recovery existed. Only a plugin taken
+        // out BY recovery is suppressed.
+        PluginCrashRegistry.recordRenderFault(BYSTANDER, error, notify = false)
+        val laterCrash = IllegalStateException("a real, uncaught crash")
+        PluginExecutionBoundary.tag(laterCrash, BYSTANDER)
+
+        assertFalse(
+            CrashHandler.shouldRecordRatherThanPrompt(laterCrash),
+            "a contained render fault must not silence the crash dialog for that plugin",
+        )
+        CrashHandler.releaseDialogSlot()
+    }
+
+    @Test
+    fun `re-enabling a plugin un-suppresses its crash dialog`() {
+        PluginCrashRegistry.recordRenderFault(OFFENDER, error, notify = false)
+        PluginRecoveryQuarantine.mark(OFFENDER)
+        val laterCrash = IllegalStateException("crashed again after re-enable")
+        PluginExecutionBoundary.tag(laterCrash, OFFENDER)
+        assertTrue(CrashHandler.shouldRecordRatherThanPrompt(laterCrash), "suppressed while quarantined")
+        CrashHandler.releaseDialogSlot()
+
+        // What DynamicPluginManager.enablePlugin does on a deliberate re-arm.
+        PluginCrashRegistry.clearCrash(OFFENDER)
+
+        assertFalse(
+            CrashHandler.shouldRecordRatherThanPrompt(laterCrash),
+            "a plugin the user put back must be able to report a new crash",
+        )
+        CrashHandler.releaseDialogSlot()
+    }
+
+    @Test
+    fun `recovery marks the plugin as recovery-quarantined`() {
+        val fake = FakePluginLayer(known = setOf(OFFENDER))
+        PluginCrashRecovery.handler = fake.coordinator()
+
+        controller(recoverable).dismiss()
+
+        assertTrue(PluginRecoveryQuarantine.isQuarantined(OFFENDER))
+        assertFalse(PluginRecoveryQuarantine.isQuarantined(BYSTANDER))
+    }
+
+    @Test
+    fun `a dismiss during submission is ignored`() {
+        val recovered = installRecovery(succeeds = true)
+        val controller = controller(recoverable)
+        controller.isSubmitting = true
+
+        controller.dismiss()
+
+        // The close box had no gate, so closing the window mid-POST ran the full
+        // exit - for a fatal crash, System.exit(1) out from under an in-flight
+        // submission. Escape and the button gate on the dialog's own state; this is
+        // the same gate for the exit that cannot see it.
+        assertEquals(emptyList(), recovered, "recovery must not run mid-submission")
+        assertEquals(emptyList(), disposed, "the window must stay up mid-submission")
+        assertEquals(emptyList(), exitCodes)
+
+        // And once the submission finishes, the exit works normally.
+        controller.isSubmitting = false
+        controller.dismiss()
+        assertEquals(listOf(OFFENDER), recovered)
     }
 
     @Test

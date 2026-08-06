@@ -4,6 +4,7 @@ import ai.rever.boss.plugin.loader.PluginClassLoader
 import ai.rever.boss.plugin.pathutils.BossDirectories
 import ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
 import ai.rever.boss.plugin.sandbox.ui.PluginCrashRegistry
+import ai.rever.boss.plugin.sandbox.ui.PluginRecoveryQuarantine
 import ai.rever.boss.utils.AppVersion
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
@@ -548,7 +549,11 @@ object CrashHandler {
      * costs one file and a log line on a curve.
      */
     internal fun shouldRecordRatherThanPrompt(throwable: Throwable): Boolean {
-        val quarantined = attributePluginId(throwable)?.let { PluginCrashRegistry.hasCrashed(it) } == true
+        // isRecoveryQuarantined, NOT hasCrashed: the latter is also set by the
+        // ordinary contained-render-fault path, so gating on it silenced the dialog
+        // for any plugin whose panel had ever shown a fallback - still enabled and
+        // still running - which is worse than the behaviour this feature replaced.
+        val quarantined = attributePluginId(throwable)?.let { PluginRecoveryQuarantine.isQuarantined(it) } == true
         // Short-circuit, so the dialog slot is only claimed when the crash is
         // actually going to open one.
         val reason =
@@ -658,6 +663,7 @@ object CrashHandler {
                     recoverablePluginId = (disposition as? CrashDisposition.RecoverablePlugin)?.pluginId,
                     onDismiss = { controller.dismiss() },
                     onSubmit = { userNotes, includeLogs -> controller.submit(userNotes, includeLogs) },
+                    onSubmittingChanged = { controller.isSubmitting = it },
                     // Null for a recoverable plugin crash: deleting every plugin,
                     // workspace and setting is not a proportionate answer to one
                     // plugin misbehaving, and offering it beside "Continue Without
@@ -691,6 +697,13 @@ object CrashHandler {
             logger.error(LogCategory.SYSTEM, "Failed to show crash dialog window", error = e)
             System.err.println("Failed to show crash dialog: ${e.message}")
             e.printStackTrace()
+            // The slot was claimed for a window that does not exist, and this path
+            // does not go through CrashDialogController, which is what normally
+            // gives it back. Leaking it here is not cosmetic: a recoverable crash
+            // recovers, the process keeps running with the slot held, and every
+            // later crash - including a genuinely fatal one - is routed silently to
+            // disk with nothing shown to the user ever again.
+            releaseDialogSlot()
             // No dialog, so nobody is going to press anything - take the same exit
             // the dialog would have taken. For a plugin crash that means disabling
             // the plugin and staying up; resolveCrash still terminates if that

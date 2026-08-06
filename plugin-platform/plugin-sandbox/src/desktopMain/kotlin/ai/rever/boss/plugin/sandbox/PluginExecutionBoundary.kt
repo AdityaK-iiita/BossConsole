@@ -73,18 +73,24 @@ object PluginExecutionBoundary {
         Collections.synchronizedMap(WeakHashMap<Throwable, String>())
 
     /**
-     * Cache of classloader → owning plugin, including **misses**.
+     * Cache of owning-class → owning plugin, including **misses**.
      *
-     * [wrapPluginCallback] runs per context-menu item per recomposition, and for a
-     * host-owned lambda - the common case - an uncached miss builds and throws a
-     * reflective exception, whose cost is filling in a stack trace. Caching the
-     * miss as well as the hit keeps that off the recomposition path.
+     * [wrapPluginCallback] runs per context-menu item per recomposition, on the
+     * event thread, and for a host-owned lambda - the common case - an uncached
+     * miss builds and throws a reflective exception, whose cost is filling in a
+     * stack trace.
      *
-     * Weak keys so a plugin's classloader can still be collected after unload;
-     * values are Strings, which do not reference the key back.
+     * A [ClassValue] rather than a synchronized map: lookups are lock-free, so the
+     * hit path takes no global monitor on the EDT, and each entry is held by the
+     * Class it is keyed on, so it dies with the class and its classloader when a
+     * plugin is unloaded. A `ConcurrentHashMap<ClassLoader, …>` would have pinned
+     * unloaded plugin classloaders; a `WeakHashMap` fixed that but put a lock back
+     * on the hot path. Null values are cached, which is the point.
      */
-    private val ownerPluginIds: MutableMap<ClassLoader, String?> =
-        Collections.synchronizedMap(WeakHashMap<ClassLoader, String?>())
+    private val ownerPluginIds =
+        object : ClassValue<String?>() {
+            override fun computeValue(type: Class<*>): String? = type.classLoader?.let(::resolvePluginId)
+        }
 
     /**
      * Run [block] as [pluginId], tagging anything that escapes.
@@ -167,25 +173,7 @@ object PluginExecutionBoundary {
      * Resolved reflectively so this module keeps no dependency on
      * `plugin-loader`, and cached per classloader - see [ownerPluginIds].
      */
-    fun pluginIdOfOwner(owner: Any?): String? {
-        val loader = owner?.javaClass?.classLoader ?: return null
-        // containsKey/get/put rather than computeIfAbsent, and deliberately:
-        // computeIfAbsent does NOT store a null result, so every host-owned
-        // classloader - the common case - would re-run the reflection on every
-        // recomposition, which is the exact cost this cache exists to remove.
-        // Caching the miss needs a present key with a null value.
-        //
-        // The synchronized block is the same monitor the map already uses
-        // (Collections.synchronizedMap locks on itself), so this is not double
-        // locking; it makes the check-then-put one atomic step.
-        return synchronized(ownerPluginIds) {
-            if (ownerPluginIds.containsKey(loader)) {
-                ownerPluginIds[loader]
-            } else {
-                resolvePluginId(loader).also { ownerPluginIds[loader] = it }
-            }
-        }
-    }
+    fun pluginIdOfOwner(owner: Any?): String? = owner?.let { ownerPluginIds.get(it.javaClass) }
 
     /**
      * Ask a classloader for its plugin id: **getter first**, then a public field.
@@ -215,8 +203,15 @@ object PluginExecutionBoundary {
     /**
      * Wrap a plugin-supplied callback so a throwable escaping it is attributed.
      *
-     * Returns [action] **unchanged** when it is host-owned, so wrapping every
-     * menu item costs one classloader lookup and no extra frame for host items.
+     * Returns [action] **unchanged** when it is host-owned, so wrapping every menu
+     * item costs one cached class lookup and no extra frame for host items.
+     *
+     * A plugin-owned action does get a fresh wrapper per call, which costs Compose
+     * the ability to skip a subtree whose items would otherwise compare equal.
+     * Caching wrappers is not as easy as it looks: a wrapper captures the action it
+     * wraps, so an action-keyed weak map is a strong reference from value to key
+     * and never collects. The durable fix is to wrap once at registration time
+     * rather than per mapping call; until then the per-call cost is one allocation.
      */
     fun wrapPluginCallback(action: () -> Unit): () -> Unit {
         val pluginId = pluginIdOfOwner(action) ?: return action
@@ -226,7 +221,10 @@ object PluginExecutionBoundary {
     /** Drop every recorded tag. For tests; production entries expire with their throwable. */
     internal fun resetForTest() {
         tags.clear()
-        ownerPluginIds.clear()
+        // ownerPluginIds is deliberately not reset: a ClassValue entry is keyed on
+        // the Class, so it can only be stale if the class itself changed, which
+        // cannot happen within a run. Clearing it would need a per-class remove and
+        // buy nothing.
         executing.remove()
     }
 }

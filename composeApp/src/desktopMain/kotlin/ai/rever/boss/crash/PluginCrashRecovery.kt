@@ -1,5 +1,7 @@
 package ai.rever.boss.crash
 
+import ai.rever.boss.plugin.sandbox.ui.PluginCrashRegistry
+import ai.rever.boss.plugin.sandbox.ui.PluginRecoveryQuarantine
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import kotlinx.coroutines.CoroutineScope
@@ -143,6 +145,10 @@ class PluginCrashRecoveryCoordinator(
         // circuits, so an unknown plugin is never quarantined.
         val contained = isActionable(pluginId) && quarantineSafely(pluginId, error)
         if (contained) {
+            // Marked here rather than inside the steps, so every implementation
+            // gets it and the crash handler can tell a recovery quarantine from an
+            // ordinary contained render fault - see PluginCrashRegistry.
+            PluginRecoveryQuarantine.mark(pluginId)
             logger.warn(
                 LogCategory.SYSTEM,
                 "Recovering from plugin crash - disabling the plugin, keeping the app",
@@ -171,10 +177,20 @@ class PluginCrashRecoveryCoordinator(
     }
 
     /**
-     * Quarantine, and report honestly if it did not happen.
+     * Record the plugin as crashed, and report honestly if even that did not happen.
      *
-     * Failing here means the app was NOT made safe, so the caller has to terminate
-     * rather than dismiss the dialog over a plugin that is still rendering.
+     * What this actually guarantees, stated precisely because the obvious stronger
+     * claim is false: the plugin is *recorded* as crashed, so repeat crashes are
+     * suppressed and any mounted [ai.rever.boss.plugin.sandbox.ui.PluginErrorBoundary]
+     * will swap to its fallback on the next EDT cycle. It does **not** guarantee the
+     * plugin has stopped - in the case this feature targets there is no boundary
+     * mounted at all, so nothing observes the entry and only the background unload
+     * really removes it.
+     *
+     * The step is still gated rather than assumed: the current implementation is a
+     * map write that does not throw, but a steps implementation that fails here has
+     * done nothing, and reporting success would dismiss the dialog over a plugin
+     * that is entirely untouched.
      */
     @Suppress("TooGenericExceptionCaught") // The plugin layer throws Errors, not just Exceptions.
     private fun quarantineSafely(
