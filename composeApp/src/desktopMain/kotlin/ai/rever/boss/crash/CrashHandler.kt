@@ -507,10 +507,15 @@ object CrashHandler {
             // each, on the crashing thread; doing it here and again inside
             // createCrashReport made a repeat crash pay for it twice.
             val attributedPluginId = attributePluginId(throwable)
-            if (shouldRecordRatherThanPrompt(throwable, attributedPluginId)) {
-                recordContained(throwable)
-                return
-            }
+            // Classified BEFORE the suppression checks, because those checks used to
+            // run first and could swallow a fatal crash: with a plugin dialog on
+            // screen, a host OutOfMemoryError on another thread was written to disk
+            // and the process carried on under heap exhaustion with nothing shown.
+            // The uncontainable carve-outs exist so that can never be treated as
+            // survivable, and this path routed around both.
+            val disposition = dispositionFor(throwable, attributedPluginId)
+
+            if (!claimDialogOrRecord(throwable, disposition, attributedPluginId)) return
 
             // Create crash report
             val report = createCrashReport(throwable, attributedPluginId)
@@ -560,35 +565,80 @@ object CrashHandler {
      * [recordContained] dedupes by signature, so a fault repeating every frame
      * costs one file and a log line on a curve.
      */
-    internal fun shouldRecordRatherThanPrompt(
+
+    /**
+     * Take the dialog slot, or record the crash and say why we are not prompting.
+     *
+     * @return true when the caller owns the slot and should show a dialog.
+     */
+    private fun claimDialogOrRecord(
         throwable: Throwable,
-        attributedPluginId: String? = attributePluginId(throwable),
+        disposition: CrashDisposition,
+        attributedPluginId: String?,
     ): Boolean {
-        // isRecoveryQuarantined, NOT hasCrashed: the latter is also set by the
-        // ordinary contained-render-fault path, so gating on it silenced the dialog
-        // for any plugin whose panel had ever shown a fallback - still enabled and
-        // still running - which is worse than the behaviour this feature replaced.
-        val quarantined = attributedPluginId?.let { PluginRecoveryQuarantine.isQuarantined(it) } == true
-        // Short-circuit, so the dialog slot is only claimed when the crash is
-        // actually going to open one.
-        val reason =
-            when {
-                quarantined -> {
-                    "Crash from an already-quarantined plugin - recording instead of prompting again"
-                }
-
-                !dialogVisible.compareAndSet(false, true) -> {
-                    "Crash while the crash dialog is open - recording instead of stacking a second dialog"
-                }
-
-                else -> {
-                    null
-                }
+        val fatal = disposition is CrashDisposition.FatalHost
+        // A fatal crash is never suppressed by a quarantine: the plugin may be gone,
+        // but heap exhaustion is not survivable whoever is blamed for it.
+        val quarantined = !fatal && isSuppressedByQuarantine(attributedPluginId)
+        val claimed = !quarantined && tryClaimDialogSlot()
+        if (!claimed) {
+            recordContained(throwable)
+            // A fatal crash cannot queue behind another dialog: the exit is the
+            // point, not the prompt. (Not reached when `quarantined`, which is
+            // false for every fatal crash.)
+            if (fatal) {
+                logger.error(
+                    LogCategory.SYSTEM,
+                    "Fatal crash while a crash dialog is open - terminating without a second dialog",
+                    mapOf("errorType" to throwable.javaClass.simpleName),
+                )
+                terminateAfterCrash()
             }
-        reason?.let {
-            logger.warn(LogCategory.SYSTEM, it, mapOf("errorType" to throwable.javaClass.simpleName))
         }
-        return reason != null
+        return claimed
+    }
+
+    /**
+     * Whether this plugin has already been taken out by crash recovery.
+     *
+     * A plugin recovery disabled does not necessarily stop - a thread or timer of
+     * its own keeps throwing - and each throw would otherwise open a fresh dialog
+     * for something the user has already dealt with.
+     *
+     * `isRecoveryQuarantined`, NOT `hasCrashed`: the latter is also set by the
+     * ordinary contained-render-fault path, and gating on it silenced the dialog
+     * for any plugin whose panel had ever shown a fallback - still enabled and
+     * still running - which is worse than the behaviour this feature replaced.
+     */
+    internal fun isSuppressedByQuarantine(attributedPluginId: String?): Boolean {
+        val quarantined = attributedPluginId?.let { PluginRecoveryQuarantine.isQuarantined(it) } == true
+        if (quarantined) {
+            logger.warn(
+                LogCategory.SYSTEM,
+                "Crash from an already-quarantined plugin - recording instead of prompting again",
+                mapOf("pluginId" to attributedPluginId.orEmpty()),
+            )
+        }
+        return quarantined
+    }
+
+    /**
+     * Claim the right to put a crash window on screen, or report that one is up.
+     *
+     * Named for its effect rather than hidden inside a `should…` predicate: every
+     * caller that claims the slot owes a release, and two review rounds found bugs
+     * that were exactly a missing release on a path that did not look like it had
+     * claimed anything. [CrashDialogController.finish] is the release.
+     */
+    internal fun tryClaimDialogSlot(): Boolean {
+        val claimed = dialogVisible.compareAndSet(false, true)
+        if (!claimed) {
+            logger.warn(
+                LogCategory.SYSTEM,
+                "Crash while the crash dialog is open - recording instead of stacking a second dialog",
+            )
+        }
+        return claimed
     }
 
     /**
@@ -600,11 +650,26 @@ object CrashHandler {
     internal fun dispositionFor(
         throwable: Throwable,
         report: CrashReport,
+    ): CrashDisposition = dispositionFor(throwable, report.pluginId)
+
+    /**
+     * [recoveryAvailable] is `canRecover`, not "a handler exists".
+     *
+     * Whether the plugin can actually be acted on used to be discovered much later,
+     * inside the coordinator, long after the dialog had already told the user their
+     * session was safe. A crash attributed to a plugin no live manager knows about
+     * therefore rendered "BOSS keeps running" and then terminated on the very next
+     * click. Classification asks the same question the recovery does, so what the
+     * dialog says and what its exits do cannot disagree.
+     */
+    internal fun dispositionFor(
+        throwable: Throwable,
+        attributedPluginId: String?,
     ): CrashDisposition =
         classifyCrash(
             throwable = throwable,
-            pluginId = report.pluginId,
-            recoveryAvailable = PluginCrashRecovery.isAvailable,
+            pluginId = attributedPluginId,
+            recoveryAvailable = PluginCrashRecovery.canRecover(attributedPluginId),
         )
 
     /**

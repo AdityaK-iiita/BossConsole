@@ -20,6 +20,22 @@ fun interface PluginCrashRecoveryHandler {
         pluginId: String,
         error: Throwable,
     ): Boolean
+
+    /**
+     * Whether [pluginId] is something this handler could actually take out.
+     *
+     * Asked at *classification* time, so the dialog cannot promise a recovery the
+     * exit will not deliver. Before this existed, classification only asked whether
+     * a handler was wired at all: a crash attributed to a plugin no live manager
+     * knows about - a lingering thread from something already unloaded, or a
+     * classloader-scan attribution after unload - rendered "BOSS keeps running, x
+     * will be disabled", and then terminated the moment the user clicked Continue
+     * Without Plugin.
+     *
+     * Defaults to true so a simple lambda handler still satisfies the interface;
+     * the real coordinator answers from its steps.
+     */
+    fun canRecover(pluginId: String): Boolean = true
 }
 
 /**
@@ -38,9 +54,33 @@ object PluginCrashRecovery {
     @Volatile
     var handler: PluginCrashRecoveryHandler? = null
 
-    /** Whether a plugin crash can be recovered at all right now. */
-    val isAvailable: Boolean
-        get() = handler != null
+    /**
+     * Whether [pluginId] could actually be recovered right now.
+     *
+     * Both halves matter: a handler has to be wired (false in headless runs and
+     * before the plugin layer exists), and it has to recognise this plugin. Asking
+     * only the first is what let the dialog promise something the exit could not
+     * do.
+     */
+    @Suppress("TooGenericExceptionCaught")
+    fun canRecover(pluginId: String?): Boolean {
+        val active = handler
+        val id = pluginId?.takeIf { it.isNotBlank() }
+        if (active == null || id == null) return false
+        // Never throws: this decides what a crash dialog says, and a failure here
+        // must fall back to the honest "we terminate" answer rather than propagate.
+        return try {
+            active.canRecover(id)
+        } catch (t: Throwable) {
+            logger.warn(
+                LogCategory.SYSTEM,
+                "Could not decide whether a plugin is recoverable - treating the crash as fatal",
+                mapOf("pluginId" to id),
+                t,
+            )
+            false
+        }
+    }
 
     /**
      * Recover [pluginId], or report that we could not.
@@ -153,6 +193,9 @@ class PluginCrashRecoveryCoordinator(
     private val steps: PluginRecoverySteps,
 ) : PluginCrashRecoveryHandler {
     private val logger = BossLogger.forComponent("PluginCrashRecovery")
+
+    /** The same question [isActionable] asks, asked early enough to change the wording. */
+    override fun canRecover(pluginId: String): Boolean = steps.isKnown(pluginId)
 
     override fun recover(
         pluginId: String,

@@ -174,7 +174,7 @@ class CrashRecoveryTest {
     fun `the dialog slot is released on every exit, so a later crash still prompts`() {
         installRecovery(succeeds = true)
         // Claim the slot the way a first crash does.
-        assertFalse(CrashHandler.shouldRecordRatherThanPrompt(error), "the first crash should prompt")
+        assertFalse(CrashHandler.tryClaimDialogSlot().not(), "the first crash should prompt")
 
         controller(recoverable).dismiss()
 
@@ -182,7 +182,7 @@ class CrashRecoveryTest {
         // with nothing asserting it: any exit that returned without terminating
         // would have silenced every crash dialog for the rest of the process.
         assertFalse(
-            CrashHandler.shouldRecordRatherThanPrompt(RuntimeException("a later, unrelated crash")),
+            CrashHandler.tryClaimDialogSlot().not(),
             "a crash after the dialog closed must be able to open a new one",
         )
         CrashHandler.releaseDialogSlot()
@@ -190,11 +190,11 @@ class CrashRecoveryTest {
 
     @Test
     fun `a second crash while the dialog is open is recorded rather than stacked`() {
-        assertFalse(CrashHandler.shouldRecordRatherThanPrompt(error), "the first crash claims the slot")
+        assertFalse(CrashHandler.tryClaimDialogSlot().not(), "the first crash claims the slot")
 
         // A plugin throwing from a paint or a timer produces one of these per frame.
         // A second window on top of the first hides it and neither can be reached.
-        assertTrue(CrashHandler.shouldRecordRatherThanPrompt(RuntimeException("second crash")))
+        assertTrue(CrashHandler.tryClaimDialogSlot().not())
 
         CrashHandler.releaseDialogSlot()
     }
@@ -207,11 +207,11 @@ class CrashRecoveryTest {
         PluginExecutionBoundary.tag(fromQuarantined, OFFENDER)
 
         assertTrue(
-            CrashHandler.shouldRecordRatherThanPrompt(fromQuarantined),
+            CrashHandler.isSuppressedByQuarantine(OFFENDER),
             "a disabled plugin's lingering thread must not prompt on every throw",
         )
         // And the slot was not claimed, so an unrelated crash can still prompt.
-        assertFalse(CrashHandler.shouldRecordRatherThanPrompt(RuntimeException("host crash")))
+        assertFalse(CrashHandler.tryClaimDialogSlot().not())
         CrashHandler.releaseDialogSlot()
     }
 
@@ -227,7 +227,7 @@ class CrashRecoveryTest {
         PluginExecutionBoundary.tag(laterCrash, BYSTANDER)
 
         assertFalse(
-            CrashHandler.shouldRecordRatherThanPrompt(laterCrash),
+            CrashHandler.isSuppressedByQuarantine(OFFENDER),
             "a contained render fault must not silence the crash dialog for that plugin",
         )
         CrashHandler.releaseDialogSlot()
@@ -239,7 +239,7 @@ class CrashRecoveryTest {
         PluginRecoveryQuarantine.mark(OFFENDER)
         val laterCrash = IllegalStateException("crashed again after re-enable")
         PluginExecutionBoundary.tag(laterCrash, OFFENDER)
-        assertTrue(CrashHandler.shouldRecordRatherThanPrompt(laterCrash), "suppressed while quarantined")
+        assertTrue(CrashHandler.isSuppressedByQuarantine(OFFENDER), "suppressed while quarantined")
         CrashHandler.releaseDialogSlot()
 
         // What DynamicPluginManager.enablePlugin does on a deliberate re-arm - both
@@ -251,7 +251,7 @@ class CrashRecoveryTest {
         PluginRecoveryQuarantine.clear(OFFENDER)
 
         assertFalse(
-            CrashHandler.shouldRecordRatherThanPrompt(laterCrash),
+            CrashHandler.isSuppressedByQuarantine(OFFENDER),
             "a plugin the user put back must be able to report a new crash",
         )
         CrashHandler.releaseDialogSlot()
@@ -324,9 +324,7 @@ class CrashRecoveryTest {
         val fake =
             object : PluginRecoverySteps {
                 override fun isKnown(pluginId: String): Boolean {
-                    val nested = IllegalStateException("a crash while recovery is running")
-                    PluginExecutionBoundary.tag(nested, pluginId)
-                    seenDuringRecovery = CrashHandler.shouldRecordRatherThanPrompt(nested)
+                    seenDuringRecovery = CrashHandler.isSuppressedByQuarantine(pluginId)
                     return true
                 }
 
@@ -389,6 +387,89 @@ class CrashRecoveryTest {
         controller(recoverable).dismiss()
 
         assertEquals(true, markedWhenQuarantineRan)
+    }
+
+    @Test
+    fun `a crash blamed on an unknown plugin is classified fatal, not promised recovery`() {
+        // The dialog used to say "BOSS keeps running, x will be disabled" for a
+        // plugin no live manager knows about - a lingering thread from something
+        // already unloaded - and then terminate on the very next click. What the
+        // dialog says and what its exits do have to be decided by the same question.
+        PluginCrashRecovery.handler =
+            PluginCrashRecoveryCoordinator(
+                CoroutineScope(Dispatchers.Unconfined),
+                FakePluginLayer(known = emptySet()),
+            )
+
+        assertIs<CrashDisposition.FatalHost>(CrashHandler.dispositionFor(error, OFFENDER))
+    }
+
+    @Test
+    fun `a known plugin is still classified recoverable`() {
+        PluginCrashRecovery.handler =
+            PluginCrashRecoveryCoordinator(
+                CoroutineScope(Dispatchers.Unconfined),
+                FakePluginLayer(known = setOf(OFFENDER)),
+            )
+
+        assertEquals(CrashDisposition.RecoverablePlugin(OFFENDER), CrashHandler.dispositionFor(error, OFFENDER))
+    }
+
+    @Test
+    fun `the dialog slot is only released once recovery has quarantined the plugin`() {
+        // Releasing before resolve left a gap: resolve is what marks the quarantine,
+        // so a second crash from the same plugin in between passed both gates and
+        // opened a second dialog for a plugin already being recovered.
+        var slotFreeBeforeMark: Boolean? = null
+        val fake =
+            object : PluginRecoverySteps {
+                override fun isKnown(pluginId: String): Boolean {
+                    // Observed inside recovery, before the quarantine is marked.
+                    slotFreeBeforeMark = CrashHandler.tryClaimDialogSlot()
+                    return true
+                }
+
+                override fun quarantine(
+                    pluginId: String,
+                    error: Throwable,
+                ) = Unit
+
+                override suspend fun closeTabs(pluginId: String) = Unit
+
+                override suspend fun disable(pluginId: String) = true
+
+                override fun persistDisabled(pluginId: String) = true
+
+                override fun notifyDisabling(pluginId: String) = Unit
+
+                override fun notifyDisableIncomplete(pluginId: String) = Unit
+            }
+        PluginCrashRecovery.handler = PluginCrashRecoveryCoordinator(CoroutineScope(Dispatchers.Unconfined), fake)
+        check(CrashHandler.tryClaimDialogSlot()) { "the dialog owns the slot to begin with" }
+
+        controller(recoverable).dismiss()
+
+        assertEquals(false, slotFreeBeforeMark, "the slot must still be held while recovery is mid-flight")
+    }
+
+    @Test
+    fun `a fatal crash arriving while a dialog is open still terminates`() {
+        // Suppression used to run before classification, so a host OutOfMemoryError
+        // landing while a plugin dialog was up got written to disk and the process
+        // carried on under heap exhaustion with nothing shown. The uncontainable
+        // carve-outs exist so that is never treated as survivable; this path routed
+        // around both of them.
+        installRecovery(succeeds = true)
+        check(CrashHandler.tryClaimDialogSlot()) { "a dialog is on screen" }
+
+        val fatal = OutOfMemoryError("heap")
+        val disposition = CrashHandler.dispositionFor(fatal, OFFENDER)
+        assertIs<CrashDisposition.FatalHost>(disposition, "heap exhaustion is never recoverable")
+        // What handleCrash does with that disposition when the slot is already held.
+        assertFalse(CrashHandler.tryClaimDialogSlot(), "no second dialog")
+        CrashHandler.terminateAfterCrash()
+
+        assertEquals(listOf(1), exitCodes)
     }
 
     @Test

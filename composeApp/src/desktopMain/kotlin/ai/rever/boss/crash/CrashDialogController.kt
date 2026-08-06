@@ -142,13 +142,23 @@ internal class CrashDialogController(
             return lastOutcome
         }
         disposeWindow()
-        // Released here rather than inside the one branch of resolveCrash that
-        // returns: the slot is about the *window*, which is now gone, and tying its
-        // release to "recovery succeeded" put the invariant in another file with
-        // nothing asserting it. A disposition that ever returned without exiting
-        // would otherwise suppress every later crash dialog for the whole process.
-        CrashHandler.releaseDialogSlot()
-        return resolve(disposition, error).also { lastOutcome = it }
+        // Released AFTER resolve, not before. The slot is about the window, which is
+        // gone by now, but releasing first left a gap: resolve is what eventually
+        // marks the recovery quarantine, so between the release and the mark a
+        // second crash from the same plugin passed both gates and opened a second
+        // dialog for a plugin already being recovered. Marking earlier inside
+        // recover() narrowed that window; releasing afterwards closes it, and costs
+        // nothing because resolve always either exits or returns.
+        //
+        // Still not tied to "recovery succeeded", which was the other bug: that put
+        // the invariant in another file with nothing asserting it, and any exit that
+        // returned without terminating suppressed every later dialog for the life of
+        // the process.
+        return try {
+            resolve(disposition, error).also { lastOutcome = it }
+        } finally {
+            CrashHandler.releaseDialogSlot()
+        }
     }
 
     /**
