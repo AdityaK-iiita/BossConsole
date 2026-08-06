@@ -100,9 +100,12 @@ object PluginCrashRecovery {
      * relying on it.
      */
     fun installIfAbsent(build: () -> PluginCrashRecoveryHandler) {
-        // updateAndGet, not check-then-CAS: the latter evaluated build() before the
-        // compare, so two windows racing still both constructed a coordinator and
-        // only the write was atomic - which is not what this said it did.
+        // What this guarantees: exactly one handler is ever *installed*, and once
+        // installed it is never replaced. Not that build() runs once - updateAndGet
+        // re-runs its function on CAS contention, so a race can still construct a
+        // coordinator that is then discarded. That is fine because construction is
+        // pure; claiming otherwise is what the previous two versions of this comment
+        // got wrong.
         installed.updateAndGet { existing -> existing ?: build() }
     }
 
