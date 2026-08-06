@@ -1113,6 +1113,38 @@ BEGIN
 
     v_is_admin := public.user_is_org_admin(v_actor, p_org_id);
 
+    -- A SYSTEM organisation's roster is the entire deployment.
+    --
+    -- 20260801070000 makes every user an active member of the boss org and
+    -- handle_new_user keeps every future signup there, so without this an
+    -- ordinary user could page this RPC (limit up to 500, plus an ILIKE on
+    -- p_query) and walk out with the email address of every account in the
+    -- deployment. public.users deliberately lets a plain user read only their own
+    -- row, so that would be a change of posture, not a restatement of one.
+    --
+    -- The decision: for an is_system organisation a non-admin sees only
+    -- themselves. Real organisations are unaffected - their roster is the point,
+    -- and their membership is a deliberate act rather than an artefact of signing
+    -- up. Pinned by organisation_membership_test.
+    IF NOT v_is_admin
+       AND EXISTS (SELECT 1 FROM public.organisations o
+                    WHERE o.id = p_org_id AND o.is_system) THEN
+        RETURN jsonb_build_object(
+            'success', true,
+            'is_admin', false,
+            'system_org_restricted', true,
+            'data', COALESCE((
+                SELECT jsonb_agg(row_to_json(t)::jsonb)
+                FROM (
+                    SELECT m.user_id, u.email, m.status, m.joined_at,
+                           false AS is_owner, false AS is_admin,
+                           ARRAY[]::text[] AS roles
+                    FROM public.organisation_members m
+                    JOIN auth.users u ON u.id = m.user_id
+                    WHERE m.org_id = p_org_id AND m.user_id = v_actor
+                ) t), '[]'::jsonb));
+    END IF;
+
     SELECT COALESCE(jsonb_agg(row_to_json(t)::jsonb), '[]'::jsonb)
       INTO v_rows
       FROM (

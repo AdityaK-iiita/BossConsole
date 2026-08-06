@@ -95,9 +95,34 @@ $$;
 
 ALTER FUNCTION "public"."effective_share_role_ids"("uuid") OWNER TO "postgres";
 
-COMMENT ON FUNCTION "public"."effective_share_role_ids"("uuid") IS 'Role ids whose secret shares a user should see: the descendant closure of their assigned roles, matching the expansion authorize() uses for permissions. Callable by authenticated because it is scoped to a single subject and reveals only role ids the caller already effectively holds.';
+COMMENT ON FUNCTION "public"."effective_share_role_ids"("uuid") IS 'Role ids whose secret shares a user should see: the descendant closure of their assigned roles, matching the expansion authorize() uses for permissions. ARBITRARY SUBJECT, so service_role only -- use my_effective_share_role_ids() from a policy.';
 
-GRANT EXECUTE ON FUNCTION "public"."effective_share_role_ids"("uuid") TO "authenticated", "service_role";
+-- service_role only. The earlier comment claimed this was safe for authenticated
+-- "because it is scoped to a single subject", but the subject is the PARAMETER and
+-- nothing ties it to the caller: any authenticated user could ask for anyone
+-- else's full descendant role closure, and public.roles is world-readable, so
+-- those ids resolve straight to names. 20260625000000 SECTION 9 already wrote this
+-- rule for the same family of helpers.
+REVOKE EXECUTE ON FUNCTION "public"."effective_share_role_ids"("uuid")
+    FROM PUBLIC, "anon", "authenticated";
+GRANT  EXECUTE ON FUNCTION "public"."effective_share_role_ids"("uuid") TO "service_role";
+
+
+-- The self-subject form, which is all the RLS policy ever needed.
+CREATE OR REPLACE FUNCTION "public"."my_effective_share_role_ids"()
+RETURNS SETOF "uuid"
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+    SELECT public.effective_share_role_ids(auth.uid());
+$$;
+
+ALTER FUNCTION "public"."my_effective_share_role_ids"() OWNER TO "postgres";
+
+COMMENT ON FUNCTION "public"."my_effective_share_role_ids"() IS
+'The CALLER''s effective share-role closure. Subject is auth.uid(), never a parameter, which is what makes this safe to grant to authenticated. Used by the secret_shares SELECT policy.';
+
+GRANT EXECUTE ON FUNCTION "public"."my_effective_share_role_ids"() TO "authenticated", "service_role";
 
 
 -- ============================================================================
@@ -248,7 +273,7 @@ CREATE POLICY "secret_shares_select" ON "public"."secret_shares"
     FOR SELECT USING (
         "public"."can_manage_secret"("secret_id")
         OR "shared_with_user_id" = "auth"."uid"()
-        OR "shared_with_role_id" IN (SELECT "public"."effective_share_role_ids"("auth"."uid"()))
+        OR "shared_with_role_id" IN (SELECT "public"."my_effective_share_role_ids"())
         OR ("shared_with_org_id" IS NOT NULL AND "public"."is_org_member"("shared_with_org_id"))
     );
 

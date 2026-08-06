@@ -169,7 +169,51 @@ ALTER FUNCTION "public"."user_can_view_plugin_row"("uuid","text","uuid","uuid",b
 
 COMMENT ON FUNCTION "public"."user_can_view_plugin_row"("uuid","text","uuid","uuid",boolean) IS 'Whether a user may see a plugin: public+published to anyone (including anonymous), org to active members, unlisted to the author and organisation admins, anything to the author or a global admin. The single visibility rule shared by RLS, the store RPCs and the edge function.';
 
-GRANT EXECUTE ON FUNCTION "public"."user_can_view_plugin_row"("uuid","text","uuid","uuid",boolean) TO "anon", "authenticated", "service_role";
+-- service_role ONLY, and the reason is the whole point of the split below.
+--
+-- Every argument is caller-supplied and no plugin has to exist, so with a grant to
+-- anon/authenticated this function reduces to the three predicates that
+-- 20260801010000 SECTION 4 deliberately REVOKED from authenticated:
+--
+--   (victim, 'unlisted', org, NULL, false) => user_is_org_admin(victim, org)
+--   (victim, 'org',      org, NULL, true)  => user_is_org_member(victim, org)
+--   (victim, 'nonsense', NULL, NULL, false) => is_user_admin(victim)
+--
+-- One POST /rest/v1/rpc/user_can_view_plugin_row per question, and it answers about
+-- ANY subject. Granting it back would reopen all three, to anon as well.
+REVOKE EXECUTE ON FUNCTION "public"."user_can_view_plugin_row"("uuid","text","uuid","uuid",boolean)
+    FROM PUBLIC, "anon", "authenticated";
+GRANT  EXECUTE ON FUNCTION "public"."user_can_view_plugin_row"("uuid","text","uuid","uuid",boolean)
+    TO "service_role";
+
+
+-- The self-subject form, for RLS.
+--
+-- Same rule, but the subject is auth.uid() rather than a parameter, so it can be
+-- granted to anon and authenticated without becoming an oracle: a caller can only
+-- ever ask about themselves. This is the is_org_member / user_is_org_member split
+-- that the rest of this batch already uses, applied to the one helper that had
+-- been left as the arbitrary-subject form in four policies.
+CREATE OR REPLACE FUNCTION "public"."can_view_plugin_row"(
+    "p_visibility" "text",
+    "p_org_id" "uuid",
+    "p_author_id" "uuid",
+    "p_published" boolean
+) RETURNS boolean
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+    SELECT public.user_can_view_plugin_row(
+        auth.uid(), p_visibility, p_org_id, p_author_id, p_published);
+$$;
+
+ALTER FUNCTION "public"."can_view_plugin_row"("text","uuid","uuid",boolean) OWNER TO "postgres";
+
+COMMENT ON FUNCTION "public"."can_view_plugin_row"("text","uuid","uuid",boolean) IS
+'Whether the CALLER may see a plugin row. The subject is auth.uid(), never a parameter, which is what makes it safe to grant to anon and authenticated -- see the note on user_can_view_plugin_row. Used by the plugins/versions/tags/screenshots SELECT policies.';
+
+GRANT EXECUTE ON FUNCTION "public"."can_view_plugin_row"("text","uuid","uuid",boolean)
+    TO "anon", "authenticated", "service_role";
 
 
 -- The service-role probe. routes/download.ts MUST call this: that route resolves
@@ -654,8 +698,8 @@ DROP POLICY IF EXISTS "Published plugins are viewable by everyone" ON "public"."
 DROP POLICY IF EXISTS "Visible plugins are viewable" ON "public"."plugins";
 CREATE POLICY "Visible plugins are viewable" ON "public"."plugins"
     FOR SELECT USING (
-        "public"."user_can_view_plugin_row"(
-            "auth"."uid"(), "visibility", "org_id", "author_id", "published")
+        "public"."can_view_plugin_row"(
+            "visibility", "org_id", "author_id", "published")
     );
 
 -- Publishing for an organisation must satisfy its publish policy.
@@ -688,8 +732,8 @@ CREATE POLICY "Published versions are viewable" ON "public"."plugin_versions"
     FOR SELECT USING (EXISTS (
         SELECT 1 FROM "public"."plugins" p
         WHERE p."id" = "plugin_versions"."plugin_id"
-          AND "public"."user_can_view_plugin_row"(
-              "auth"."uid"(), p."visibility", p."org_id", p."author_id", p."published")
+          AND "public"."can_view_plugin_row"(
+              p."visibility", p."org_id", p."author_id", p."published")
     ));
 
 DROP POLICY IF EXISTS "Published tags are viewable" ON "public"."plugin_tags";
@@ -697,8 +741,8 @@ CREATE POLICY "Published tags are viewable" ON "public"."plugin_tags"
     FOR SELECT USING (EXISTS (
         SELECT 1 FROM "public"."plugins" p
         WHERE p."id" = "plugin_tags"."plugin_id"
-          AND "public"."user_can_view_plugin_row"(
-              "auth"."uid"(), p."visibility", p."org_id", p."author_id", p."published")
+          AND "public"."can_view_plugin_row"(
+              p."visibility", p."org_id", p."author_id", p."published")
     ));
 
 DROP POLICY IF EXISTS "Published screenshots are viewable" ON "public"."plugin_screenshots";
@@ -706,8 +750,8 @@ CREATE POLICY "Published screenshots are viewable" ON "public"."plugin_screensho
     FOR SELECT USING (EXISTS (
         SELECT 1 FROM "public"."plugins" p
         WHERE p."id" = "plugin_screenshots"."plugin_id"
-          AND "public"."user_can_view_plugin_row"(
-              "auth"."uid"(), p."visibility", p."org_id", p."author_id", p."published")
+          AND "public"."can_view_plugin_row"(
+              p."visibility", p."org_id", p."author_id", p."published")
     ));
 
 

@@ -8,7 +8,7 @@
 -- two entry points agreeing with it.
 
 begin;
-select plan(27);
+select plan(37);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures: one organisation per join policy, plus a domain-verified one.
@@ -263,6 +263,120 @@ select is(
         (select id from public.organisations where slug='pgtreq')),
     'request',
     'an UNCONFIRMED address at the same domain still has to ask'
+);
+
+-- ===========================================================================
+-- A system organisation's roster is NOT a global directory
+--
+-- Every user is an active member of the seeded boss org and handle_new_user
+-- keeps every future signup there, so a bare membership gate would let any
+-- signed-in user page out the email address of every account in the deployment.
+-- public.users deliberately lets a plain user read only their own row, so that
+-- would be a change of posture. Non-admins see only themselves in a system org;
+-- real organisations are unaffected.
+-- ===========================================================================
+-- The boss-org seed skips on an empty database (organisations.owner_id is NOT
+-- NULL and there are no users at migration time), so a system organisation is
+-- created here instead. p_is_system bypasses the reserved-slug check, and the
+-- explicit role names avoid the boss_admin collision the same way the seed does.
+select public.create_organisation_internal(
+    p_slug=>'pgtsys', p_name=>'System Org',
+    p_owner_id=>'50000000-0000-0000-0000-000000000001',
+    p_visibility=>'public', p_join_policy=>'open',
+    p_is_system=>true,
+    p_admin_role_name=>'pgtsys_org_admin',
+    p_user_role_name=>'pgtsys_org_user');
+
+insert into public.organisation_members (org_id, user_id, status, joined_at, join_source)
+select o.id, u.id, 'active', now(), 'seed'
+  from public.organisations o
+  cross join (values
+      ('50000000-0000-0000-0000-000000000002'::uuid),
+      ('50000000-0000-0000-0000-000000000003'::uuid)
+  ) as u(id)
+ where o.slug = 'pgtsys'
+on conflict (org_id, user_id) do nothing;
+
+select is(
+    (select public.list_organisation_members(
+        (select id from public.organisations where slug='pgtsys'),
+        null, null, 500, 0, '50000000-0000-0000-0000-000000000002') ->> 'system_org_restricted'),
+    'true',
+    'a non-admin gets the restricted projection for a system organisation'
+);
+select is(
+    (select jsonb_array_length(
+        public.list_organisation_members(
+            (select id from public.organisations where slug='pgtsys'),
+            null, null, 500, 0, '50000000-0000-0000-0000-000000000002') -> 'data')),
+    1,
+    'and sees exactly one row -- their own -- not the whole deployment'
+);
+select is(
+    (select e ->> 'user_id'
+       from jsonb_array_elements(
+            public.list_organisation_members(
+                (select id from public.organisations where slug='pgtsys'),
+                null, null, 500, 0, '50000000-0000-0000-0000-000000000002') -> 'data') e),
+    '50000000-0000-0000-0000-000000000002',
+    'and that row is theirs'
+);
+-- An ADMIN of the system organisation still gets the full roster: this restricts
+-- who may read a directory, not whether one exists.
+select ok(
+    (select jsonb_array_length(
+        public.list_organisation_members(
+            (select id from public.organisations where slug='pgtsys'),
+            null, null, 500, 0, '50000000-0000-0000-0000-000000000001') -> 'data')) > 1,
+    'an admin of the system organisation still sees everyone'
+);
+
+-- A REAL organisation is unaffected: its roster is the whole point.
+select ok(
+    (select jsonb_array_length(
+        public.list_organisation_members(
+            (select id from public.organisations where slug='pgtopen'),
+            null, null, 100, 0, '50000000-0000-0000-0000-000000000002') -> 'data')) > 1,
+    'a non-system organisation still shows its full roster to a member'
+);
+select is(
+    (select public.list_organisation_members(
+        (select id from public.organisations where slug='pgtopen'),
+        null, null, 100, 0, '50000000-0000-0000-0000-000000000002') ->> 'system_org_restricted'),
+    null,
+    'and is not flagged as restricted'
+);
+
+-- ===========================================================================
+-- Arbitrary-subject helpers must not be callable by authenticated
+--
+-- Each reduces to a question about SOMEONE ELSE. user_can_view_plugin_row was
+-- granted to anon and authenticated, which made it an oracle for
+-- user_is_org_admin, user_is_org_member and is_user_admin all at once.
+-- ===========================================================================
+select ok(
+    NOT has_function_privilege('authenticated',
+        'public.user_can_view_plugin_row(uuid,text,uuid,uuid,boolean)', 'execute')
+    AND NOT has_function_privilege('anon',
+        'public.user_can_view_plugin_row(uuid,text,uuid,uuid,boolean)', 'execute'),
+    'the arbitrary-subject plugin-visibility helper is not callable by anon or authenticated'
+);
+select ok(
+    has_function_privilege('anon',
+        'public.can_view_plugin_row(text,uuid,uuid,boolean)', 'execute')
+    AND has_function_privilege('authenticated',
+        'public.can_view_plugin_row(text,uuid,uuid,boolean)', 'execute'),
+    'but the self-subject form is, so the store''s RLS still works anonymously'
+);
+select ok(
+    NOT has_function_privilege('authenticated',
+        'public.effective_share_role_ids(uuid)', 'execute'),
+    'the arbitrary-subject share-role closure is not callable by authenticated'
+);
+select ok(
+    has_function_privilege('authenticated',
+        'public.my_effective_share_role_ids()', 'execute'),
+    'but the self-subject form is, so the secret_shares policy still works'
 );
 
 select * from finish();

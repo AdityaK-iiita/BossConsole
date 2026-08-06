@@ -78,9 +78,27 @@ CREATE POLICY "Users can view their own memberships" ON "public"."organisation_m
     USING ("user_id" = "auth"."uid"());
 
 DROP POLICY IF EXISTS "Organisation members can view the roster" ON "public"."organisation_members";
+-- The roster, EXCEPT for a system organisation.
+--
+-- Every user is an active member of the seeded boss org, so a bare
+-- is_org_member() test would make organisation_members a directory of every
+-- account in the deployment - readable directly over PostgREST, not only through
+-- the RPC. The RPC has the matching restriction; both are needed, because RLS is
+-- the one an ordinary client can query without going through us.
 CREATE POLICY "Organisation members can view the roster" ON "public"."organisation_members"
     FOR SELECT TO "authenticated"
-    USING ("status" = 'active' AND "public"."is_org_member"("org_id"));
+    USING (
+        "status" = 'active'
+        AND "public"."is_org_member"("org_id")
+        AND (
+            "user_id" = "auth"."uid"()
+            OR "public"."is_org_admin"("org_id")
+            OR NOT EXISTS (
+                SELECT 1 FROM "public"."organisations" o
+                WHERE o."id" = "organisation_members"."org_id" AND o."is_system"
+            )
+        )
+    );
 
 DROP POLICY IF EXISTS "Organisation admins can view pending and invited members" ON "public"."organisation_members";
 CREATE POLICY "Organisation admins can view pending and invited members" ON "public"."organisation_members"
