@@ -151,7 +151,16 @@ internal class CrashDialogController(
         return resolve(disposition, error).also { lastOutcome = it }
     }
 
-    /** What the single real exit decided; replayed to any later caller. */
+    /**
+     * What the single real exit decided; replayed to any later caller.
+     *
+     * **Advisory.** A second exit arriving while the first is still inside
+     * [resolve] reads the initial `Terminated` rather than the outcome that is
+     * about to be produced. No production caller reads the return value - the
+     * exits are wired as `() -> Unit` - so this is a shape for tests and for
+     * whoever wires the next caller: what the guard actually guarantees is that
+     * the *effects* happen once, not that every caller learns the result.
+     */
     @Volatile
     private var lastOutcome: CrashOutcome = CrashOutcome.Terminated
 

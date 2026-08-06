@@ -1,6 +1,8 @@
 package ai.rever.boss.crash
 
 import ai.rever.boss.plugin.ui.BossTheme
+import ai.rever.boss.utils.logging.BossLogger
+import ai.rever.boss.utils.logging.LogCategory
 import ai.rever.boss.utils.logging.LogSanitizer
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -137,7 +139,21 @@ internal fun CrashReportDialog(
     // not depending on whether some child (the notes field) happened to hold focus — a dismissal
     // route that silently does nothing is worse than one that isn't offered.
     val dialogFocus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { dialogFocus.requestFocus() } }
+    // Logged rather than silently swallowed: the failure mode is "Escape stops
+    // working", which is the exact thing this line exists to fix, and a silent
+    // catch would leave no trace of a dismissal route quietly going missing.
+    LaunchedEffect(Unit) {
+        runCatching { dialogFocus.requestFocus() }
+            .onFailure { failure ->
+                BossLogger
+                    .forComponent("CrashReportDialog")
+                    .warn(
+                        LogCategory.UI,
+                        "Crash dialog could not take focus - Escape may not dismiss it",
+                        mapOf("errorType" to failure.javaClass.simpleName),
+                    )
+            }
+    }
 
     val dismissLabel = if (recoverablePluginId != null) CONTINUE_WITHOUT_PLUGIN_LABEL else DONT_SEND_LABEL
 
