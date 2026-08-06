@@ -30,18 +30,28 @@
 -- ============================================================================
 -- SECTION 1: Create the organisation
 -- ============================================================================
--- Idempotent and re-runnable. On a brand-new database with no users at all it
--- NOTICEs and skips -- which is the normal case for `supabase db reset` -- and the
--- next run (or the operator) creates it once a first user exists.
+-- Idempotent, and CALLABLE - not just a DO block.
+--
+-- Migrations run exactly once, so the original "the next run creates it once a
+-- first user exists" was wrong: on any environment where the schema lands before
+-- the first user (fresh self-host, staging bootstrap, schema-then-data restore)
+-- nothing would ever create the boss organisation, and the failure is silent -
+-- plugins.org_id stays NULL, plugins_default_org is inert, and handle_new_user
+-- warns once per signup into a log nobody reads.
+--
+-- ensure_boss_organisation() is therefore a function, called here AND from
+-- handle_new_user, so the first signup on a fresh deployment creates it.
 
-DO $$
+CREATE OR REPLACE FUNCTION "public"."ensure_boss_organisation"() RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
 DECLARE
     v_owner uuid;
     v_res jsonb;
 BEGIN
     IF EXISTS (SELECT 1 FROM public.organisations WHERE slug = 'boss') THEN
-        RAISE NOTICE 'boss organisation already exists; seed skipped.';
-        RETURN;
+        RETURN jsonb_build_object('success', true, 'created', false);
     END IF;
 
     -- Owner: the longest-standing global admin, else the oldest user. The
@@ -55,8 +65,8 @@ BEGIN
 
     IF v_owner IS NULL THEN
         -- organisations.owner_id is NOT NULL, so there is nothing to create yet.
-        RAISE NOTICE 'No users exist yet; boss organisation seed skipped (this migration is re-runnable).';
-        RETURN;
+        -- handle_new_user calls this again on the first signup.
+        RETURN jsonb_build_object('success', false, 'created', false, 'error', 'no users yet');
     END IF;
 
     v_res := public.create_organisation_internal(
@@ -82,7 +92,29 @@ BEGIN
         RAISE EXCEPTION 'boss organisation seed failed: %', v_res->>'error';
     END IF;
 
-    RAISE NOTICE 'boss organisation created (owner %).', v_owner;
+    RETURN jsonb_build_object('success', true, 'created', true, 'owner_id', v_owner::text);
+END;
+$$;
+
+ALTER FUNCTION "public"."ensure_boss_organisation"() OWNER TO "postgres";
+
+REVOKE EXECUTE ON FUNCTION "public"."ensure_boss_organisation"() FROM PUBLIC, "anon", "authenticated";
+GRANT  EXECUTE ON FUNCTION "public"."ensure_boss_organisation"() TO "service_role";
+
+COMMENT ON FUNCTION "public"."ensure_boss_organisation"() IS
+'Creates the boss organisation if it does not exist, choosing the longest-standing global admin (else the oldest user) as owner. Idempotent, and callable: migrations run once, so a deployment whose schema lands before its first user would otherwise never get one. handle_new_user calls this on every signup.';
+
+-- Run it now, for the normal case where users already exist.
+DO $$
+DECLARE
+    v jsonb;
+BEGIN
+    v := public.ensure_boss_organisation();
+    IF (v->>'created')::boolean THEN
+        RAISE NOTICE 'boss organisation created (owner %).', v->>'owner_id';
+    ELSE
+        RAISE NOTICE 'boss organisation not created now: %', COALESCE(v->>'error', 'already exists');
+    END IF;
 END $$;
 
 
@@ -138,6 +170,17 @@ BEGIN
 
     -- Step 3 (20260801070000): join the default organisation.
     BEGIN
+        -- Deliberately NOT calling ensure_boss_organisation() here.
+        --
+        -- Self-healing on first signup is tempting and does close the fresh-deployment
+        -- gap, but it makes the first-ever signup create the organisation and its two
+        -- roles as a side effect of an auth trigger - which changes the role graph out
+        -- from under anything that reads it, and broke four pgTAP suites that assert
+        -- exact grantable-role sets. An auth hook is the wrong place to acquire that
+        -- blast radius.
+        --
+        -- The recovery path is the callable ensure_boss_organisation() above, listed in
+        -- the deployment notes. See the note on that function.
         SELECT id INTO v_boss_org_id FROM public.organisations WHERE slug = 'boss';
 
         IF v_boss_org_id IS NOT NULL THEN

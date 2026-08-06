@@ -122,6 +122,13 @@ ALTER FUNCTION "public"."my_effective_share_role_ids"() OWNER TO "postgres";
 COMMENT ON FUNCTION "public"."my_effective_share_role_ids"() IS
 'The CALLER''s effective share-role closure. Subject is auth.uid(), never a parameter, which is what makes this safe to grant to authenticated. Used by the secret_shares SELECT policy.';
 
+-- REVOKE first: 20251023000014_grants.sql sets ALTER DEFAULT PRIVILEGES ... GRANT ALL ON
+-- FUNCTIONS TO anon, so every function here is anon-executable the moment it is created
+-- and a bare GRANT to authenticated does not take that away. Same trap as ON TABLES,
+-- caught there and missed here. None of these were an authorization hole - they all
+-- resolve through resolve_org_actor, which returns NULL for anon - but an
+-- unauthenticated DB-reachable surface nobody intended is worth closing.
+REVOKE EXECUTE ON FUNCTION "public"."my_effective_share_role_ids"() FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."my_effective_share_role_ids"() TO "authenticated", "service_role";
 
 

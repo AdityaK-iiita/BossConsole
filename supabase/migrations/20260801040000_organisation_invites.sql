@@ -400,8 +400,17 @@ ALTER FUNCTION "public"."get_organisation_invite_preview"("text") OWNER TO "post
 COMMENT ON FUNCTION "public"."get_organisation_invite_preview"("text") IS 'Display-only preview of an invite for the unauthenticated web landing page. NEVER redeems and never consumes a use, so a link prefetch is harmless. Returns { valid: false } identically for unknown, expired, revoked and exhausted tokens.';
 
 
+-- REVOKE first: 20251023000014_grants.sql sets ALTER DEFAULT PRIVILEGES ... GRANT ALL ON
+-- FUNCTIONS TO anon, so every function here is anon-executable the moment it is created
+-- and a bare GRANT to authenticated does not take that away. Same trap as ON TABLES,
+-- caught there and missed here. None of these were an authorization hole - they all
+-- resolve through resolve_org_actor, which returns NULL for anon - but an
+-- unauthenticated DB-reachable surface nobody intended is worth closing.
+REVOKE EXECUTE ON FUNCTION "public"."create_organisation_invite"("uuid", "uuid", "text", integer, integer, "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."create_organisation_invite"("uuid", "uuid", "text", integer, integer, "uuid") TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."list_organisation_invites"("uuid", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."list_organisation_invites"("uuid", "uuid")                                     TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."revoke_organisation_invite"("uuid", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."revoke_organisation_invite"("uuid", "uuid")                                    TO "authenticated", "service_role";
 
 -- redeem_organisation_invite takes NO p_actor_id, deliberately. Redemption must
@@ -409,6 +418,7 @@ GRANT EXECUTE ON FUNCTION "public"."revoke_organisation_invite"("uuid", "uuid") 
 -- email scanner's prefetch of an invite URL unable to consume the invite, and it
 -- keeps "joining an organisation" -- which changes the caller's own effective
 -- permissions -- off every service-role code path.
+REVOKE EXECUTE ON FUNCTION "public"."redeem_organisation_invite"("text") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."redeem_organisation_invite"("text")                                            TO "authenticated";
 REVOKE EXECUTE ON FUNCTION "public"."redeem_organisation_invite"("text")                                           FROM PUBLIC, "anon";
 

@@ -44,6 +44,29 @@ orgPageRoutes.get("/o/:slug", async (ctx) => {
   const token = new URL(ctx.req.url).searchParams.get("t")
 
   if (token) {
+    // A state-changing GET, and the one request that does not follow the
+    // session -> CSRF -> probe order the rest of this function keeps to. Consuming a
+    // token and issuing Set-Cookie means any page could navigate a victim to
+    // /o/<slug>?t=<attacker token> and replace their org session with the attacker's
+    // identity - login CSRF. The attacker gains nothing, but the victim can be induced
+    // to type into a settings form belonging to somebody else's organisation.
+    //
+    // Sec-Fetch-Site is not settable by page script. The desktop app opens this as a
+    // top-level navigation from a boss:// link, which yields `none`, so refusing only
+    // `cross-site` costs the real flow nothing.
+    if (ctx.req.header("sec-fetch-site") === "cross-site") {
+      return htmlResponse(
+        (nonce) =>
+          errorPage({
+            nonce,
+            title: "Session unavailable - BOSS",
+            heading: "Open this from BOSS",
+            message: SESSION_EXPIRED_MESSAGE,
+          }),
+        { status: 400 },
+      )
+    }
+
     const limit = rateLimit(
       `handoff:${clientKey(ctx.req.raw.headers)}`,
       HANDOFF_LIMIT,

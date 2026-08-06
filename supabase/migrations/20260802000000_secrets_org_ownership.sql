@@ -171,7 +171,15 @@ ALTER FUNCTION "public"."can_manage_secret"("uuid") OWNER TO "postgres";
 
 COMMENT ON FUNCTION "public"."can_manage_secret"("uuid") IS 'Whether the current user may EDIT, DELETE or RE-SHARE a secret: its creator, a global admin, or an admin of the owning organisation. Being a plain member of the owning organisation grants read (can_access_secret) but never manage.';
 
+-- REVOKE first: 20251023000014_grants.sql sets ALTER DEFAULT PRIVILEGES ... GRANT ALL ON
+-- FUNCTIONS TO anon, so every function here is anon-executable the moment it is created
+-- and a bare GRANT to authenticated does not take that away. Same trap as ON TABLES,
+-- caught there and missed here. None of these were an authorization hole - they all
+-- resolve through resolve_org_actor, which returns NULL for anon - but an
+-- unauthenticated DB-reachable surface nobody intended is worth closing.
+REVOKE EXECUTE ON FUNCTION "public"."can_access_secret"("uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."can_access_secret"("uuid") TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."can_manage_secret"("uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."can_manage_secret"("uuid") TO "authenticated", "service_role";
 
 
@@ -902,14 +910,23 @@ ALTER FUNCTION "public"."get_secret_shares"("uuid") OWNER TO "postgres";
 -- Recorded here explicitly so the difference from the original grants file is
 -- intentional rather than an omission.
 
+REVOKE EXECUTE ON FUNCTION "public"."create_secret"("text","text","text","text",timestamp with time zone,"text"[],boolean,"text","text"[],"uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."create_secret"("text","text","text","text",timestamp with time zone,"text"[],boolean,"text","text"[],"uuid")                      TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."update_secret"("uuid","text","text","text","text",timestamp with time zone,"text"[],boolean,"text","text"[],"uuid",boolean) FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."update_secret"("uuid","text","text","text","text",timestamp with time zone,"text"[],boolean,"text","text"[],"uuid",boolean)      TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."delete_secret"("uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."delete_secret"("uuid")                                                                                                          TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."get_user_secrets"(integer,integer) FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."get_user_secrets"(integer,integer)                                                                                              TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."search_user_secrets"("text",integer,integer) FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."search_user_secrets"("text",integer,integer)                                                                                    TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."get_user_secrets_with_shared"(integer,integer) FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."get_user_secrets_with_shared"(integer,integer)                                                                                  TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."share_secret"("uuid","uuid","uuid","text",timestamp with time zone,"uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."share_secret"("uuid","uuid","uuid","text",timestamp with time zone,"uuid")                                                       TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."unshare_secret"("uuid","uuid","uuid","uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."unshare_secret"("uuid","uuid","uuid","uuid")                                                                                    TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."get_secret_shares"("uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."get_secret_shares"("uuid")                                                                                                      TO "authenticated", "service_role";
 
 

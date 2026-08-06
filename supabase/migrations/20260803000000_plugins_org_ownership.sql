@@ -212,6 +212,13 @@ ALTER FUNCTION "public"."can_view_plugin_row"("text","uuid","uuid",boolean) OWNE
 COMMENT ON FUNCTION "public"."can_view_plugin_row"("text","uuid","uuid",boolean) IS
 'Whether the CALLER may see a plugin row. The subject is auth.uid(), never a parameter, which is what makes it safe to grant to anon and authenticated -- see the note on user_can_view_plugin_row. Used by the plugins/versions/tags/screenshots SELECT policies.';
 
+-- REVOKE first: 20251023000014_grants.sql sets ALTER DEFAULT PRIVILEGES ... GRANT ALL ON
+-- FUNCTIONS TO anon, so every function here is anon-executable the moment it is created
+-- and a bare GRANT to authenticated does not take that away. Same trap as ON TABLES,
+-- caught there and missed here. None of these were an authorization hole - they all
+-- resolve through resolve_org_actor, which returns NULL for anon - but an
+-- unauthenticated DB-reachable surface nobody intended is worth closing.
+REVOKE EXECUTE ON FUNCTION "public"."can_view_plugin_row"("text","uuid","uuid",boolean) FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."can_view_plugin_row"("text","uuid","uuid",boolean)
     TO "anon", "authenticated", "service_role";
 
@@ -398,6 +405,7 @@ ALTER FUNCTION "public"."search_plugins"("text","text","text"[],numeric,boolean,
 
 COMMENT ON FUNCTION "public"."search_plugins"("text","text","text"[],numeric,boolean,integer,integer,"text") IS 'Plugin store search, scoped to what auth.uid() may see. Signature deliberately unchanged -- adding a parameter would create a second overload and PostgREST would fail every call with "function is not unique".';
 
+REVOKE EXECUTE ON FUNCTION "public"."search_plugins"("text","text","text"[],numeric,boolean,integer,integer,"text") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."search_plugins"("text","text","text"[],numeric,boolean,integer,integer,"text") TO "anon", "authenticated", "service_role";
 
 
@@ -512,6 +520,7 @@ COMMENT ON FUNCTION "public"."get_plugin_with_stats"("text") IS 'Plugin detail, 
 
 -- Re-issued because the DROP above removed them. Same pattern and reason as
 -- 20260630000000. Omitting anon here would break anonymous store browsing.
+REVOKE EXECUTE ON FUNCTION "public"."get_plugin_with_stats"("text") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."get_plugin_with_stats"("text") TO "anon", "authenticated", "service_role";
 
 
@@ -598,6 +607,7 @@ ALTER FUNCTION "public"."get_plugin_versions"("text") OWNER TO "postgres";
 
 COMMENT ON FUNCTION "public"."get_plugin_versions"("text") IS 'Version list for a plugin, scoped to what auth.uid() may see. These rows carry jar_path and sha256, so leaving this ungated would expose an organisation-private plugin''s artifact even with every other surface closed.';
 
+REVOKE EXECUTE ON FUNCTION "public"."get_plugin_versions"("text") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."get_plugin_versions"("text") TO "anon", "authenticated", "service_role";
 
 
@@ -650,6 +660,7 @@ ALTER FUNCTION "public"."get_popular_tags"(integer) OWNER TO "postgres";
 
 COMMENT ON FUNCTION "public"."get_popular_tags"(integer) IS 'Popular tags across PUBLIC plugins only. Organisation-private plugin tags are excluded so the public tag cloud cannot leak internal project names.';
 
+REVOKE EXECUTE ON FUNCTION "public"."get_popular_tags"(integer) FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."get_popular_tags"(integer) TO "anon", "authenticated", "service_role";
 
 

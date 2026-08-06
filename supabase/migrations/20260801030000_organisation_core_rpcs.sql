@@ -674,10 +674,21 @@ ALTER FUNCTION "public"."list_organisation_requests"("text", integer, integer, "
 COMMENT ON FUNCTION "public"."list_organisation_requests"("text", integer, integer, "uuid") IS 'Organisation-creation requests. Holders of organisation.approve see all; everyone else sees only their own. Returns is_reviewer so the client knows which UI to render.';
 
 
+-- REVOKE first: 20251023000014_grants.sql sets ALTER DEFAULT PRIVILEGES ... GRANT ALL ON
+-- FUNCTIONS TO anon, so every function here is anon-executable the moment it is created
+-- and a bare GRANT to authenticated does not take that away. Same trap as ON TABLES,
+-- caught there and missed here. None of these were an authorization hole - they all
+-- resolve through resolve_org_actor, which returns NULL for anon - but an
+-- unauthenticated DB-reachable surface nobody intended is worth closing.
+REVOKE EXECUTE ON FUNCTION "public"."submit_organisation_request"("text", "text", "text", "text", "text", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."submit_organisation_request"("text", "text", "text", "text", "text", "uuid") TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."approve_organisation_request"("uuid", "text", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."approve_organisation_request"("uuid", "text", "uuid")                        TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."reject_organisation_request"("uuid", "text", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."reject_organisation_request"("uuid", "text", "uuid")                         TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."withdraw_organisation_request"("uuid", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."withdraw_organisation_request"("uuid", "uuid")                               TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."list_organisation_requests"("text", integer, integer, "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."list_organisation_requests"("text", integer, integer, "uuid")                TO "authenticated", "service_role";
 
 
@@ -1183,12 +1194,19 @@ ALTER FUNCTION "public"."list_organisation_members"("uuid", "text", "text", inte
 COMMENT ON FUNCTION "public"."list_organisation_members"("uuid", "text", "text", integer, integer, "uuid") IS 'Organisation roster. Members see active members; organisation admins additionally see pending and invited rows. Returns "Organisation not found" rather than "Permission denied" to a non-member, so it is not a membership oracle.';
 
 
+REVOKE EXECUTE ON FUNCTION "public"."join_organisation"("uuid", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."join_organisation"("uuid", "uuid")                                                    TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."request_organisation_membership"("uuid", "text", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."request_organisation_membership"("uuid", "text", "uuid")                              TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."approve_organisation_member"("uuid", "uuid", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."approve_organisation_member"("uuid", "uuid", "uuid")                                  TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."reject_organisation_member"("uuid", "uuid", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."reject_organisation_member"("uuid", "uuid", "uuid")                                   TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."remove_organisation_member"("uuid", "uuid", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."remove_organisation_member"("uuid", "uuid", "uuid")                                   TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."transfer_organisation_ownership"("uuid", "uuid", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."transfer_organisation_ownership"("uuid", "uuid", "uuid")                              TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."list_organisation_members"("uuid", "text", "text", integer, integer, "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."list_organisation_members"("uuid", "text", "text", integer, integer, "uuid")          TO "authenticated", "service_role";
 
 
@@ -1641,12 +1659,19 @@ $$;
 ALTER FUNCTION "public"."list_organisation_roles"("uuid", "uuid") OWNER TO "postgres";
 
 
+REVOKE EXECUTE ON FUNCTION "public"."assign_organisation_role"("uuid", "uuid", "uuid", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."assign_organisation_role"("uuid", "uuid", "uuid", "uuid")                  TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."remove_organisation_role"("uuid", "uuid", "uuid", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."remove_organisation_role"("uuid", "uuid", "uuid", "uuid")                  TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."create_organisation_role"("uuid", "text", "text", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."create_organisation_role"("uuid", "text", "text", "uuid")                  TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."delete_organisation_role"("uuid", "uuid", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."delete_organisation_role"("uuid", "uuid", "uuid")                          TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."grant_organisation_role_permission"("uuid", "uuid", "text", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."grant_organisation_role_permission"("uuid", "uuid", "text", "uuid")        TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."revoke_organisation_role_permission"("uuid", "uuid", "text", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."revoke_organisation_role_permission"("uuid", "uuid", "text", "uuid")       TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."list_organisation_roles"("uuid", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."list_organisation_roles"("uuid", "uuid")                                   TO "authenticated", "service_role";
 
 
@@ -1890,9 +1915,13 @@ $$;
 ALTER FUNCTION "public"."list_organisation_domains"("uuid", "uuid") OWNER TO "postgres";
 
 
+REVOKE EXECUTE ON FUNCTION "public"."add_organisation_domain"("uuid", "text", boolean, "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."add_organisation_domain"("uuid", "text", boolean, "uuid")  TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."set_primary_organisation_domain"("uuid", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."set_primary_organisation_domain"("uuid", "uuid")           TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."remove_organisation_domain"("uuid", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."remove_organisation_domain"("uuid", "uuid")                TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."list_organisation_domains"("uuid", "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."list_organisation_domains"("uuid", "uuid")                 TO "authenticated", "service_role";
 
 REVOKE EXECUTE ON FUNCTION "public"."mark_organisation_domain_verified"("uuid", "uuid") FROM PUBLIC, "anon", "authenticated";
@@ -1985,6 +2014,7 @@ ALTER FUNCTION "public"."update_organisation_settings"("uuid", "text", "text", "
 
 COMMENT ON FUNCTION "public"."update_organisation_settings"("uuid", "text", "text", "text", "text", "text", "uuid", boolean, boolean, "uuid") IS 'Updates an organisation''s mutable settings. NULL means "leave unchanged"; p_clear_publish_role is the explicit signal for setting publish_role_id back to NULL, which COALESCE cannot express. The slug is immutable -- role names derive from it.';
 
+REVOKE EXECUTE ON FUNCTION "public"."update_organisation_settings"("uuid", "text", "text", "text", "text", "text", "uuid", boolean, boolean, "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."update_organisation_settings"("uuid", "text", "text", "text", "text", "text", "uuid", boolean, boolean, "uuid") TO "authenticated", "service_role";
 
 
@@ -2126,7 +2156,9 @@ ALTER FUNCTION "public"."search_organisations"("text", integer, integer, "uuid")
 
 COMMENT ON FUNCTION "public"."search_organisations"("text", integer, integer, "uuid") IS 'Organisation discovery. Returns public organisations, ones the caller already relates to, and private ones whose VERIFIED domain matches the caller''s CONFIRMED, non-reserved email domain. available_action tells the client which button to render. Never projects owner_id. Granted to authenticated only -- never anon.';
 
+REVOKE EXECUTE ON FUNCTION "public"."get_my_organisations"("uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."get_my_organisations"("uuid")                                TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."search_organisations"("text", integer, integer, "uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."search_organisations"("text", integer, integer, "uuid")       TO "authenticated", "service_role";
 
 

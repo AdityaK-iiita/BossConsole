@@ -9,7 +9,7 @@
 -- get_popular_tags.
 
 begin;
-select plan(32);
+select plan(34);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -35,7 +35,28 @@ from public.organisations where slug='pgtplug';
 
 create temporary table t_p (k text primary key, v uuid);
 insert into t_p select 'org', id from public.organisations where slug='pgtplug';
+-- The boss organisation, created HERE rather than assumed.
+--
+-- `supabase db start` migrates a database with zero auth.users, and seed.sql creates none, so
+-- 20260801070000 SECTION 1 always takes its "no users yet" branch: the boss org does not exist
+-- in ANY ci run. The assertion below compared plugins.org_id against this row, so with no row
+-- both sides were NULL and pgTAP's is() passes NULL = NULL - the plugins_default_org trigger,
+-- which is what keeps the store's publish path working now that org_id exists, was never
+-- actually verified.
+select public.create_organisation_internal(
+    p_slug=>'boss', p_name=>'BOSS',
+    p_owner_id=>'70000000-0000-0000-0000-000000000001',
+    p_visibility=>'public', p_join_policy=>'open',
+    p_is_system=>true,
+    p_admin_role_name=>'boss_org_admin',
+    p_user_role_name=>'boss_org_user',
+    p_auto_assign_member_role=>false);
+
 insert into t_p select 'bossorg', id from public.organisations where slug='boss';
+
+-- The guard that stops this degrading back to NULL = NULL.
+select isnt((select v from t_p where k='bossorg'), null,
+    'FIXTURE: the boss organisation exists, so the trigger assertion below is not vacuous');
 
 -- One plugin at each visibility level, all owned by the pgtplug organisation and
 -- authored by the org owner.
@@ -73,10 +94,13 @@ select is(
 -- The BEFORE INSERT trigger: the edge function inserts without org_id.
 insert into public.plugins (plugin_id, display_name, author_id, author_name, type, api_version)
 values ('test.noorg', 'No Org Given', '70000000-0000-0000-0000-000000000001', 'owner', 'panel', '1.0');
+select isnt(
+    (select org_id from public.plugins where plugin_id='test.noorg'), null,
+    'TRIGGER: an insert without org_id gets one');
 select is(
     (select org_id from public.plugins where plugin_id='test.noorg'),
     (select v from t_p where k='bossorg'),
-    'TRIGGER: an insert without org_id defaults to the boss organisation (the edge function does this)');
+    'TRIGGER: and it is the boss organisation (the edge function inserts this way)');
 select is(
     (select visibility from public.plugins where plugin_id='test.noorg'),
     'public',

@@ -178,6 +178,13 @@ ALTER FUNCTION "public"."organisation_role_name"("text", "text") OWNER TO "postg
 
 COMMENT ON FUNCTION "public"."organisation_role_name"("text", "text") IS 'Derives an organisation role name from its slug, e.g. (acme, admin) -> acme_admin. The single place the naming shape is defined.';
 
+-- REVOKE first: 20251023000014_grants.sql sets ALTER DEFAULT PRIVILEGES ... GRANT ALL ON
+-- FUNCTIONS TO anon, so every function here is anon-executable the moment it is created
+-- and a bare GRANT to authenticated does not take that away. Same trap as ON TABLES,
+-- caught there and missed here. None of these were an authorization hole - they all
+-- resolve through resolve_org_actor, which returns NULL for anon - but an
+-- unauthenticated DB-reachable surface nobody intended is worth closing.
+REVOKE EXECUTE ON FUNCTION "public"."organisation_role_name"("text", "text") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."organisation_role_name"("text", "text") TO "authenticated", "service_role";
 
 
@@ -224,6 +231,7 @@ ALTER FUNCTION "public"."is_reserved_organisation_slug"("text") OWNER TO "postgr
 
 COMMENT ON FUNCTION "public"."is_reserved_organisation_slug"("text") IS 'True when a slug may not be used for a new organisation: a reserved name, or one whose derived <slug>_admin / <slug>_user role name already exists. The derived-name arm is what stops slug "boss" mapping the GLOBAL boss_admin role into an organisation.';
 
+REVOKE EXECUTE ON FUNCTION "public"."is_reserved_organisation_slug"("text") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."is_reserved_organisation_slug"("text") TO "authenticated", "service_role";
 
 
@@ -398,6 +406,7 @@ ALTER FUNCTION "public"."resolve_org_actor"("uuid") OWNER TO "postgres";
 
 COMMENT ON FUNCTION "public"."resolve_org_actor"("uuid") IS 'Resolves the acting user for an organisation RPC. Returns auth.uid() when there is a session; otherwise returns p_actor_id ONLY for a service_role caller (the organisation edge function, which holds a handoff-derived user_id rather than a JWT). Returns NULL when neither applies, so callers fail closed. An authenticated caller can never impersonate via p_actor_id -- auth.uid() takes precedence unconditionally.';
 
+REVOKE EXECUTE ON FUNCTION "public"."resolve_org_actor"("uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."resolve_org_actor"("uuid") TO "authenticated", "service_role";
 
 
@@ -485,8 +494,11 @@ COMMENT ON FUNCTION "public"."can_publish_org_plugin"("uuid") IS 'Whether the CU
 
 -- Exposure. Mirrors 20260625000000 SECTION 9: the auth.uid()-based helpers are
 -- safe for authenticated; the arbitrary-subject ones are not.
+REVOKE EXECUTE ON FUNCTION "public"."is_org_member"("uuid") FROM PUBLIC, "anon";
 GRANT  EXECUTE ON FUNCTION "public"."is_org_member"("uuid")           TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."is_org_admin"("uuid") FROM PUBLIC, "anon";
 GRANT  EXECUTE ON FUNCTION "public"."is_org_admin"("uuid")            TO "authenticated", "service_role";
+REVOKE EXECUTE ON FUNCTION "public"."can_publish_org_plugin"("uuid") FROM PUBLIC, "anon";
 GRANT  EXECUTE ON FUNCTION "public"."can_publish_org_plugin"("uuid")  TO "authenticated", "service_role";
 
 REVOKE EXECUTE ON FUNCTION "public"."user_is_org_member"("uuid", "uuid")           FROM PUBLIC, "anon", "authenticated";
@@ -646,6 +658,7 @@ ALTER FUNCTION "public"."is_org_grantable_permission"("uuid") OWNER TO "postgres
 
 COMMENT ON FUNCTION "public"."is_org_grantable_permission"("uuid") IS 'May this permission be attached to a role belonging to an organisation? Tests the permission DOMAIN against a reserved-domain deny-list (role, user, api_key, rpa, plugins, secret, finance, organisation, org) plus a short explicit name allowlist. Deliberately does NOT use permissions.is_system, which is inconsistent in this catalog -- role.assign and role.create are is_system = false. Fails closed.';
 
+REVOKE EXECUTE ON FUNCTION "public"."is_org_grantable_permission"("uuid") FROM PUBLIC, "anon";
 GRANT EXECUTE ON FUNCTION "public"."is_org_grantable_permission"("uuid") TO "authenticated", "service_role";
 
 
