@@ -1,5 +1,7 @@
 package ai.rever.boss.plugin.sandbox
 
+import ai.rever.boss.plugin.logging.BossLogger
+import ai.rever.boss.plugin.logging.LogCategory
 import java.util.Collections
 import java.util.WeakHashMap
 
@@ -47,6 +49,8 @@ import java.util.WeakHashMap
  * Thread-safe: crashes arrive on whichever thread was running plugin code.
  */
 object PluginExecutionBoundary {
+    private val logger = BossLogger.forComponent("PluginExecutionBoundary")
+
     /**
      * Plugin ids currently being executed on this thread, innermost last.
      *
@@ -66,22 +70,6 @@ object PluginExecutionBoundary {
         Collections.synchronizedMap(WeakHashMap<Throwable, String>())
 
     /**
-     * Cache of owning-class → owning plugin, including **misses**.
-     *
-     * [wrapPluginCallback] runs per context-menu item per recomposition, on the
-     * event thread, and for a host-owned lambda - the common case - an uncached
-     * miss builds and throws a reflective exception, whose cost is filling in a
-     * stack trace.
-     *
-     * A [ClassValue] rather than a synchronized map: lookups are lock-free, so the
-     * hit path takes no global monitor on the EDT, and each entry is held by the
-     * Class it is keyed on, so it dies with the class and its classloader when a
-     * plugin is unloaded. A `ConcurrentHashMap<ClassLoader, …>` would have pinned
-     * unloaded plugin classloaders; a `WeakHashMap` fixed that but put a lock back
-     * on the hot path. Null values are cached, which is the point.
-     */
-
-    /**
      * The host's authoritative loader → plugin id lookup, installed at startup.
      *
      * Attribution now selects which plugin gets **disabled and written out of
@@ -97,21 +85,56 @@ object PluginExecutionBoundary {
      * duck-typing below stays as the fallback for tests and for any context where
      * nothing has been installed.
      */
-    @Volatile
-    private var resolver: ((ClassLoader) -> String?)? = null
+    private val resolverRef =
+        java.util.concurrent.atomic
+            .AtomicReference<((ClassLoader) -> String?)?>(null)
 
     /** Bumped on every install so [ownerPluginIds] cannot serve a pre-install answer. */
     private val resolverGeneration =
         java.util.concurrent.atomic
             .AtomicInteger(0)
 
-    var pluginIdResolver: ((ClassLoader) -> String?)?
-        get() = resolver
-        set(value) {
-            resolver = value
+    /**
+     * Install the host's resolver. **First install wins; later ones are ignored.**
+     *
+     * Not a settable property, and that is the point. This object is public and
+     * `ai.rever.boss.plugin.sandbox` is not among `PluginClassLoader`'s
+     * `defaultSharedPackages`, so a plugin's child-first miss delegates to the
+     * parent and hands the plugin *this* singleton. A public setter would therefore
+     * let any plugin write `pluginIdResolver = { "some.rival" }` and reroute every
+     * attribution in the process at once - a shorter route to the outcome the
+     * resolver exists to prevent, and one that does not even require the attacker
+     * to be the plugin that crashes.
+     *
+     * [tag] and [wrapPluginCallback] are public and can also lie, but each of those
+     * lies about a single throwable; this would have been global and permanent.
+     */
+    fun installPluginIdResolver(resolver: (ClassLoader) -> String?) {
+        if (resolverRef.compareAndSet(null, resolver)) {
             resolverGeneration.incrementAndGet()
+        } else {
+            logger.warn(
+                LogCategory.SYSTEM,
+                "Ignoring a second plugin-id resolver install - the first one stands",
+            )
         }
+    }
 
+    /**
+     * Cache of owning-class → owning plugin, including **misses**.
+     *
+     * [invokeAttributed] runs per context-menu click and [pluginIdOfOwner] is on
+     * that path, so for a host-owned lambda - the common case - an uncached miss
+     * would build and throw a reflective exception, whose cost is filling in a
+     * stack trace.
+     *
+     * A [ClassValue] rather than a synchronized map: lookups are lock-free, so the
+     * hit path takes no global monitor on the EDT, and each entry is held by the
+     * Class it is keyed on, so it dies with the class and its classloader when a
+     * plugin is unloaded. A `ConcurrentHashMap<ClassLoader, …>` would have pinned
+     * unloaded plugin classloaders; a `WeakHashMap` fixed that but put a lock back
+     * on the hot path. Null values are cached, which is the point.
+     */
     private val ownerPluginIds =
         object : ClassValue<Resolved>() {
             override fun computeValue(type: Class<*>): Resolved =
@@ -255,7 +278,7 @@ object PluginExecutionBoundary {
      * has neither member, and attribution must never break the call it describes.
      */
     private fun resolvePluginId(loader: ClassLoader): String? {
-        pluginIdResolver?.let { authoritative ->
+        resolverRef.get()?.let { authoritative ->
             // Installed in production: a type check the host owns. Its answer is
             // final, including a null - falling through to duck-typing here would
             // hand back the spoofing route the resolver exists to close.
@@ -288,26 +311,33 @@ object PluginExecutionBoundary {
      * Returns [action] **unchanged** when it is host-owned, so wrapping every menu
      * item costs one cached class lookup and no extra frame for host items.
      *
-     * A plugin-owned action does get a fresh wrapper per call, which costs Compose
-     * the ability to skip a subtree whose items would otherwise compare equal.
-     * Caching wrappers is not as easy as it looks: a wrapper captures the action it
-     * wraps, so an action-keyed weak map is a strong reference from value to key
-     * and never collects. The durable fix is to wrap once at registration time
-     * rather than per mapping call; until then the per-call cost is one allocation.
+     * A plugin-owned action does get a fresh wrapper per call, so prefer
+     * [invokeAttributed] wherever the host owns the call: it allocates nothing and
+     * leaves item identity intact, which is what lets Compose skip a menu subtree.
+     * (Caching wrappers instead is a trap - a wrapper captures the action it wraps,
+     * so an action-keyed weak map is a strong reference from value to key and never
+     * collects.) This remains for callers that must hand a wrapped callback onward.
      */
     fun wrapPluginCallback(action: () -> Unit): () -> Unit {
         val pluginId = pluginIdOfOwner(action) ?: return action
         return { runAttributed(pluginId) { action() } }
     }
 
-    /** Drop every recorded tag. For tests; production entries expire with their throwable. */
-    internal fun resetForTest() {
+    /**
+     * Reset to a known state, optionally installing [resolver].
+     *
+     * One internal entry point rather than a separate test setter: production
+     * installs through [installPluginIdResolver], which is first-install-wins, so a
+     * test needs a way to replace one - and this is the only place that should have
+     * it.
+     */
+    internal fun resetForTest(resolver: ((ClassLoader) -> String?)? = null) {
         tags.clear()
-        pluginIdResolver = null
-        // ownerPluginIds is deliberately not reset: a ClassValue entry is keyed on
-        // the Class, so it can only be stale if the class itself changed, which
-        // cannot happen within a run. Clearing it would need a per-class remove and
-        // buy nothing.
+        resolverRef.set(resolver)
+        resolverGeneration.incrementAndGet()
+        // ownerPluginIds needs no explicit clear: its entries carry the resolver
+        // generation, which the line above bumps, so every cached answer is
+        // recomputed on the next read. (ClassValue cannot be bulk-cleared anyway.)
         executing.remove()
     }
 }

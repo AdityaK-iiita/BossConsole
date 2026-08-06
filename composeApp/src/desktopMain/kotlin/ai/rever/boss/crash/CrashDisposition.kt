@@ -66,7 +66,7 @@ fun classifyCrash(
  * and tear down tabs across every window on an already-exhausted heap, which is
  * the exact thing the carve-out exists to prevent.
  *
- * Shared with [decideWindowExceptionRoute] through [causeChain], because the two
+ * Shared with [decideWindowExceptionRoute] through [chainOfCauses], because the two
  * carve-outs are worthless unless they agree - and for one round they did not.
  */
 internal fun Throwable.hasUncontainableCause(): Boolean = chainOfCauses().any { isUncontainable(it) }

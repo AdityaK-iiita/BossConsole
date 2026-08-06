@@ -203,9 +203,9 @@ class PluginExecutionBoundaryTest {
         // counts, and this loader is not it.
         val spoofing = FakePluginClassLoader(OTHER_PLUGIN, javaClass.classLoader)
         val action = spoofing.loadThrowingAction()
-        PluginExecutionBoundary.pluginIdResolver = { loader ->
-            // Stands in for `(loader as? PluginClassLoader)?.pluginId`: a type check
-            // against something only the host constructs.
+        // Stands in for `(loader as? PluginClassLoader)?.pluginId`: a type check
+        // against something only the host constructs.
+        PluginExecutionBoundary.resetForTest { loader ->
             if (loader is TrustedLoader) loader.trustedPluginId else null
         }
 
@@ -220,7 +220,7 @@ class PluginExecutionBoundaryTest {
     fun `an installed resolver is what identifies a recognised loader`() {
         val trusted = TrustedLoader(PLUGIN, javaClass.classLoader)
         val action = trusted.loadThrowingAction()
-        PluginExecutionBoundary.pluginIdResolver = { loader ->
+        PluginExecutionBoundary.resetForTest { loader ->
             if (loader is TrustedLoader) loader.trustedPluginId else null
         }
 

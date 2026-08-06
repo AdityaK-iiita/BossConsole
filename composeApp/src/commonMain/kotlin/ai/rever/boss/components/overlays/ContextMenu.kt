@@ -185,8 +185,16 @@ private fun ContextMenuContent(
                                             // BOSS. Doing it here rather than while mapping the items
                                             // costs no allocation, so the items stay equal across
                                             // recompositions and Compose can still skip this subtree.
-                                            PluginExecutionBoundary.invokeAttributed(item.onClick)
-                                            onDismissRequest()
+                                            // finally, because invokeAttributed rethrows: a plugin
+                                            // action that throws used to take the app with it, so the
+                                            // menu went too. Now the crash is survivable, and without
+                                            // this the menu stays on screen over the crash dialog and
+                                            // outlives the plugin it belongs to.
+                                            try {
+                                                PluginExecutionBoundary.invokeAttributed(item.onClick)
+                                            } finally {
+                                                onDismissRequest()
+                                            }
                                         }
                                     },
                                 ).background(
@@ -398,8 +406,11 @@ private fun SubMenuContent(
                                 } else {
                                     Modifier.clickable {
                                         // Submenu items are plugin-owned just as often; see above.
-                                        PluginExecutionBoundary.invokeAttributed(subItem.onClick)
-                                        onDismissRequest()
+                                        try {
+                                            PluginExecutionBoundary.invokeAttributed(subItem.onClick)
+                                        } finally {
+                                            onDismissRequest()
+                                        }
                                     }
                                 },
                             ).background(

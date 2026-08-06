@@ -7,6 +7,27 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /**
+ * A plugin id fit to drop into a sentence a user reads.
+ *
+ * The id comes from a plugin-supplied manifest and every display site shares one
+ * status-bar slot, so a long or control-character-bearing id pushes the rest of
+ * the sentence - including where to undo this - out of view. Falls back to a
+ * placeholder rather than rendering `Plugin '' crashed` when nothing survives the
+ * filter.
+ */
+internal fun displayPluginId(pluginId: String): String {
+    val flattened = pluginId.filter { it.isLetterOrDigit() || it in ".-_:" }
+    return when {
+        flattened.isBlank() -> "unknown plugin"
+        flattened.length <= MAX_DISPLAYED_ID -> flattened
+        else -> flattened.take(MAX_DISPLAYED_ID) + "..."
+    }
+}
+
+/** Comfortably fits the real ids (`ai.rever.boss.plugin.dynamic.terminaltab` is 43). */
+private const val MAX_DISPLAYED_ID = 60
+
+/**
  * Takes a crashed plugin out of the running app so the app can keep running.
  *
  * @return true when recovery took effect. False means the crash could not be
@@ -67,7 +88,10 @@ object PluginCrashRecovery {
      * relying on it.
      */
     fun installIfAbsent(build: () -> PluginCrashRecoveryHandler) {
-        if (installed.get() == null) installed.compareAndSet(null, build())
+        // updateAndGet, not check-then-CAS: the latter evaluated build() before the
+        // compare, so two windows racing still both constructed a coordinator and
+        // only the write was atomic - which is not what this said it did.
+        installed.updateAndGet { existing -> existing ?: build() }
     }
 
     /**

@@ -654,13 +654,11 @@ object CrashHandler {
     }
 
     /**
-     * Decide what a crash *is*, given who we could blame and whether the plugin
-     * layer is in a position to act.
-     *
-     * Split out so the dialog and the tests classify through the same call.
+     * Decide what a crash *is*, from a report - a convenience for tests, which have
+     * one in hand. Production classifies once in [handleCrash] and threads the
+     * disposition onward, so the dialog cannot be built from a different answer
+     * than the one the dialog-slot decision used.
      */
-
-    /** Convenience for tests, which have a report in hand; production threads the id. */
     internal fun dispositionFor(
         throwable: Throwable,
         report: CrashReport,

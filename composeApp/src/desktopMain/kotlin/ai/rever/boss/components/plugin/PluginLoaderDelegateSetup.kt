@@ -4,6 +4,7 @@ import ai.rever.boss.components.bars.horizontal.StatusMessageManager
 import ai.rever.boss.crash.PluginCrashRecovery
 import ai.rever.boss.crash.PluginCrashRecoveryCoordinator
 import ai.rever.boss.crash.PluginRecoverySteps
+import ai.rever.boss.crash.displayPluginId
 import ai.rever.boss.plugin.PluginLoaderDelegateImpl
 import ai.rever.boss.plugin.PluginPersistence
 import ai.rever.boss.plugin.api.PluginContext
@@ -118,14 +119,14 @@ actual object PluginLoaderDelegateSetup {
                     // at the next launch.
                     override fun notifyDisabling(pluginId: String) =
                         StatusMessageManager.showMessage(
-                            "Plugin '${displayId(pluginId)}' crashed and is being disabled. " +
+                            "Plugin '${displayPluginId(pluginId)}' crashed and is being disabled. " +
                                 "Re-enable it from Toolbox.",
                             durationMs = CRASH_NOTICE_MILLIS,
                         )
 
                     override fun notifyDisableIncomplete(pluginId: String) =
                         StatusMessageManager.showMessage(
-                            "Plugin '${displayId(pluginId)}' could not be fully disabled and may return " +
+                            "Plugin '${displayPluginId(pluginId)}' could not be fully disabled and may return " +
                                 "on restart. Disable it from Toolbox.",
                             durationMs = CRASH_NOTICE_MILLIS,
                         )
@@ -183,22 +184,6 @@ actual object PluginLoaderDelegateSetup {
      * one failed recovery does not poison the next.
      */
     private val recoveryScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-
-    /**
-     * A plugin id fit to drop into a sentence a user reads.
-     *
-     * The id comes from a plugin-supplied manifest, and the status bar holds one
-     * message at a time: a long or newline-bearing id pushes the rest of the
-     * sentence - including where to undo this - out of view. Control characters go
-     * for the same reason.
-     */
-    private fun displayId(pluginId: String): String {
-        val flattened = pluginId.filter { it.isLetterOrDigit() || it in ".-_:" }
-        return if (flattened.length <= MAX_DISPLAYED_ID) flattened else flattened.take(MAX_DISPLAYED_ID) + "..."
-    }
-
-    /** Comfortably fits the real ids (`ai.rever.boss.plugin.dynamic.terminaltab` is 43). */
-    private const val MAX_DISPLAYED_ID = 60
 
     /** Long enough to read a sentence naming a plugin and where to re-enable it. */
     private const val CRASH_NOTICE_MILLIS = 12_000L
