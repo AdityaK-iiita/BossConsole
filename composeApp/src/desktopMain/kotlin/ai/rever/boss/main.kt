@@ -89,8 +89,11 @@ private fun containRenderFault(
         ),
         throwable,
     )
-    // Reported, but not through CrashHandler.handleCrash: that dialog is terminal
-    // on every exit, so a recovered fault would end the session on Escape.
+    // Reported, but not through CrashHandler.handleCrash: a fault the render path
+    // has already contained and recovered from must not interrupt the user to ask
+    // about it. (That dialog was also terminal on every exit; a plugin-attributed
+    // crash now recovers instead, but a contained fault still has no business
+    // opening it.)
     // recordContained writes the report to disk instead, so a host-side render bug
     // stays visible rather than costing one log line and a toast.
     ai.rever.boss.crash.CrashHandler

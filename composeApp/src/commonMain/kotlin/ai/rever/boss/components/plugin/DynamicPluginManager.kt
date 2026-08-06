@@ -18,9 +18,11 @@ import ai.rever.boss.plugin.loader.DynamicPluginLoaderImpl
 import ai.rever.boss.plugin.loader.PluginBinaryIncompatibilityException
 import ai.rever.boss.plugin.loader.PluginUnloadException
 import ai.rever.boss.plugin.sandbox.PluginErrorClassifier
+import ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
 import ai.rever.boss.plugin.sandbox.PluginSandboxManager
 import ai.rever.boss.plugin.sandbox.SandboxConfig
 import ai.rever.boss.plugin.sandbox.ui.PluginCrashRegistry
+import ai.rever.boss.plugin.sandbox.ui.PluginRecoveryQuarantine
 import ai.rever.boss.services.auth.AuthStateManager
 import ai.rever.boss.utils.AppVersion
 import ai.rever.boss.utils.logging.BossLogger
@@ -267,6 +269,70 @@ class DynamicPluginManager(
         private fun activeManagers(): List<DynamicPluginManager> {
             liveManagers.removeIf { it.get() == null }
             return liveManagers.mapNotNull { it.get() }
+        }
+
+        /** Whether any live manager has [pluginId] loaded. */
+        fun isPluginKnown(pluginId: String): Boolean = activeManagers().any { it.getPluginInfo(pluginId) != null }
+
+        /** Where [pluginId] was loaded from, per the first live manager that knows it. */
+        fun jarPathOf(pluginId: String): String? =
+            activeManagers()
+                .firstNotNullOfOrNull { it.getPluginInfo(pluginId)?.jarPath }
+
+        /**
+         * Disable [pluginId] in EVERY window's manager.
+         *
+         * Managers are per-window and each owns its own sandbox manager, so a
+         * disable applied to one leaves the plugin live - and still crashing -
+         * in the others. Crash recovery has to cover all of them, for the same
+         * reason the api-layer hot swap does.
+         *
+         * @return true if at least one manager accepted the disable. A window
+         * that never loaded the plugin failing is expected and not a failure of
+         * the operation.
+         */
+        suspend fun disableEverywhere(pluginId: String): Boolean {
+            val managers = activeManagers()
+            if (managers.isEmpty()) {
+                companionLogger.warn(
+                    LogCategory.SYSTEM,
+                    "No live plugin manager to disable a plugin in",
+                    mapOf("pluginId" to pluginId),
+                )
+                return false
+            }
+            var anyDisabled = false
+            for (manager in managers) {
+                // Independently, not fail-fast: one window refusing must not leave
+                // the plugin enabled in the rest.
+                val result = runCatching { manager.disablePlugin(pluginId) }
+                if (result.getOrNull()?.isSuccess == true) {
+                    anyDisabled = true
+                    continue
+                }
+                // Logged per manager, not just counted. This path ends in the user
+                // being told the plugin "may return on restart", and without the
+                // cause the only thing a bug report carries is that summary line.
+                val cause = result.exceptionOrNull() ?: result.getOrNull()?.exceptionOrNull()
+                companionLogger.warn(
+                    LogCategory.SYSTEM,
+                    "A manager refused to disable a crashed plugin",
+                    mapOf(
+                        "pluginId" to pluginId,
+                        "error" to (cause?.message ?: cause?.let { it::class.simpleName } ?: "no reason given"),
+                    ),
+                )
+            }
+            companionLogger.info(
+                LogCategory.SYSTEM,
+                "Disabled plugin across windows",
+                mapOf(
+                    "pluginId" to pluginId,
+                    "managers" to managers.size.toString(),
+                    "anyDisabled" to anyDisabled.toString(),
+                ),
+            )
+            return anyDisabled
         }
 
         /**
@@ -793,7 +859,12 @@ class DynamicPluginManager(
                     var registrationFailed = false
                     if (enabled && accessible) {
                         try {
-                            loadedPlugin.instance.register(trackingContext)
+                            // Attributed: register() is where a plugin wires its callbacks, and
+                            // anything it kicks off from there inherits the scope, so a fault on
+                            // this path names the plugin even when its own frames are gone.
+                            PluginExecutionBoundary.runAttributed(manifest.pluginId) {
+                                loadedPlugin.instance.register(trackingContext)
+                            }
                         } catch (e: Throwable) {
                             // Catch Throwable (not just Exception) because binary incompatibility
                             // errors like NoSuchMethodError extend Error, not Exception.
@@ -1185,14 +1256,38 @@ class DynamicPluginManager(
 
                     wasAlreadyEnabled = _pluginStates.value[pluginId]?.enabled == true
 
-                    // Register the plugin
-                    loadedPlugin.instance.register(trackingContext)
+                    // Attributed for the duration of register(), so a callback the
+                    // plugin wires up and invokes synchronously from here is
+                    // attributed to it. NOT because this escapes uncaught - the
+                    // catch below turns it into Result.failure - which an earlier
+                    // version of this comment claimed and was wrong about.
+                    PluginExecutionBoundary.runAttributed(pluginId) {
+                        loadedPlugin.instance.register(trackingContext)
+                    }
 
                     // Enable sandbox
                     sandboxManager.enablePlugin(pluginId)
 
-                    // Clear any prior incompatible state on successful re-enable
+                    // Clear prior crash state on successful re-enable, on BOTH axes.
+                    //
+                    // clearIncompatible alone left hasCrashed(pluginId) true, so a
+                    // plugin the user deliberately re-enabled came back still
+                    // showing PluginErrorFallback instead of its content, and they
+                    // had to find "Restart" inside that fallback. Crash recovery
+                    // made that reachable in one click: its notice tells the user to
+                    // re-enable from Toolbox, and without this the instruction does
+                    // not do what it says.
+                    //
+                    // It also un-suppresses the crash dialog for this plugin -
+                    // CrashHandler.isSuppressedByQuarantine skips prompting while the
+                    // RECOVERY quarantine is set (not hasCrashed, which a plain
+                    // contained render fault also sets and which must never silence
+                    // the dialog for a plugin that is still enabled and running).
+                    // Right for a plugin the user has already dealt with, wrong once
+                    // they have deliberately re-armed it.
                     PluginCrashRegistry.clearIncompatible(pluginId)
+                    PluginCrashRegistry.clearCrash(pluginId)
+                    PluginRecoveryQuarantine.clear(pluginId)
 
                     // Update state
                     val currentInfo = _pluginStates.value[pluginId]
@@ -1808,8 +1903,19 @@ class DynamicPluginManager(
         _pluginStates.value = _pluginStates.value + (pluginId to info)
     }
 
+    /**
+     * Forget a plugin entirely: its state, and any crash quarantine on it.
+     *
+     * Both uninstall paths land here, which is why the quarantine release lives
+     * here rather than at each of them. Without it, uninstalling a
+     * crash-quarantined plugin and installing a fixed build kept the marker, and
+     * the fixed plugin's next genuine crash would have gone silently to disk with
+     * no dialog and no disable.
+     */
     private fun removePluginState(pluginId: String) {
         _pluginStates.value = _pluginStates.value - pluginId
+        PluginRecoveryQuarantine.clear(pluginId)
+        PluginCrashRegistry.clearCrash(pluginId)
     }
 
     private fun <T> cleanupDeadReferences(list: CopyOnWriteArrayList<WeakReference<T>>) {

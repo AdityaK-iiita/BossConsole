@@ -6,6 +6,7 @@ import ai.rever.boss.plugin.api.TabRegistry
 import ai.rever.boss.plugin.api.TabTypeInfo
 import ai.rever.boss.plugin.logging.BossLogger
 import ai.rever.boss.plugin.logging.LogCategory
+import ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
 import ai.rever.boss.plugin.sandbox.PluginSandbox
 import ai.rever.boss.plugin.sandbox.TabSandboxRegistry
 import com.arkivanov.decompose.ComponentContext
@@ -42,7 +43,12 @@ class SandboxedTabRegistry(
         val wrappedFactory: (TabInfo, ComponentContext) -> TabComponentWithUI = { tabInfo, ctx ->
             try {
                 sandbox.recordHeartbeat()
-                val component = factory(tabInfo, ctx)
+                // See SandboxedPanelRegistry: the id has to travel with the
+                // throwable, not be reconstructed from a stack that is gone.
+                val component =
+                    PluginExecutionBoundary.runAttributed(sandbox.pluginId) {
+                        factory(tabInfo, ctx)
+                    }
                 sandbox.recordSuccess()
                 component
             } catch (e: Throwable) {

@@ -86,6 +86,21 @@ class WindowExceptionRouteTest {
     }
 
     @Test
+    fun `a wrapped OutOfMemoryError escalates too`() {
+        // The two uncontainable carve-outs - this one and classifyCrash's - are
+        // worthless unless they agree, and for one round they did not: the
+        // cause-chain fix landed on classifyCrash and left this one flat, so the
+        // identical wrapped error was escalated there and contained here. Both now
+        // go through causeChain.
+        val wrapped = java.lang.reflect.InvocationTargetException(OutOfMemoryError("heap"))
+
+        assertEquals(
+            WindowExceptionRoute.Escalate,
+            decideWindowExceptionRoute(wrapped, attributedPluginId = null, policy = policy()),
+        )
+    }
+
+    @Test
     fun `an attributed crash is never escalated, even when fatal`() {
         // The interceptor owns anything it can attribute; this branch should not
         // second-guess it.

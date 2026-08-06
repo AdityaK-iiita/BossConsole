@@ -1,6 +1,8 @@
 package ai.rever.boss.crash
 
 import ai.rever.boss.plugin.ui.BossTheme
+import ai.rever.boss.utils.logging.BossLogger
+import ai.rever.boss.utils.logging.LogCategory
 import ai.rever.boss.utils.logging.LogSanitizer
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -10,6 +12,7 @@ import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.rememberScrollbarAdapter
@@ -25,6 +28,8 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
@@ -57,6 +62,11 @@ import kotlinx.coroutines.launch
  * (deliberately small) crash window.
  *
  * @param crashReport The crash report to display
+ * @param recoverablePluginId Set when this crash is attributable to a dynamic plugin that can be
+ *   disabled instead of taking the app down with it. It changes what the dialog *says* and what its
+ *   exits *mean*: dismissing continues without that plugin rather than ending the session, so
+ *   "Don't Send" (accurate only when the next thing that happens is termination) becomes
+ *   [CONTINUE_WITHOUT_PLUGIN_LABEL]. Null for a fatal host crash, which behaves as it always has.
  * @param onDismiss Called when user dismisses without submitting
  * @param onSubmit Called when user wants to submit the report
  * @param initialSubmitResult Seeds the submit-result card. Production leaves this null and lets the
@@ -70,7 +80,9 @@ internal fun CrashReportDialog(
     crashReport: CrashReport,
     onDismiss: () -> Unit,
     onSubmit: (userNotes: String?, includeLogs: Boolean) -> Unit,
+    recoverablePluginId: String? = null,
     onCleanAndRestart: (() -> Unit)? = null,
+    onSubmittingChanged: (Boolean) -> Unit = {},
     initialSubmitResult: CrashReportService.SubmitResult? = null,
 ) {
     var userNotes by remember { mutableStateOf("") }
@@ -122,11 +134,47 @@ internal fun CrashReportDialog(
     // overlapping text.
     val scrollbarGutter = scrollbarStyle.thickness + 4.dp
 
+    // Escape is one of three ways out of this window and has to be as reliable as the other two.
+    // `onKeyEvent` only fires for a focused subtree, so without an owner of its own it worked or
+    // not depending on whether some child (the notes field) happened to hold focus — a dismissal
+    // route that silently does nothing is worse than one that isn't offered.
+    val dialogFocus = remember { FocusRequester() }
+    // Logged rather than silently swallowed: the failure mode is "Escape stops
+    // working", which is the exact thing this line exists to fix, and a silent
+    // catch would leave no trace of a dismissal route quietly going missing.
+    LaunchedEffect(Unit) {
+        runCatching { dialogFocus.requestFocus() }
+            .onFailure { failure ->
+                BossLogger
+                    .forComponent("CrashReportDialog")
+                    .warn(
+                        LogCategory.UI,
+                        "Crash dialog could not take focus - Escape may not dismiss it",
+                        mapOf("errorType" to failure.javaClass.simpleName),
+                    )
+            }
+    }
+
+    val dismissLabel = if (recoverablePluginId != null) CONTINUE_WITHOUT_PLUGIN_LABEL else DONT_SEND_LABEL
+
+    // Published so the exits that live outside this composition - the window's
+    // close box - can refuse while a submission is in flight. Escape and the
+    // button gate on the local state below; this is the same fact, told to the
+    // one caller that cannot see it.
+    //
+    // The submit handler also calls this directly on both edges, so the close box's
+    // gate flips in the same instant theirs does. Through a LaunchedEffect alone it
+    // trailed them by a recomposition, which is a window - small, but exactly the
+    // kind a fast double-input walks into.
+    LaunchedEffect(isSubmitting) { onSubmittingChanged(isSubmitting) }
+
     // Render directly in the window (no Dialog wrapper needed since this is shown in its own JFrame)
     Card(
         modifier =
             Modifier
                 .fillMaxSize()
+                .focusRequester(dialogFocus)
+                .focusable()
                 .onKeyEvent { event ->
                     if (event.type == KeyEventType.KeyDown && event.key == Key.Escape && !isSubmitting) {
                         onDismiss()
@@ -155,10 +203,23 @@ internal fun CrashReportDialog(
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
-                    text = "BOSS Has Crashed",
+                    text = if (recoverablePluginId != null) "Plugin Crashed" else "BOSS Has Crashed",
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = BossTheme.colors.textPrimary,
+                )
+            }
+
+            // Says what is about to happen, because the buttons alone cannot: the user needs to
+            // know their windows and other plugins survive this, and which plugin is going away.
+            if (recoverablePluginId != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text =
+                        "BOSS keeps running. '$recoverablePluginId' will be disabled - " +
+                            "your other tabs and plugins are unaffected. Re-enable it from Toolbox.",
+                    fontSize = 13.sp,
+                    color = BossTheme.colors.textSecondary,
                 )
             }
 
@@ -508,8 +569,13 @@ internal fun CrashReportDialog(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
             ) {
-                // Clean & Restart button
-                if (onCleanAndRestart != null) {
+                // Clean & Restart button. Gated on the disposition as well as the
+                // callback: the caller already passes null for a recoverable crash,
+                // but that left the invariant - "wiping the install is never offered
+                // as the answer to one plugin misbehaving" - resting entirely on a
+                // call site with no test, and a test here could only assert it
+                // vacuously. Now it holds however this is called.
+                if (onCleanAndRestart != null && recoverablePluginId == null) {
                     Button(
                         onClick = onCleanAndRestart,
                         enabled = !isSubmitting,
@@ -527,16 +593,24 @@ internal fun CrashReportDialog(
                     Spacer(modifier = Modifier.weight(1f))
                 }
 
-                // Don't Send button
+                // Dismiss button. For a recoverable crash this is the *recovery* action rather
+                // than a decline, so it reads as one and is given the foreground colour - the
+                // user who wants their session back must not have to guess that the greyed-out
+                // "Don't Send" is the button that keeps it.
                 TextButton(
                     onClick = onDismiss,
                     enabled = !isSubmitting,
                     colors =
                         ButtonDefaults.textButtonColors(
-                            contentColor = BossTheme.colors.textSecondary,
+                            contentColor =
+                                if (recoverablePluginId != null) {
+                                    BossTheme.colors.textPrimary
+                                } else {
+                                    BossTheme.colors.textSecondary
+                                },
                         ),
                 ) {
-                    Text("Don't Send")
+                    Text(dismissLabel)
                 }
 
                 Spacer(modifier = Modifier.width(12.dp))
@@ -545,25 +619,44 @@ internal fun CrashReportDialog(
                 Button(
                     onClick = {
                         isSubmitting = true
+                        onSubmittingChanged(true)
                         coroutineScope.launch {
-                            // Update report with user input
-                            CrashHandler
-                                .updateReportWithUserInput(
-                                    userNotes = userNotes.takeIf { it.isNotBlank() },
-                                    includeLogs = includeLogs,
-                                )?.let { updatedReport ->
-                                    val result = CrashReportService.submitCrashReport(updatedReport)
-                                    submitResult = result
+                            // try/finally, and the finally is load-bearing now.
+                            // isSubmitting gates all three exits, and the window is
+                            // DO_NOTHING_ON_CLOSE, so a submit that threw anywhere -
+                            // updateReportWithUserInput, or the plumbing around
+                            // submitCrashReport that sits outside its own inner
+                            // catch - used to leave the flag set forever and the
+                            // crash dialog with no way out but killing the process,
+                            // on a machine already in a bad state. Before this
+                            // change the close box always worked, so the same throw
+                            // was survivable.
+                            // Exception, not a narrower type: the point is that
+                            // NOTHING escapes and leaves isSubmitting stuck, and the
+                            // paths involved reach the network, the filesystem and a
+                            // config loader.
+                            @Suppress("TooGenericExceptionCaught")
+                            val submitted =
+                                try {
+                                    submitReport(
+                                        userNotes = userNotes.takeIf { it.isNotBlank() },
+                                        includeLogs = includeLogs,
+                                    ).also { submitResult = it }
+                                } catch (e: Exception) {
+                                    submitResult =
+                                        CrashReportService.SubmitResult.Error(
+                                            "Failed to submit crash report: ${e.message ?: e.javaClass.simpleName}",
+                                        )
+                                    null
+                                } finally {
                                     isSubmitting = false
+                                    onSubmittingChanged(false)
+                                }
 
-                                    // If successful, call onSubmit after a brief delay
-                                    if (result is CrashReportService.SubmitResult.Success) {
-                                        kotlinx.coroutines.delay(2000)
-                                        onSubmit(userNotes.takeIf { it.isNotBlank() }, includeLogs)
-                                    }
-                                } ?: run {
-                                submitResult = CrashReportService.SubmitResult.Error("Failed to prepare report")
-                                isSubmitting = false
+                            // If successful, call onSubmit after a brief delay
+                            if (submitted is CrashReportService.SubmitResult.Success) {
+                                kotlinx.coroutines.delay(SUBMIT_CONFIRMATION_MILLIS)
+                                onSubmit(userNotes.takeIf { it.isNotBlank() }, includeLogs)
                             }
                         }
                     },
@@ -591,7 +684,9 @@ internal fun CrashReportDialog(
                 }
             }
 
-            // Close button after successful submission
+            // Close button after successful submission. Labelled like the dismiss button above,
+            // because it does the same thing: a submitted report is not a reason to lose the
+            // session, so post-submit is the same recovery, not a quit.
             if (submitResult is CrashReportService.SubmitResult.Success) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
@@ -607,13 +702,45 @@ internal fun CrashReportDialog(
                             ),
                         shape = RoundedCornerShape(6.dp),
                     ) {
-                        Text("Close")
+                        Text(if (recoverablePluginId != null) CONTINUE_WITHOUT_PLUGIN_LABEL else "Close")
                     }
                 }
             }
         }
     }
 }
+
+/**
+ * Prepare and send the report, or report why it could not be prepared.
+ *
+ * Extracted so the submit handler's `try`/`finally` reads as one statement, and so
+ * "prepare failed" and "send failed" produce the same shape of result rather than
+ * two duplicated reset blocks.
+ */
+private suspend fun submitReport(
+    userNotes: String?,
+    includeLogs: Boolean,
+): CrashReportService.SubmitResult {
+    val updated =
+        CrashHandler.updateReportWithUserInput(userNotes = userNotes, includeLogs = includeLogs)
+            ?: return CrashReportService.SubmitResult.Error("Failed to prepare report")
+    return CrashReportService.submitCrashReport(updated)
+}
+
+/** How long the success message stays up before the dialog takes its exit. */
+private const val SUBMIT_CONFIRMATION_MILLIS = 2000L
+
+/**
+ * The dismiss action's label when the crash is recoverable.
+ *
+ * Named rather than inlined so the dialog and its test cannot drift: the whole point of the
+ * rename is that the button says what it does, and an assertion holding its own copy of the
+ * string would keep passing while the button said something else.
+ */
+internal const val CONTINUE_WITHOUT_PLUGIN_LABEL = "Continue Without Plugin"
+
+/** The dismiss action's label for a fatal host crash, where dismissing really does end the app. */
+internal const val DONT_SEND_LABEL = "Don't Send"
 
 /** Present only while the body is clipping content; see `isClipping`. */
 internal const val BODY_SCROLLBAR_TAG = "crash-dialog-body-scrollbar"

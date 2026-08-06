@@ -204,10 +204,32 @@ object PluginCrashRegistry {
         }
     }
 
-    /** Clear crash state for a plugin (e.g., after restart or tab close). Safe to call from EDT. */
+    /**
+     * Clear crash state for a plugin (e.g., after restart or tab close). Safe from any thread.
+     *
+     * Deliberately does **not** touch [PluginRecoveryQuarantine]. An earlier version
+     * did, on the claim that every caller here is a deliberate re-arm, and that was
+     * simply false: [PluginRenderRecovery.releaseSuspect] calls this from two fully
+     * automatic paths (`startFreshCycle` and `releaseSuspectAsInnocent`). A render
+     * fault naming a recovering plugin as its suspect would then drop the
+     * quarantine, and that plugin's next throw would open a second crash dialog for
+     * something the user had already dealt with - the exact repetition the
+     * quarantine exists to prevent.
+     *
+     * The quarantine is released only at the genuinely deliberate sites, which call
+     * [PluginRecoveryQuarantine.clear] themselves: enabling the plugin, uninstalling
+     * it, and Restart in the error fallback. Not Dismiss - that hides the panel
+     * without restarting or enabling anything, so it is not a re-arm.
+     */
     fun clearCrash(pluginId: String) {
         _crashedPluginsMap.remove(pluginId)
-        _crashedPluginsState.value = _crashedPluginsMap.toMap()
+        // The Compose-observable copy is published on the EDT, like recordRenderFault
+        // does. Callers are no longer all on it: removePluginState reaches here from
+        // the suspending uninstall paths, and two threads each doing toMap() and
+        // assigning can drop one another's update.
+        javax.swing.SwingUtilities.invokeLater {
+            _crashedPluginsState.value = _crashedPluginsMap.toMap()
+        }
     }
 
     /** Check if a plugin has crashed (non-composable, thread-safe). */
@@ -231,6 +253,44 @@ object PluginCrashRegistry {
     /** Clear incompatible state (e.g., after plugin update). */
     fun clearIncompatible(pluginId: String) {
         _incompatiblePlugins.remove(pluginId)
+    }
+}
+
+/**
+ * Plugins taken out by app-level **crash recovery**, as opposed to a contained
+ * render fault.
+ *
+ * Both end up in [PluginCrashRegistry], and the crash handler has to tell them
+ * apart. It suppresses the crash dialog for a plugin already dealt with, and
+ * keying that on `hasCrashed` swept up every plugin whose panel had merely tripped
+ * a render boundary: still enabled, still running, fallback showing - and from then
+ * on its uncaught crashes went silently to disk with no dialog, no disable and no
+ * notice, which is worse than the behaviour crash recovery replaced.
+ *
+ * Its own object rather than two more members on [PluginCrashRegistry], which is
+ * already at its function budget, and because "why is this plugin showing a
+ * fallback" and "has the app given up on this plugin" are genuinely different
+ * questions.
+ */
+object PluginRecoveryQuarantine {
+    private val quarantined = ConcurrentHashMap.newKeySet<String>()
+
+    /** Record that crash recovery, not a render fault, took this plugin out. */
+    fun mark(pluginId: String) {
+        quarantined.add(pluginId)
+    }
+
+    /** Whether crash recovery took this plugin out. */
+    fun isQuarantined(pluginId: String): Boolean = quarantined.contains(pluginId)
+
+    /**
+     * Release it, on a deliberate re-arm.
+     *
+     * Called by those sites directly - NOT by [PluginCrashRegistry.clearCrash],
+     * which deliberately leaves this alone because it has automatic callers.
+     */
+    fun clear(pluginId: String) {
+        quarantined.remove(pluginId)
     }
 }
 
@@ -377,6 +437,9 @@ fun PluginErrorBoundary(
                 )
                 error = null
                 PluginCrashRegistry.clearCrash(pluginId)
+                // A deliberate re-arm, so the recovery quarantine goes too - see
+                // PluginCrashRegistry.clearCrash for why this is not folded in there.
+                PluginRecoveryQuarantine.clear(pluginId)
                 onRestart()
             },
             onDismiss = {
@@ -389,6 +452,12 @@ fun PluginErrorBoundary(
                 )
                 error = null
                 PluginCrashRegistry.clearCrash(pluginId)
+                // Deliberately NOT clearing the recovery quarantine. Dismiss hides
+                // this panel; it does not restart or enable anything. If crash
+                // recovery disabled the plugin and a thread of its own is still
+                // throwing, releasing the marker here would re-open a crash dialog
+                // for a plugin that is already off - the repetition the marker
+                // exists to prevent. Restart, above, is the re-arm.
             },
         )
     } else {

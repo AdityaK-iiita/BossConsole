@@ -1,6 +1,7 @@
 package ai.rever.boss.crash
 
 import ai.rever.boss.plugin.loader.PluginClassLoader
+import ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
 import java.io.File
 import java.lang.reflect.InvocationTargetException
 import java.util.jar.JarEntry
@@ -23,8 +24,14 @@ import kotlin.test.assertTrue
 class CrashHandlerAttributionTest {
     private companion object {
         const val PLUGIN_ID = "test.plugin.probe"
+
+        /** Deliberately different from [PLUGIN_ID], so "the tag won" is distinguishable. */
+        const val BOUNDARY_PLUGIN_ID = "test.plugin.boundary"
         const val PROBE_CLASS = "ai.rever.boss.crash.pluginprobe.PluginProbe"
         const val EXCEPTION_CLASS = "ai.rever.boss.crash.pluginprobe.ProbeException"
+
+        /** File facade holding `probeAction()`, whose lambda is the thing under test. */
+        const val PROBE_KT_CLASS = "ai.rever.boss.crash.pluginprobe.PluginProbeKt"
     }
 
     private val jarFile: File = buildProbeJar()
@@ -45,7 +52,7 @@ class CrashHandlerAttributionTest {
     private fun buildProbeJar(): File {
         val jar = File.createTempFile("plugin-probe", ".jar")
         JarOutputStream(jar.outputStream()).use { out ->
-            for (className in listOf(PROBE_CLASS, EXCEPTION_CLASS)) {
+            for (className in listOf(PROBE_CLASS, EXCEPTION_CLASS, PROBE_KT_CLASS)) {
                 val resource = className.replace('.', '/') + ".class"
                 val bytes =
                     checkNotNull(javaClass.classLoader.getResourceAsStream(resource)) {
@@ -141,5 +148,69 @@ class CrashHandlerAttributionTest {
         val wrapped = RuntimeException("outer host", IllegalStateException("mid host", throwFromPlugin("boom")))
         assertEquals(PLUGIN_ID, CrashHandler.attributePluginId(wrapped))
         assertTrue(wrapped.cause?.cause != null)
+    }
+
+    @Test
+    fun `a callback owned by a real plugin classloader resolves to that plugin`() {
+        // The assertion the sandbox-module test cannot make, and the one that
+        // matters: PluginClassLoader declares `val pluginId` as a constructor
+        // property, so the JVM gives it a PRIVATE backing field and a public
+        // getPluginId(). A field-only reflective lookup returns null for every real
+        // plugin - which shipped in the first version of PluginExecutionBoundary
+        // and left every plugin callback unwrapped, so the crash it existed to
+        // attribute would have terminated the app. The unit-test fixture hid it by
+        // declaring @JvmField, the one form getField can see.
+        val instance = loader.loadClass(PROBE_CLASS).getDeclaredConstructor().newInstance()
+
+        assertEquals(PLUGIN_ID, PluginExecutionBoundary.pluginIdOfOwner(instance))
+    }
+
+    @Test
+    fun `a lambda created inside plugin code resolves to that plugin`() {
+        // Kotlin 2.x compiles a lambda to an invokedynamic call site backed by a
+        // hidden class, and wrapPluginCallback depends on that hidden class
+        // reporting its host's classloader - the plugin's. A compiler or -Xlambdas
+        // change flipping that would make every plugin callback look host-owned and
+        // silently un-attributed, with no visible failure until a session dies over
+        // a plugin's bug. This is the callback shape the whole feature is built on:
+        // ContextMenuItemData.onClick is exactly this.
+        val facade = loader.loadClass(PROBE_KT_CLASS)
+        assertEquals(loader, facade.classLoader, "the facade must be plugin-defined")
+
+        @Suppress("UNCHECKED_CAST")
+        val action = facade.getMethod("probeAction").invoke(null) as () -> Unit
+
+        assertEquals(PLUGIN_ID, PluginExecutionBoundary.pluginIdOfOwner(action))
+    }
+
+    @Test
+    fun `a host-owned object resolves to no plugin`() {
+        assertNull(PluginExecutionBoundary.pluginIdOfOwner(this))
+    }
+
+    @Test
+    fun `a boundary tag attributes a crash whose stack holds no plugin frames`() {
+        // The case the stack scan cannot answer, and the reason the boundary
+        // exists: a plugin registers a callback, the HOST invokes it, and by the
+        // time the uncaught handler looks there is nothing plugin-defined on the
+        // stack. Only what was recorded on the way in still knows.
+        val hostLookingCrash = RuntimeException("thrown through host frames only")
+        assertNull(CrashHandler.attributePluginId(hostLookingCrash), "precondition: the stack blames nobody")
+
+        PluginExecutionBoundary.tag(hostLookingCrash, BOUNDARY_PLUGIN_ID)
+
+        assertEquals(BOUNDARY_PLUGIN_ID, CrashHandler.attributePluginId(hostLookingCrash))
+    }
+
+    @Test
+    fun `a boundary tag outranks the stack scan`() {
+        // Both sources have an answer. The tag was taken at the call the host
+        // actually made; the stack merely shows whose code happened to be running,
+        // which for a shared helper or a callback relayed between plugins is not
+        // the same thing.
+        val crash = throwFromPlugin("boom")
+        PluginExecutionBoundary.tag(crash, BOUNDARY_PLUGIN_ID)
+
+        assertEquals(BOUNDARY_PLUGIN_ID, CrashHandler.attributePluginId(crash))
     }
 }
