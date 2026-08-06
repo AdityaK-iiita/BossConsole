@@ -417,13 +417,13 @@ fun main(args: Array<String>) {
     // unchanged platforms cannot regress. See JxBrowserConfig.renderingMode and
     // benchmarks/speedometer/win/WINDOWS.md.
     ai.rever.boss.components.overlays.OverlayConfig.heavyweightPopup =
-        { onDismiss, popupOffset, focusable, popupContent ->
+        { onDismiss, anchorInWindow, anchoring, popupOffset, focusable, popupContent ->
             ai.rever.boss.components.overlays
-                .HeavyweightPopup(onDismiss, popupOffset, focusable, popupContent)
+                .HeavyweightPopup(onDismiss, anchorInWindow, anchoring, popupOffset, focusable, popupContent)
         }
-    ai.rever.boss.components.overlays.OverlayConfig.heavyweightModal = { onDismiss, modalContent ->
+    ai.rever.boss.components.overlays.OverlayConfig.heavyweightModal = { properties, onDismiss, modalContent ->
         ai.rever.boss.components.overlays
-            .HeavyweightModal(onDismiss, modalContent)
+            .HeavyweightModal(properties, onDismiss, modalContent)
     }
     ai.rever.boss.components.overlays.OverlayConfig.heavyweightTooltip = { text ->
         ai.rever.boss.components.overlays.SwingTooltip
@@ -432,6 +432,21 @@ fun main(args: Array<String>) {
     ai.rever.boss.components.overlays.OverlayConfig.hideHeavyweightTooltip = {
         ai.rever.boss.components.overlays.SwingTooltip
             .hide()
+    }
+    ai.rever.boss.components.overlays.OverlayConfig.heavyweightHud = { alignment, hudContent ->
+        ai.rever.boss.components.overlays
+            .HeavyweightHud(alignment, hudContent)
+    }
+    ai.rever.boss.components.overlays.OverlayConfig.heavyweightGhost = { size, ghostContent ->
+        ai.rever.boss.components.overlays
+            .HeavyweightGhost(size, ghostContent)
+    }
+    // plugin-ui-core owns the modal registry (plugins draw dialogs too) and depends on nothing but
+    // Compose, so it cannot log. Give it this logger instead: the condition it reports is a dialog
+    // that silently fell back to lightweight and is now hidden behind the page, which is invisible
+    // on screen and would otherwise have to be diagnosed from a screenshot.
+    ai.rever.boss.plugin.ui.BossOverlayHost.diagnostics = { message ->
+        logger.warn(LogCategory.UI, message)
     }
     ai.rever.boss.components.overlays.OverlayConfig.useHeavyweightPopups =
         ai.rever.boss.config.JxBrowserConfig.renderingMode ==

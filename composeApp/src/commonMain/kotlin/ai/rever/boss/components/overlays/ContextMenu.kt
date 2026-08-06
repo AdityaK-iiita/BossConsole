@@ -4,6 +4,7 @@ import ContextMenuBackground
 import ContextMenuBorder
 import ContextMenuHover
 import ai.rever.boss.platform.ContextMenuHandler
+import ai.rever.boss.plugin.ui.BossPopupAnchoring
 import ai.rever.boss.plugin.ui.BossTheme
 import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
@@ -28,6 +29,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
@@ -78,19 +80,26 @@ fun ContextMenu(
     onDismissRequest: () -> Unit,
 ) {
     val heavyweight = OverlayConfig.heavyweightPopup
-    if (OverlayConfig.useHeavyweightPopups && heavyweight != null) {
+    if (routeOverlayHeavyweight(heavyweight != null) && heavyweight != null) {
         // HARDWARE_ACCELERATED browser: a lightweight Compose Popup renders BEHIND the
         // browser's native surface, so a right-click menu over a page would be hidden by
         // the page it belongs to. Route it through a heavyweight window instead. Dormant
         // wherever OFF_SCREEN is the mode (macOS, Linux) - the flag is false there, so
         // this branch is never taken and those platforms keep the exact Popup below.
         //
+        // Also dormant in a window with no browser surface (Settings): the heavyweight window
+        // is sized to LocalAwtWindow, which is still the MAIN window there, so its scrim would
+        // land over the wrong window. See routeOverlayHeavyweight.
+        //
         // NOTE: [alignment] is not honoured on this path - the heavyweight window positions
         // from the cursor, not from an alignment within a parent layout. No caller passes a
         // non-default today, so this is latent rather than a live bug, but a caller that did
         // would get different placement per platform. Honouring it means teaching
         // HeavyweightPopup about window-space anchors first.
-        heavyweight(onDismissRequest, offset, true) {
+        // Cursor anchoring: a context menu is opened by a click, so the pointer IS the intended
+        // position and no window-space conversion is needed. IntRect.Zero because this path never
+        // consults the anchor.
+        heavyweight(onDismissRequest, IntRect.Zero, BossPopupAnchoring.Cursor, offset, true) {
             ContextMenuContent(
                 items = items,
                 modifier = modifier,
