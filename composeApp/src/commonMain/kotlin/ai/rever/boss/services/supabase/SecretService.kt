@@ -74,13 +74,13 @@ object SecretService {
                     parameters = params,
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
-            val secrets = Json.decodeFromJsonElement<List<SecretEntry>>(jsonElement)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
+            val secrets = supabaseJson.decodeFromJsonElement<List<SecretEntry>>(jsonElement)
             val hasMore = secrets.size >= limit
 
             Result.success(PaginatedSecrets(data = secrets, hasMore = hasMore))
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeSupabaseFailure("getUserSecrets", e))
         }
 
     /**
@@ -110,8 +110,8 @@ object SecretService {
                     parameters = params,
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
-            val secrets = Json.decodeFromJsonElement<List<SecretEntry>>(jsonElement)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
+            val secrets = supabaseJson.decodeFromJsonElement<List<SecretEntry>>(jsonElement)
 
             // Check if there might be more results
             val hasMore = secrets.size >= limit
@@ -123,7 +123,7 @@ object SecretService {
                 ),
             )
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeSupabaseFailure("searchSecrets", e))
         }
 
     /**
@@ -165,8 +165,8 @@ object SecretService {
                     parameters = params,
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
-            val result = Json.decodeFromJsonElement<RpcResponse>(jsonElement)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
+            val result = supabaseJson.decodeFromJsonElement<RpcResponse>(jsonElement)
 
             if (result.success) {
                 Result.success(Unit)
@@ -174,7 +174,7 @@ object SecretService {
                 Result.failure(Exception(result.error ?: "Failed to create secret"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeSupabaseFailure("createSecret", e))
         }
     }
 
@@ -219,8 +219,8 @@ object SecretService {
                     parameters = params,
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
-            val result = Json.decodeFromJsonElement<RpcResponse>(jsonElement)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
+            val result = supabaseJson.decodeFromJsonElement<RpcResponse>(jsonElement)
 
             if (result.success) {
                 Result.success(Unit)
@@ -228,7 +228,7 @@ object SecretService {
                 Result.failure(Exception(result.error ?: "Failed to update secret"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeSupabaseFailure("updateSecret", e))
         }
     }
 
@@ -251,8 +251,8 @@ object SecretService {
                     parameters = params,
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
-            val result = Json.decodeFromJsonElement<RpcResponse>(jsonElement)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
+            val result = supabaseJson.decodeFromJsonElement<RpcResponse>(jsonElement)
 
             if (result.success) {
                 Result.success(Unit)
@@ -260,7 +260,7 @@ object SecretService {
                 Result.failure(Exception(result.error ?: "Failed to delete secret"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeSupabaseFailure("deleteSecret", e))
         }
 
     /**
@@ -287,14 +287,14 @@ object SecretService {
                     parameters = params,
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
-            val secretsWithSharing = Json.decodeFromJsonElement<List<SecretEntryWithSharing>>(jsonElement)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
+            val secretsWithSharing = supabaseJson.decodeFromJsonElement<List<SecretEntryWithSharing>>(jsonElement)
             val secrets = secretsWithSharing.map { it.toSecretEntry() }
             val hasMore = secrets.size >= limit
 
             Result.success(PaginatedSecrets(data = secrets, hasMore = hasMore))
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeSupabaseFailure("getUserSecretsWithShared", e))
         }
 
     /**
@@ -325,13 +325,13 @@ object SecretService {
                     parameters = params,
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
-            val secretsWithSharing = Json.decodeFromJsonElement<List<SecretEntryWithSharing>>(jsonElement)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
+            val secretsWithSharing = supabaseJson.decodeFromJsonElement<List<SecretEntryWithSharing>>(jsonElement)
             val hasMore = secretsWithSharing.size >= limit
 
             Result.success(PaginatedSecretsWithSharing(data = secretsWithSharing, hasMore = hasMore))
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeSupabaseFailure("getUserSecretsWithSharingInfo", e))
         }
 
     /**
@@ -367,8 +367,8 @@ object SecretService {
                     parameters = params,
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
-            val result = Json.decodeFromJsonElement<RpcResponse>(jsonElement)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
+            val result = supabaseJson.decodeFromJsonElement<RpcResponse>(jsonElement)
 
             if (result.success) {
                 Result.success(Unit)
@@ -376,7 +376,7 @@ object SecretService {
                 Result.failure(Exception(result.error ?: "Failed to share secret"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeSupabaseFailure("shareSecret", e))
         }
     }
 
@@ -407,8 +407,8 @@ object SecretService {
                     parameters = params,
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
-            val result = Json.decodeFromJsonElement<RpcResponse>(jsonElement)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
+            val result = supabaseJson.decodeFromJsonElement<RpcResponse>(jsonElement)
 
             if (result.success) {
                 Result.success(Unit)
@@ -416,7 +416,7 @@ object SecretService {
                 Result.failure(Exception(result.error ?: "Failed to unshare secret"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeSupabaseFailure("unshareSecret", e))
         }
     }
 
@@ -439,12 +439,12 @@ object SecretService {
                     parameters = params,
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
-            val shares = Json.decodeFromJsonElement<List<SecretShareEntry>>(jsonElement)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
+            val shares = supabaseJson.decodeFromJsonElement<List<SecretShareEntry>>(jsonElement)
 
             Result.success(shares)
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeSupabaseFailure("getSecretShares", e))
         }
 
     /**

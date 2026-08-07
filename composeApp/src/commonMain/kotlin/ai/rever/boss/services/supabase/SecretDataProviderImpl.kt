@@ -135,7 +135,10 @@ class SecretDataProviderImpl : SecretDataProvider {
             sharedWithRoleId = sharedWithRoleId,
             sharedWithRoleName = sharedWithRoleName,
             accessLevel = accessLevel,
-            sharedByEmail = sharedByEmail,
+            // Unknown sharer collapses to "" rather than widening SecretShareData: the IPC
+            // path already does exactly this (SecretDataProviderProxy), so the two agree, and
+            // making the plugin-facing field nullable would break binary compatibility.
+            sharedByEmail = sharedByEmail ?: "",
             createdAt = createdAt,
             expiresAt = expiresAt,
             notes = notes,

@@ -67,8 +67,8 @@ object RoleCreationService {
                     parameters = params,
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
-            val result = Json.decodeFromJsonElement<RpcResponse>(jsonElement)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
+            val result = supabaseJson.decodeFromJsonElement<RpcResponse>(jsonElement)
 
             if (result.success) {
                 Result.success(
@@ -82,8 +82,8 @@ object RoleCreationService {
                 Result.failure(Exception(result.error ?: "Failed to create role"))
             }
         } catch (e: Exception) {
-            logger.warn(LogCategory.AUTH, "createRole failed", error = e)
-            Result.failure(e)
+            logger.warn(LogCategory.AUTH, "createRole failed", error = sanitizeSupabaseFailure("createRole", e))
+            Result.failure(sanitizeSupabaseFailure("createRole", e))
         }
 
     /**
@@ -112,8 +112,8 @@ object RoleCreationService {
                     parameters = params,
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
-            val result = Json.decodeFromJsonElement<RpcResponse>(jsonElement)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
+            val result = supabaseJson.decodeFromJsonElement<RpcResponse>(jsonElement)
 
             if (result.success) {
                 Result.success(
@@ -127,8 +127,12 @@ object RoleCreationService {
                 Result.failure(Exception(result.error ?: "Failed to create permission"))
             }
         } catch (e: Exception) {
-            logger.warn(LogCategory.AUTH, "createPermission failed", error = e)
-            Result.failure(e)
+            logger.warn(
+                LogCategory.AUTH,
+                "createPermission failed",
+                error = sanitizeSupabaseFailure("createPermission", e),
+            )
+            Result.failure(sanitizeSupabaseFailure("createPermission", e))
         }
 
     /**
@@ -144,8 +148,8 @@ object RoleCreationService {
                     parameters = buildJsonObject { },
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
-            val result = Json.decodeFromJsonElement<RolesResponseNew>(jsonElement)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
+            val result = supabaseJson.decodeFromJsonElement<RolesResponseNew>(jsonElement)
 
             if (result.success) {
                 val roles =
@@ -165,8 +169,8 @@ object RoleCreationService {
                 Result.failure(Exception(result.error ?: "Failed to get roles"))
             }
         } catch (e: Exception) {
-            logger.warn(LogCategory.AUTH, "getAllRoles failed", error = e)
-            Result.failure(e)
+            logger.warn(LogCategory.AUTH, "getAllRoles failed", error = sanitizeSupabaseFailure("getAllRoles", e))
+            Result.failure(sanitizeSupabaseFailure("getAllRoles", e))
         }
 
     /**
@@ -182,8 +186,8 @@ object RoleCreationService {
                     parameters = buildJsonObject { },
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
-            val result = Json.decodeFromJsonElement<PermissionsResponseNew>(jsonElement)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
+            val result = supabaseJson.decodeFromJsonElement<PermissionsResponseNew>(jsonElement)
 
             if (result.success) {
                 val permissions =
@@ -203,8 +207,12 @@ object RoleCreationService {
                 Result.failure(Exception(result.error ?: "Failed to get permissions"))
             }
         } catch (e: Exception) {
-            logger.warn(LogCategory.AUTH, "getAllPermissions failed", error = e)
-            Result.failure(e)
+            logger.warn(
+                LogCategory.AUTH,
+                "getAllPermissions failed",
+                error = sanitizeSupabaseFailure("getAllPermissions", e),
+            )
+            Result.failure(sanitizeSupabaseFailure("getAllPermissions", e))
         }
 
     /**
@@ -231,8 +239,8 @@ object RoleCreationService {
                     parameters = params,
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
-            val result = Json.decodeFromJsonElement<RpcResponse>(jsonElement)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
+            val result = supabaseJson.decodeFromJsonElement<RpcResponse>(jsonElement)
 
             if (result.success) {
                 Result.success(Unit)
@@ -240,8 +248,12 @@ object RoleCreationService {
                 Result.failure(Exception(result.error ?: "Failed to assign permission"))
             }
         } catch (e: Exception) {
-            logger.warn(LogCategory.AUTH, "assignPermissionToRole failed", error = e)
-            Result.failure(e)
+            logger.warn(
+                LogCategory.AUTH,
+                "assignPermissionToRole failed",
+                error = sanitizeSupabaseFailure("assignPermissionToRole", e),
+            )
+            Result.failure(sanitizeSupabaseFailure("assignPermissionToRole", e))
         }
 
     /**
@@ -268,8 +280,8 @@ object RoleCreationService {
                     parameters = params,
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
-            val result = Json.decodeFromJsonElement<RpcResponse>(jsonElement)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
+            val result = supabaseJson.decodeFromJsonElement<RpcResponse>(jsonElement)
 
             if (result.success) {
                 Result.success(Unit)
@@ -277,8 +289,12 @@ object RoleCreationService {
                 Result.failure(Exception(result.error ?: "Failed to remove permission"))
             }
         } catch (e: Exception) {
-            logger.warn(LogCategory.AUTH, "removePermissionFromRole failed", error = e)
-            Result.failure(e)
+            logger.warn(
+                LogCategory.AUTH,
+                "removePermissionFromRole failed",
+                error = sanitizeSupabaseFailure("removePermissionFromRole", e),
+            )
+            Result.failure(sanitizeSupabaseFailure("removePermissionFromRole", e))
         }
 
     /**
@@ -300,8 +316,8 @@ object RoleCreationService {
                     parameters = params,
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
-            val result = Json.decodeFromJsonElement<RolePermissionsResponse>(jsonElement)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
+            val result = supabaseJson.decodeFromJsonElement<RolePermissionsResponse>(jsonElement)
 
             if (result.success) {
                 Result.success(
@@ -314,8 +330,12 @@ object RoleCreationService {
                 Result.failure(Exception(result.error ?: "Failed to get role permissions"))
             }
         } catch (e: Exception) {
-            logger.warn(LogCategory.AUTH, "getRolePermissions failed", error = e)
-            Result.failure(e)
+            logger.warn(
+                LogCategory.AUTH,
+                "getRolePermissions failed",
+                error = sanitizeSupabaseFailure("getRolePermissions", e),
+            )
+            Result.failure(sanitizeSupabaseFailure("getRolePermissions", e))
         }
 
     /**
@@ -337,8 +357,8 @@ object RoleCreationService {
                     parameters = params,
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
-            val result = Json.decodeFromJsonElement<RpcResponse>(jsonElement)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
+            val result = supabaseJson.decodeFromJsonElement<RpcResponse>(jsonElement)
 
             if (result.success) {
                 Result.success(Unit)
@@ -346,8 +366,8 @@ object RoleCreationService {
                 Result.failure(Exception(result.error ?: "Failed to delete role"))
             }
         } catch (e: Exception) {
-            logger.warn(LogCategory.AUTH, "deleteRole failed", error = e)
-            Result.failure(e)
+            logger.warn(LogCategory.AUTH, "deleteRole failed", error = sanitizeSupabaseFailure("deleteRole", e))
+            Result.failure(sanitizeSupabaseFailure("deleteRole", e))
         }
 
     /**
@@ -369,8 +389,8 @@ object RoleCreationService {
                     parameters = params,
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
-            val result = Json.decodeFromJsonElement<RpcResponse>(jsonElement)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
+            val result = supabaseJson.decodeFromJsonElement<RpcResponse>(jsonElement)
 
             if (result.success) {
                 Result.success(Unit)
@@ -378,8 +398,12 @@ object RoleCreationService {
                 Result.failure(Exception(result.error ?: "Failed to delete permission"))
             }
         } catch (e: Exception) {
-            logger.warn(LogCategory.AUTH, "deletePermission failed", error = e)
-            Result.failure(e)
+            logger.warn(
+                LogCategory.AUTH,
+                "deletePermission failed",
+                error = sanitizeSupabaseFailure("deletePermission", e),
+            )
+            Result.failure(sanitizeSupabaseFailure("deletePermission", e))
         }
 
     /**

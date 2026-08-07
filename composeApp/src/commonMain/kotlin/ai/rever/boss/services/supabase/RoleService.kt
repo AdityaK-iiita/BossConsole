@@ -90,7 +90,11 @@ object RoleService {
 
             roleClaims
         } catch (e: Exception) {
-            logger.warn(LogCategory.AUTH, "Failed to parse role claims", error = e)
+            logger.warn(
+                LogCategory.AUTH,
+                "Failed to parse role claims",
+                error = sanitizeSupabaseFailure("parseRoleClaimsFromSession", e),
+            )
             null
         }
     }
@@ -139,7 +143,7 @@ object RoleService {
             logger.debug(LogCategory.AUTH, "Decoding JWT payload")
 
             // Parse JSON using kotlinx.serialization (secure and reliable)
-            val jsonObject = Json.parseToJsonElement(jsonString).jsonObject
+            val jsonObject = supabaseJson.parseToJsonElement(jsonString).jsonObject
 
             // Extract RBAC claims
             mapOf(
@@ -155,7 +159,12 @@ object RoleService {
                     },
             )
         } catch (e: Exception) {
-            logger.warn(LogCategory.AUTH, "Failed to decode JWT", error = e)
+            // Sanitised, because the comment fifteen lines up ("JWT payload not logged to
+            // avoid exposing sensitive claims") is defeated by its own failure path: a
+            // garbled payload makes kotlinx append the whole document to the message, so
+            // logging the raw exception logs the claim set the debug line deliberately
+            // withholds.
+            logger.warn(LogCategory.AUTH, "Failed to decode JWT", error = sanitizeSupabaseFailure("decodeJWTClaims", e))
             emptyMap()
         }
 
@@ -175,13 +184,17 @@ object RoleService {
                         },
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
-            val roles = Json.decodeFromJsonElement<List<UserRole>>(jsonElement)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
+            val roles = supabaseJson.decodeFromJsonElement<List<UserRole>>(jsonElement)
 
             Result.success(roles)
         } catch (e: Exception) {
-            logger.warn(LogCategory.AUTH, "Failed to get user roles", error = e)
-            Result.failure(e)
+            logger.warn(
+                LogCategory.AUTH,
+                "Failed to get user roles",
+                error = sanitizeSupabaseFailure("getUserRoles", e),
+            )
+            Result.failure(sanitizeSupabaseFailure("getUserRoles", e))
         }
 
     /**
@@ -203,13 +216,17 @@ object RoleService {
                         },
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
             val hasRole = jsonElement.jsonPrimitive.boolean
 
             Result.success(hasRole)
         } catch (e: Exception) {
-            logger.warn(LogCategory.AUTH, "Failed to check user role", error = e)
-            Result.failure(e)
+            logger.warn(
+                LogCategory.AUTH,
+                "Failed to check user role",
+                error = sanitizeSupabaseFailure("userHasRole", e),
+            )
+            Result.failure(sanitizeSupabaseFailure("userHasRole", e))
         }
 
     /**
@@ -237,8 +254,14 @@ object RoleService {
 
             Result.success(Unit)
         } catch (e: Exception) {
-            logger.error(LogCategory.AUTH, "Failed to assign role", error = e)
-            Result.failure(Exception("Failed to assign role: ${e.message}"))
+            logger.error(
+                LogCategory.AUTH,
+                "Failed to assign role",
+                error = sanitizeSupabaseFailure("assignRoleByName", e),
+            )
+            Result.failure(
+                Exception("Failed to assign role: ${sanitizeSupabaseFailure("assignRoleByName", e).message}"),
+            )
         }
 
     /**
@@ -261,8 +284,14 @@ object RoleService {
 
             Result.success(Unit)
         } catch (e: Exception) {
-            logger.error(LogCategory.AUTH, "Failed to remove role", error = e)
-            Result.failure(Exception("Failed to remove role: ${e.message}"))
+            logger.error(
+                LogCategory.AUTH,
+                "Failed to remove role",
+                error = sanitizeSupabaseFailure("removeRoleByName", e),
+            )
+            Result.failure(
+                Exception("Failed to remove role: ${sanitizeSupabaseFailure("removeRoleByName", e).message}"),
+            )
         }
 
     /**
@@ -280,13 +309,17 @@ object RoleService {
                         },
                 )
 
-            val jsonElement = Json.parseToJsonElement(postgrestResult.data)
-            val permissions = Json.decodeFromJsonElement<List<RolePermission>>(jsonElement)
+            val jsonElement = supabaseJson.parseToJsonElement(postgrestResult.data)
+            val permissions = supabaseJson.decodeFromJsonElement<List<RolePermission>>(jsonElement)
 
             Result.success(permissions)
         } catch (e: Exception) {
-            logger.warn(LogCategory.AUTH, "Failed to get role permissions", error = e)
-            Result.failure(e)
+            logger.warn(
+                LogCategory.AUTH,
+                "Failed to get role permissions",
+                error = sanitizeSupabaseFailure("getRolePermissions", e),
+            )
+            Result.failure(sanitizeSupabaseFailure("getRolePermissions", e))
         }
 
     /**
@@ -320,8 +353,12 @@ object RoleService {
 
             Result.success(false)
         } catch (e: Exception) {
-            logger.warn(LogCategory.AUTH, "Failed to check permission", error = e)
-            Result.failure(e)
+            logger.warn(
+                LogCategory.AUTH,
+                "Failed to check permission",
+                error = sanitizeSupabaseFailure("canPerformAction", e),
+            )
+            Result.failure(sanitizeSupabaseFailure("canPerformAction", e))
         }
     }
 }
