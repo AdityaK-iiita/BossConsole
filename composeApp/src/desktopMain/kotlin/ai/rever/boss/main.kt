@@ -639,9 +639,28 @@ fun main(args: Array<String>) {
     // Start global log capture from app startup
     GlobalLogCapture.start()
 
-    // Start performance monitoring from app startup
-    ai.rever.boss.performance.PerformanceMonitor
-        .start()
+    // Hand the tier's browser settings to plugins, which cannot see host classes. Before any
+    // plugin loads, so fluck-browser sees it when it first builds a tab.
+    ai.rever.boss.config.ResourceModeConfig
+        .publishToPlugins()
+
+    // Start performance monitoring from app startup — unless the resource tier says the
+    // sampler's own overhead is not worth paying on this machine.
+    if (ai.rever.boss.config.ResourceModeConfig.mode.backgroundSamplingEnabled) {
+        ai.rever.boss.performance.PerformanceMonitor
+            .start()
+    } else {
+        logger.info(
+            LogCategory.SYSTEM,
+            "Performance sampling disabled by the resource mode",
+            mapOf("mode" to ai.rever.boss.config.ResourceModeConfig.mode.name),
+        )
+    }
+
+    // Watch for the case the startup decision cannot see: a machine with plenty of installed
+    // RAM that is nonetheless out of it, because of everything else the user is running.
+    ai.rever.boss.performance.MemoryPressureWatchdog
+        .start(startupScope)
 
     // Debug: Log environment info
     logger.debug(

@@ -17,6 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -240,6 +241,57 @@ object BrowserServiceImpl : BrowserService {
     // Track active browser handles for resource management
     private val activeBrowsers = ConcurrentHashMap<String, BrowserHandleImpl>()
 
+    // Long-lived, for cleanup that outlives the caller's scope. reconcileOrphanedBrowsers() is
+    // called from non-suspending accessors but the named-profile bookkeeping has to stat a
+    // directory, and a SupervisorJob keeps one failing cleanup from cancelling the rest.
+    private val cleanupScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    /**
+     * Drops handles whose browser has gone away without passing through a dispose path.
+     *
+     * A browser has three ways to die that never touch `activeBrowsers`: a plugin calling the
+     * public `BrowserHandle.dispose()` itself, a renderer crashing, and a page calling
+     * `window.close()`. There is no close subscription here to notice any of them, so the map
+     * keeps entries for browsers that no longer exist.
+     *
+     * It was briefly load-bearing, while a concurrent-browser ceiling existed, because each
+     * orphan permanently consumed a slot. The ceiling is gone (hibernation replaced it), so what
+     * remains is a wrong count and, more importantly, a leaked managed-profile reference: those
+     * are reference-counted behind a per-named-profile fence, so never releasing one leaves the
+     * fence held for the rest of the session.
+     *
+     * Called from [getActiveBrowserCountForWindow], which is the path plugins actually reach
+     * through `BrowserServiceProvider`. An earlier revision hung it off [getActiveBrowserCount]
+     * instead, which nothing in this repo calls - the reconcile never ran, so the leak this
+     * documents stayed open. Hibernation makes it matter more than it used to: a hibernated tab
+     * disposes its browser through the plugin's own handle, exactly the path that never reaches
+     * this map.
+     *
+     * Pruning is synchronous (callers are not suspending), but the managed-profile cleanup is
+     * not: for a named profile it has to stat the directory, so it runs on [cleanupScope].
+     *
+     * @return the number of live handles after pruning.
+     */
+    internal fun reconcileOrphanedBrowsers(): Int {
+        val orphans = activeBrowsers.entries.filter { !it.value.isValid }
+        for ((id, handle) in orphans) {
+            if (activeBrowsers.remove(id, handle)) {
+                browserOwners.unregister(id)
+                managedByHandle.remove(id)?.let { ref ->
+                    cleanupScope.launch { finishManagedProfile(ref) }
+                }
+            }
+        }
+        if (orphans.isNotEmpty()) {
+            logger.info(
+                LogCategory.BROWSER,
+                "Pruned browser handles whose browser had gone away",
+                mapOf("pruned" to orphans.size.toString(), "active" to activeBrowsers.size.toString()),
+            )
+        }
+        return activeBrowsers.size
+    }
+
     // BrowserService is shared process-wide, but plugin handles belong to the
     // window whose PluginContext created them.
     private val browserOwners = BrowserWindowOwnershipRegistry()
@@ -370,7 +422,7 @@ object BrowserServiceImpl : BrowserService {
         config: BrowserConfig,
     ): BrowserHandle? {
         require(windowId.isNotBlank()) { "Browser owner windowId must not be blank" }
-        return createBrowser(config, ownerWindowId = windowId)
+        return createBrowserWithRetry(config, ownerWindowId = windowId)
     }
 
     internal fun finishBrowserCreation(windowId: String) {
@@ -385,7 +437,20 @@ object BrowserServiceImpl : BrowserService {
         }
     }
 
-    private suspend fun createBrowser(
+    /**
+     * Creates a browser. **Deliberately not capped.**
+     *
+     * A concurrent-browser ceiling lived here briefly and was removed, because it was the wrong
+     * bound twice over. It fired on tab *count* rather than on idleness, so it refused the tab
+     * the user had just asked for while four idle ones sat untouched. And it cannot coexist with
+     * the fluck-browser plugin's tab hibernation: a hibernated tab recreates its browser when you
+     * switch to it, so under a cap merely moving between tabs got refused. Observed with 7 tabs
+     * open - four wakes in four seconds, then "Browser limit reached" on the fifth.
+     *
+     * The memory bound is hibernation instead (see `BossResourceMode.hibernationIdleMs`), which
+     * reclaims from tabs nobody is using rather than refusing work.
+     */
+    private suspend fun createBrowserWithRetry(
         config: BrowserConfig,
         ownerWindowId: String,
     ): BrowserHandle? {
@@ -544,23 +609,7 @@ object BrowserServiceImpl : BrowserService {
             // Managed-profile cleanup must run even if dispose() throws — otherwise the
             // per-named-profile fence stays locked (deadlock) and ephemeral profiles
             // leak. Delete ephemeral profiles, refresh+evict named ones, release fence.
-            managedByHandle.remove(handle.id)?.let { ref ->
-                inUse.remove(ref.profileName)
-                try {
-                    if (ref.ephemeral) {
-                        FluckEngine.deleteRpaProfile(ref.profile)
-                    } else if (ref.namedId != null) {
-                        meta[ref.namedId]?.let { m ->
-                            val size = withContext(Dispatchers.IO) { dirSize(File(m.path)) }
-                            meta[ref.namedId] = m.copy(lastUsedMs = System.currentTimeMillis(), diskBytes = size)
-                        }
-                        persistMeta()
-                        evictIfNeeded()
-                    }
-                } finally {
-                    ref.heldMutex?.unlock()
-                }
-            }
+            managedByHandle.remove(handle.id)?.let { finishManagedProfile(it) }
         }
 
         logger.debug(
@@ -573,9 +622,12 @@ object BrowserServiceImpl : BrowserService {
         )
     }
 
-    override fun getActiveBrowserCount(): Int = activeBrowsers.size
+    override fun getActiveBrowserCount(): Int = reconcileOrphanedBrowsers()
 
-    internal fun getActiveBrowserCountForWindow(windowId: String): Int = browserOwners.count(windowId)
+    internal fun getActiveBrowserCountForWindow(windowId: String): Int {
+        reconcileOrphanedBrowsers()
+        return browserOwners.count(windowId)
+    }
 
     /** Return all active browser handles for internal lookup (e.g. RPA recorder). */
     internal fun getActiveHandles(): List<BrowserHandleImpl> = activeBrowsers.values.toList()
@@ -740,6 +792,33 @@ object BrowserServiceImpl : BrowserService {
             }
         }
         ref.heldMutex?.unlock()
+    }
+
+    /**
+     * Full end-of-life bookkeeping for a managed profile: delete if ephemeral, refresh usage and
+     * evict if named, then release the fence.
+     *
+     * Shared by [disposeBrowser] and [reconcileOrphanedBrowsers]. The reconcile path used to call
+     * [releaseManaged], which unlocks the fence but skips the `lastUsedMs`/`diskBytes` refresh -
+     * so a named profile whose browser died outside a dispose path never aged, and never became
+     * a candidate for disk eviction.
+     */
+    private suspend fun finishManagedProfile(ref: ManagedRef) {
+        inUse.remove(ref.profileName)
+        try {
+            if (ref.ephemeral) {
+                FluckEngine.deleteRpaProfile(ref.profile)
+            } else if (ref.namedId != null) {
+                meta[ref.namedId]?.let { m ->
+                    val size = withContext(Dispatchers.IO) { dirSize(File(m.path)) }
+                    meta[ref.namedId] = m.copy(lastUsedMs = System.currentTimeMillis(), diskBytes = size)
+                }
+                persistMeta()
+                evictIfNeeded()
+            }
+        } finally {
+            ref.heldMutex?.unlock()
+        }
     }
 
     override suspend fun seedProfile(
