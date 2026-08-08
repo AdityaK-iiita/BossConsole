@@ -2,6 +2,8 @@ package ai.rever.boss.plugin
 
 import ai.rever.boss.components.plugin.DynamicPluginManager
 import ai.rever.boss.components.plugin.MicrokernelRuntime
+import ai.rever.boss.components.plugin.findRelocatedPluginJar
+import ai.rever.boss.components.plugin.resolveReloadJarPath
 import ai.rever.boss.components.registery.PanelComponentStoreRegistry
 import ai.rever.boss.components.window_panel.SplitViewStateRegistry
 import ai.rever.boss.components.window_panel.components.main_window_panels.BossTabsComponent
@@ -21,6 +23,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.withContext
 import java.io.File
 import javax.swing.SwingUtilities
 
@@ -159,13 +162,47 @@ class PluginLoaderDelegateImpl(
         return try {
             logger.info(LogCategory.SYSTEM, "Reloading plugin via delegate", mapOf("pluginId" to pluginId))
 
-            // Get the JAR path before unloading
-            val pluginInfo = dynamicPluginManager.getPluginInfo(pluginId)
-            val jarPath = pluginInfo?.jarPath
+            // Resolve the JAR before unloading, and resolve it against the DISK rather than
+            // trusting the loaded record. Reloads are most often triggered BY an update that
+            // just replaced the jar: the updater writes a version-named file and deletes the
+            // old one, so the path this plugin was loaded from is exactly the path that no
+            // longer exists. Taking it on trust unloaded the plugin and then failed to load
+            // it, leaving it gone until the next restart.
+            //
+            // Checking existence up front also means a reload that cannot succeed no longer
+            // tears the running plugin down first.
+            val loadedJarPath = dynamicPluginManager.getPluginInfo(pluginId)?.jarPath
+            // Disk IO, and this runs on reloadScope (Dispatchers.Default): reading the record
+            // parses installed.json and, on a cold cache, opens every plugin jar's manifest.
+            val jarPath =
+                withContext(Dispatchers.IO) {
+                    val persistedJarPath =
+                        PluginPersistence.getInstalledPlugins().firstOrNull { it.pluginId == pluginId }?.jarPath
+                    resolveReloadJarPath(
+                        loadedJarPath = loadedJarPath,
+                        persistedJarPath = persistedJarPath,
+                        exists = { File(it).isFile },
+                        relocated = {
+                            val dir = (loadedJarPath ?: persistedJarPath)?.let { File(it).parentFile }
+                            findRelocatedPluginJar(dir, pluginId)?.absolutePath
+                        },
+                    )
+                }
 
             if (jarPath == null) {
-                logger.warn(LogCategory.SYSTEM, "Cannot reload - JAR path not found", mapOf("pluginId" to pluginId))
+                logger.warn(
+                    LogCategory.SYSTEM,
+                    "Cannot reload - no existing JAR for plugin",
+                    mapOf("pluginId" to pluginId, "loadedJarPath" to (loadedJarPath ?: "none")),
+                )
                 return null
+            }
+            if (jarPath != loadedJarPath) {
+                logger.info(
+                    LogCategory.SYSTEM,
+                    "Reloading from the installed record - the loaded JAR is gone, most likely replaced by an update",
+                    mapOf("pluginId" to pluginId, "loadedJarPath" to (loadedJarPath ?: "none"), "jarPath" to jarPath),
+                )
             }
 
             // Unload

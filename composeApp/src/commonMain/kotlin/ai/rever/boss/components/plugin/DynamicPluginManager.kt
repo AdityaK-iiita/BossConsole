@@ -1405,8 +1405,27 @@ class DynamicPluginManager(
         val info =
             getPluginInfo(pluginId)
                 ?: return Result.failure(Exception("Plugin not found: $pluginId"))
-        val jarPath = info.jarPath
         val wasEnabled = info.enabled
+
+        // Resolve against the DISK before unloading, never straight from the loaded record. A
+        // reload is usually triggered by an update that already replaced the jar under a new
+        // versioned name, so info.jarPath is precisely the file that no longer exists - and this
+        // path is what the "Reload Plugin" and "Reload All Plugins" menu actions call, so trusting
+        // it meant one click could force-unload several plugins and fail to bring them back.
+        // Resolving first also keeps a plugin running when no reload is possible.
+        val jarPath =
+            resolveReloadJarPath(
+                loadedJarPath = info.jarPath,
+                // No access to the persisted record from commonMain; relocation covers the gap,
+                // and re-resolving from the directory is the more robust of the two anyway.
+                persistedJarPath = null,
+                exists = { java.io.File(it).isFile },
+                relocated = {
+                    findRelocatedPluginJar(java.io.File(info.jarPath).parentFile, pluginId)?.absolutePath
+                },
+            ) ?: return Result.failure(
+                Exception("Cannot reload $pluginId - no existing JAR (loaded from ${info.jarPath})"),
+            )
 
         logger.info(
             LogCategory.SYSTEM,
@@ -1414,6 +1433,7 @@ class DynamicPluginManager(
             mapOf(
                 "pluginId" to pluginId,
                 "jarPath" to jarPath,
+                "loadedJarPath" to info.jarPath,
             ),
         )
 
