@@ -13,6 +13,8 @@ export interface OrgDetail {
   slug: string
   name: string
   description: string | null
+  /** Public site, http/https only. Optional, and rendered as a link when present. */
+  website?: string | null
   visibility: string
   join_policy: string
   is_system: boolean

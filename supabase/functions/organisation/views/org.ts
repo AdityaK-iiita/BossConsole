@@ -5,7 +5,7 @@
  * of CSRF concerns entirely.
  */
 
-import { esc } from "../utils/html.ts"
+import { attrUrl, esc, scrollable } from "../utils/html.ts"
 import { layout, tabs } from "./layout.ts"
 import type { OrgDetail, OrgMember, OrgRole } from "../services/org.ts"
 
@@ -30,16 +30,29 @@ export function orgPage({ nonce, basePath, org, members, roles }: OrgPageOptions
   ${org.is_system ? '<span class="pill">system</span>' : ""}
 </header>
 <p class="sub">${esc(org.description ?? "No description.")}</p>
+${
+    org.website
+      // attrUrl with http/https opted in. Everywhere else on these pages it is
+      // called with no schemes at all, which refuses anything but a same-origin
+      // path - correct for our own links, and wrong for the one field that is
+      // deliberately external. It still refuses javascript:, data: and a
+      // protocol-relative //host, which is what matters for a value a requester
+      // supplies. rel="noreferrer" because this is the one outbound link here.
+      ? `<p class="sub"><a href="${
+        attrUrl(org.website, ["http", "https"])
+      }" target="_blank" rel="noopener noreferrer">${esc(org.website)}</a></p>`
+      : ""
+  }
 ${tabs(basePath, org.slug, "overview", org.is_admin)}
 
 <section class="card">
   <div class="stat"><b>${esc(org.member_count)}</b><span>members</span></div>
   <div class="stat"><b>${esc(roles.length)}</b><span>roles</span></div>
-  <div class="stat"><b>${esc(org.visibility)}</b><span>visibility</span></div>
-  <div class="stat"><b>${esc(org.join_policy.replace(/_/g, " "))}</b><span>joining</span></div>
+  <div class="stat phrase"><b>${esc(org.visibility)}</b><span>visibility</span></div>
+  <div class="stat phrase"><b>${esc(org.join_policy.replace(/_/g, " "))}</b><span>joining</span></div>
   ${
       org.primary_domain
-        ? `<div class="stat"><b>${esc(org.primary_domain)}</b><span>domain</span></div>`
+        ? `<div class="stat phrase"><b>${esc(org.primary_domain)}</b><span>domain</span></div>`
         : ""
     }
 </section>
@@ -75,10 +88,10 @@ function membersTable(members: OrgMember[]): string {
       <td>${esc(formatDate(member.joined_at))}</td>
     </tr>`).join("")
 
-  return `<table>
+  return scrollable("Members", `<table>
   <thead><tr><th>Email</th><th>Standing</th><th>Roles</th><th>Joined</th></tr></thead>
   <tbody>${rows}</tbody>
-</table>`
+</table>`)
 }
 
 function rolesTable(roles: OrgRole[]): string {
@@ -96,10 +109,10 @@ function rolesTable(roles: OrgRole[]): string {
   }</td>
     </tr>`).join("")
 
-  return `<table>
+  return scrollable("Roles", `<table>
   <thead><tr><th>Role</th><th>Kind</th><th>Members</th><th>Permissions</th></tr></thead>
   <tbody>${rows}</tbody>
-</table>`
+</table>`)
 }
 
 /**

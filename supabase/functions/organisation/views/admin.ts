@@ -7,7 +7,7 @@
  * regardless of what was rendered.
  */
 
-import { esc } from "../utils/html.ts"
+import { esc, scrollable } from "../utils/html.ts"
 import { csrfField, layout, tabs } from "./layout.ts"
 import { formatDate } from "./org.ts"
 import { CSRF_FIELD } from "../utils/csrf.ts"
@@ -114,6 +114,13 @@ function settingsCard(action: string, csrf: string, org: OrgDetail, roles: OrgRo
     </div>
     <div class="row">
       <div>
+        <label for="website">Website</label>
+        <input type="url" id="website" name="website" maxlength="500"
+               placeholder="https://acme.com" value="${esc(org.website ?? "")}">
+      </div>
+    </div>
+    <div class="row">
+      <div>
         <label for="description">Description</label>
         <textarea id="description" name="description" rows="2" maxlength="500">${
     esc(org.description ?? "")
@@ -182,10 +189,12 @@ function pendingCard(action: string, csrf: string, pending: OrgMember[]): string
 <section class="card">
   <h2>Join requests (${pending.length})</h2>
   <p class="hint">People who asked to join and are waiting on a decision.</p>
+  ${scrollable("Join requests", `
   <table>
     <thead><tr><th>Email</th><th>Message</th><th>Requested</th><th>Decision</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
+  `, false)}
 </section>`
 }
 
@@ -237,10 +246,12 @@ function membersCard(
 <section class="card">
   <h2>Members (${esc(org.member_count)})</h2>
   <p class="hint">Removing a member also ends any web session they have open.</p>
+  ${scrollable("Members", `
   <table>
     <thead><tr><th>Email</th><th>Roles</th><th>Assign</th><th></th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
+  `, false)}
 </section>`
 }
 
@@ -293,10 +304,12 @@ function rolesCard(action: string, csrf: string, org: OrgDetail, roles: OrgRole[
 <section class="card">
   <h2>Roles</h2>
   <p class="hint">${esc(customCount)} of ${esc(maxCustom)} custom roles used.</p>
+  ${scrollable("Roles", `
   <table>
     <thead><tr><th>Role</th><th>Kind</th><th>Members</th><th></th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
+  `, false)}
   <div class="spaced">${createForm}</div>
 </section>`
 }
@@ -342,10 +355,12 @@ function invitesCard(
 <section class="card">
   <h2>Invite links</h2>
   <p class="hint">A new link is shown once, at creation. Only its prefix is stored, so it cannot be recovered later.</p>
+  ${scrollable("Invite links", `
   <table>
     <thead><tr><th>Label</th><th>Grants</th><th>Uses</th><th>Expires</th><th></th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
+  `, false)}
   <div class="spaced">
     <form method="post" action="${esc(action)}/invites/create">
       ${csrfField(CSRF_FIELD, csrf)}
@@ -425,10 +440,12 @@ function domainsCard(action: string, csrf: string, domains: OrgDomain[]): string
 <section class="card">
   <h2>Domains</h2>
   <p class="hint">A verified domain lets people with a matching email address find and join this organisation. Add the TXT record, then press Verify.</p>
+  ${scrollable("Domains", `
   <table>
     <thead><tr><th>Domain</th><th>Status</th><th>DNS record</th><th></th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
+  `, false)}
   <div class="spaced">
     <form method="post" action="${esc(action)}/domains/add">
       ${csrfField(CSRF_FIELD, csrf)}

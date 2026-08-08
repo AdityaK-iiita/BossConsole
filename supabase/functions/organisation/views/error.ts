@@ -23,7 +23,7 @@ export function errorPage(
   { nonce, title, heading, message, action }: ErrorPageOptions,
 ): string {
   const cta = action
-    ? `<p class="spaced"><a href="${esc(action.href)}" class="linkish">${
+    ? `<p class="spaced"><a href="${esc(action.href)}">${
       esc(action.label)
     }</a></p>`
     : ""

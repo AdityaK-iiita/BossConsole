@@ -44,6 +44,7 @@ const RESULT_MESSAGES: Record<string, string> = {
 const ERROR_MESSAGES: Record<string, string> = {
   invalid_input: "That value was not accepted. Check the field and try again.",
   rejected: "The change was refused.",
+  invalid_website: "The website must be a full http:// or https:// address.",
   rate_limited: "Too many attempts. Please wait a moment and try again.",
 }
 

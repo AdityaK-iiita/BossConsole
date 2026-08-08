@@ -460,6 +460,71 @@ Deno.test("an ABSENT enum still means leave unchanged", async () => {
   }
 })
 
+Deno.test("a malformed website is named, not collapsed into the generic refusal", async () => {
+  // The RPC refuses it too, but finish() maps every RPC failure to err=rejected,
+  // which renders as "The change was refused" - the generic message the whole
+  // check exists to replace. Only a route-level check can name the field while
+  // keeping the fixed-key vocabulary that stops caller text being reflected.
+  const { stub, restore } = setup()
+  try {
+    stub.responses.set("update_organisation_settings", { success: true })
+    const res = await app.request(`${BASE}/o/${FIXTURE.slug}/admin/settings`, {
+      method: "POST",
+      headers: formHeaders(await sessionCookie()),
+      body: new URLSearchParams({ [CSRF_FIELD]: CSRF, name: "Renamed", website: "acme.com" }),
+    })
+
+    assertEquals(res.status, 303)
+    assert(
+      (res.headers.get("location") ?? "").includes("err=invalid_website"),
+      `expected err=invalid_website, got ${res.headers.get("location")}`,
+    )
+    // And it does not reach the database: the whole point is that the rest of the
+    // submission is not attempted with a value that would abort it.
+    assertEquals(stub.calls.find((c) => c.fn === "update_organisation_settings"), undefined)
+  } finally {
+    restore()
+  }
+})
+
+Deno.test("an empty website is passed through, because empty CLEARS it", async () => {
+  // rawField, not field: '' and absent mean different things to the RPC, and the
+  // route check must not treat the clearing case as malformed.
+  const { stub, restore } = setup()
+  try {
+    stub.responses.set("update_organisation_settings", { success: true })
+    await app.request(`${BASE}/o/${FIXTURE.slug}/admin/settings`, {
+      method: "POST",
+      headers: formHeaders(await sessionCookie()),
+      body: new URLSearchParams({ [CSRF_FIELD]: CSRF, name: "Renamed", website: "" }),
+    })
+
+    const call = stub.calls.find((c) => c.fn === "update_organisation_settings")
+    assert(call, "a blank website must still reach the RPC, to clear the column")
+    assertEquals(call.params.p_website, "")
+  } finally {
+    restore()
+  }
+})
+
+Deno.test("an absent website leaves the column alone", async () => {
+  const { stub, restore } = setup()
+  try {
+    stub.responses.set("update_organisation_settings", { success: true })
+    await app.request(`${BASE}/o/${FIXTURE.slug}/admin/settings`, {
+      method: "POST",
+      headers: formHeaders(await sessionCookie()),
+      body: new URLSearchParams({ [CSRF_FIELD]: CSRF, name: "Renamed" }),
+    })
+
+    const call = stub.calls.find((c) => c.fn === "update_organisation_settings")
+    assert(call)
+    assertEquals(call.params.p_website, null)
+  } finally {
+    restore()
+  }
+})
+
 Deno.test("a rejected RPC does not reflect its own message into the URL", async () => {
   const { stub, restore } = setup()
   try {

@@ -32,14 +32,14 @@ select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select is(
     (select public.submit_organisation_request(
         'Bad Slug', 'Not A Slug', null, null, null,
-        '60000000-0000-0000-0000-000000000001') ->> 'error'),
+        null, '60000000-0000-0000-0000-000000000001') ->> 'error'),
     'Slug must be 2-31 characters, lowercase letters, digits and underscores, starting with a letter',
     'an invalid slug is refused'
 );
 select isnt(
     (select public.submit_organisation_request(
         'Hyphenated', 'has-hyphen', null, null, null,
-        '60000000-0000-0000-0000-000000000001') ->> 'error'),
+        null, '60000000-0000-0000-0000-000000000001') ->> 'error'),
     null,
     'a hyphen is refused -- role names derive from the slug and are validated without hyphens'
 );
@@ -53,7 +53,7 @@ select ok(
 select isnt(
     (select public.submit_organisation_request(
         'Boss Impostor', 'boss', null, null, null,
-        '60000000-0000-0000-0000-000000000001') ->> 'error'),
+        null, '60000000-0000-0000-0000-000000000001') ->> 'error'),
     null,
     'a reserved slug is refused at request time, not discovered at approval'
 );
@@ -70,7 +70,7 @@ select is(
 select ok(
     (select public.submit_organisation_request(
         'Acme Inc', 'pgtacme', 'We make things', null, 'because',
-        '60000000-0000-0000-0000-000000000001') ->> 'success')::boolean,
+        null, '60000000-0000-0000-0000-000000000001') ->> 'success')::boolean,
     'a valid request is accepted'
 );
 select is(
@@ -84,7 +84,7 @@ select is(
 select isnt(
     (select public.submit_organisation_request(
         'Acme Two', 'pgtacme', null, null, null,
-        '60000000-0000-0000-0000-000000000002') ->> 'error'),
+        null, '60000000-0000-0000-0000-000000000002') ->> 'error'),
     null,
     'a second pending request for the same slug is refused'
 );
@@ -156,7 +156,7 @@ select is(
 select ok(
     (select public.submit_organisation_request(
         'Acme Again', 'pgtacme', null, null, null,
-        '60000000-0000-0000-0000-000000000002') ->> 'success')::boolean,
+        null, '60000000-0000-0000-0000-000000000002') ->> 'success')::boolean,
     'withdrawing releases the slug for someone else'
 );
 
@@ -238,7 +238,7 @@ select is(
 -- Rejection
 -- ===========================================================================
 select public.submit_organisation_request(
-    'Rejected Co', 'pgtrej', null, null, null, '60000000-0000-0000-0000-000000000001');
+    'Rejected Co', 'pgtrej', null, null, null, null, '60000000-0000-0000-0000-000000000001');
 
 select ok(
     (select public.reject_organisation_request(

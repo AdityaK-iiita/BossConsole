@@ -4,7 +4,8 @@
  */
 
 import { assert, assertEquals } from "@std/assert"
-import { attrUrl, cspNonce, esc, jsonForScript } from "../utils/html.ts"
+import { attrUrl, cspNonce, esc, jsonForScript, scrollable } from "../utils/html.ts"
+import { layout } from "../views/layout.ts"
 
 Deno.test("esc neutralises every HTML metacharacter", () => {
   assertEquals(esc(`<script>`), "&lt;script&gt;")
@@ -118,4 +119,81 @@ Deno.test("no view emits a duplicate class attribute", async () => {
     const dupes = source.match(/class="[^"]*"[^>]*class="[^"]*"/g) ?? []
     assertEquals(dupes, [], `${entry.name} has duplicate class attributes: ${dupes.join(", ")}`)
   }
+})
+
+Deno.test("every page is inside Cloudflare's email-obfuscation opt-out", () => {
+  // api.risaboss.com is behind Cloudflare, which rewrites any address in an HTML
+  // response into a __cf_email__ anchor needing a decoder script our CSP blocks.
+  // Every member on the roster rendered as the literal words "email protected".
+  //
+  // Asserted on the LAYOUT, not on each field. The first fix wrapped the four
+  // known email columns, and the failure is per-response: a join request reading
+  // "reach me at me@corp.com" goes through request_message and broke identically.
+  // One region covers the class; a list of fields covers whatever was remembered.
+  const page = layout({ title: "t", nonce: "n", body: "<p>someone@example.com</p>" })
+
+  const open = page.indexOf("<!--email_off-->")
+  const close = page.indexOf("<!--/email_off-->")
+  const content = page.indexOf("someone@example.com")
+
+  assert(open > -1, "no email_off region")
+  assert(close > open, "the region is not closed after it opens")
+  assert(content > open && content < close, "page content is outside the region")
+})
+
+Deno.test("free text that is not an email column is inside the region too", () => {
+  // The case the per-field fix missed. request_message is whatever a person typed.
+  const page = layout({
+    title: "t",
+    nonce: "n",
+    body: `<td>${esc("reach me at me@corp.com")}</td>`,
+  })
+  const open = page.indexOf("<!--email_off-->")
+  const close = page.indexOf("<!--/email_off-->")
+  const content = page.indexOf("me@corp.com")
+  assert(content > open && content < close)
+})
+
+Deno.test("the region wraps the page exactly once", () => {
+  // Nesting regions is not something Cloudflare documents, and two opens would
+  // mean someone reintroduced the per-field form inside the per-page one.
+  const page = layout({ title: "t", nonce: "n", body: "<p>x</p>" })
+  assertEquals(page.split("<!--email_off-->").length - 1, 1)
+  assertEquals(page.split("<!--/email_off-->").length - 1, 1)
+})
+
+Deno.test("every table sits in a focusable scroll region", async () => {
+  // The scroll container replaced a rule that hid every column past the third.
+  // But a scrollable region is only operable from a keyboard if it can take focus
+  // (WCAG 2.1.1), and these tables are read-only - no links, no controls, nothing
+  // focusable inside. Without tabindex the columns are reachable with a mouse and
+  // unreachable otherwise, which is the same content loss in a different modality.
+  //
+  // Source-scanned: whether a table is wrapped is a property of the markup, and
+  // the failure is invisible in rendered output unless you try to tab to it.
+  const dir = new URL("../views/", import.meta.url)
+  for await (const entry of Deno.readDir(dir)) {
+    if (!entry.name.endsWith(".ts")) continue
+    const source = await Deno.readTextFile(new URL(entry.name, dir))
+    // <table[\s>] rather than <table>, so adding an attribute cannot silently
+    // drop a table out of the count.
+    const tables = (source.match(/<table[\s>]/g) ?? []).length
+    if (tables === 0) continue
+    const wrappers = (source.match(/class="scroller"/g) ?? []).length +
+      (source.match(/scrollable\(/g) ?? []).length
+    assertEquals(
+      wrappers,
+      tables,
+      `${entry.name}: ${tables} table(s) but ${wrappers} scroll wrapper(s)`,
+    )
+  }
+})
+
+Deno.test("the scroll region is focusable and named", () => {
+  // A focusable div with no accessible name announces as nothing, so the tab stop
+  // becomes a mystery rather than a feature.
+  const out = scrollable("Members", "<table></table>")
+  assert(out.includes('tabindex="0"'), "not focusable")
+  assert(out.includes('role="region"'), "no region role")
+  assert(out.includes('aria-label="Members"'), "no accessible name")
 })

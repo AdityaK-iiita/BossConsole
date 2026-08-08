@@ -119,3 +119,16 @@ export function uuidField(body: Record<string, unknown>, name: string): string |
 export function isValidSlug(slug: string): boolean {
   return /^[a-z][a-z0-9_]{1,30}$/.test(slug)
 }
+
+/**
+ * Is this a website we are willing to render as a link?
+ *
+ * http and https only, no whitespace, 500 characters at most - the same rule
+ * `validate_website` applies in the database. Duplicated deliberately: the RPC
+ * keeps its own check for callers that are not this route, and this copy exists so
+ * the admin page can name the offending field instead of collapsing to its generic
+ * refusal.
+ */
+export function isHttpUrl(value: string): boolean {
+  return value.length <= 500 && /^https?:\/\/[^\s]+$/i.test(value)
+}
