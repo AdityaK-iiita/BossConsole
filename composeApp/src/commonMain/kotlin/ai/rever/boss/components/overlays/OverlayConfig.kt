@@ -136,6 +136,24 @@ object OverlayConfig {
     )? = null
 
     /**
+     * Platform-injected heavyweight CORNER renderer - a **content-sized**, non-focusable window
+     * placed at [alignment] inside the parent, opening at `initialSize` until its content measures.
+     *
+     * Distinct from [heavyweightHud] purely by sizing, and that distinction is the point: a HUD is
+     * parent-sized, which swallows every click beneath it, and that is only acceptable for something
+     * up for as long as a key is held. Toasts linger for seconds while the user keeps working, so
+     * their overlay must cover no more than itself. Null until injected; callers fall back to
+     * drawing in place.
+     */
+    var heavyweightCorner: (
+        @Composable (
+            alignment: Alignment,
+            initialSize: DpSize,
+            content: @Composable () -> Unit,
+        ) -> Unit
+    )? = null
+
+    /**
      * How many heavyweight POPUP windows are currently open.
      *
      * Exists so a heavyweight MODAL can tell "the user clicked away" from "a child overlay of mine
@@ -189,6 +207,32 @@ fun BoxScope.OverlayHud(
     val hw = OverlayConfig.heavyweightHud
     if (routeOverlayHeavyweight(hw != null) && hw != null) {
         hw(alignment) { content() }
+    } else {
+        Box(modifier = Modifier.align(alignment)) { content() }
+    }
+}
+
+/**
+ * A long-lived corner overlay (toast notifications) at [alignment], layered above the browser.
+ *
+ * Distinct from [OverlayHud] because it must not swallow clicks: a HUD covers the whole parent
+ * window, which is fine for a keypress-length switcher and not for a toast that stays up for
+ * seconds while the user keeps working. This one is sized to its content, so only the toast itself
+ * is covered.
+ *
+ * [initialSize] is the size of the window before its content has been measured, so it must be a
+ * generous UPPER bound - too small and the content measures clipped, then the overlay settles at
+ * the clipped size. On the lightweight path it is unused, as the content sizes itself normally.
+ */
+@Composable
+fun BoxScope.OverlayCorner(
+    alignment: Alignment,
+    initialSize: DpSize,
+    content: @Composable () -> Unit,
+) {
+    val hw = OverlayConfig.heavyweightCorner
+    if (routeOverlayHeavyweight(hw != null) && hw != null) {
+        hw(alignment, initialSize) { content() }
     } else {
         Box(modifier = Modifier.align(alignment)) { content() }
     }

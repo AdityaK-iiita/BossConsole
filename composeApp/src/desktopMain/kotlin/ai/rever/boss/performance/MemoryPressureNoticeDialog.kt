@@ -1,5 +1,6 @@
 package ai.rever.boss.performance
 
+import ai.rever.boss.plugin.ui.BossDialog
 import ai.rever.boss.plugin.ui.BossTheme
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -22,7 +23,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 
 /**
  * Tells the user when the memory-pressure watchdog has tightened the resource tier under them.
@@ -44,7 +44,7 @@ fun MemoryPressureNoticeDialog(onRestartRequested: () -> Unit) {
 
     val colors = BossTheme.colors
 
-    Dialog(onDismissRequest = { MemoryPressureWatchdog.acknowledge() }) {
+    BossDialog(onDismissRequest = { MemoryPressureWatchdog.acknowledge() }) {
         Column(
             modifier =
                 Modifier

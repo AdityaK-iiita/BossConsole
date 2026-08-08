@@ -931,338 +931,338 @@ fun ApplicationScope.BossWindow(
                     },
                 )
             }
-        }
 
-        // CLI Installation Dialog
-        if (showCLIInstallDialog) {
-            CLIInstallationDialog(
-                onDismiss = {
-                    showCLIInstallDialog = false
-                    // Refresh CLI installation status after dialog closes
-                    isCliInstalled = CLIInstaller.isInstalled()
-                },
-            )
-        }
+            // CLI Installation Dialog
+            if (showCLIInstallDialog) {
+                CLIInstallationDialog(
+                    onDismiss = {
+                        showCLIInstallDialog = false
+                        // Refresh CLI installation status after dialog closes
+                        isCliInstalled = CLIInstaller.isInstalled()
+                    },
+                )
+            }
 
-        // Password / bookmark import dialog
-        if (showImportDialog) {
-            ImportDataDialog(onDismiss = { showImportDialog = false })
-        }
+            // Password / bookmark import dialog
+            if (showImportDialog) {
+                ImportDataDialog(onDismiss = { showImportDialog = false })
+            }
 
-        // Exactly one window mounts this: the watchdog is process-wide, so mounting it per window
-        // would show the same notice once per open window.
-        //
-        // Identity, not a count. `windowCount <= 1` looks equivalent but is the opposite bug: with
-        // two windows open it is false in BOTH, so nobody mounts the dialog and the notice is
-        // never seen at all. Reading `windows` also registers a snapshot read, so this re-evaluates
-        // when the first window closes and the role passes to the next one.
-        if (WindowManager.windows.firstOrNull()?.id == windowState.id) {
-            ai.rever.boss.performance.MemoryPressureNoticeDialog(
-                onRestartRequested = {
-                    ai.rever.boss.config.ResourceModeConfig
-                        .requestUltraLiteOnNextLaunch()
-                    // A real relaunch, via the path the updater and Browser Engine settings
-                    // already use. Closing this window instead only removed one entry from
-                    // WindowManager, so with a second window open a button labelled "Restart"
-                    // made the user's tabs vanish and left the app running in the old tier.
-                    ai.rever.boss.utils.ApplicationRestarter
-                        .restartApplication()
-                },
-            )
-        }
+            // Exactly one window mounts this: the watchdog is process-wide, so mounting it per window
+            // would show the same notice once per open window.
+            //
+            // Identity, not a count. `windowCount <= 1` looks equivalent but is the opposite bug: with
+            // two windows open it is false in BOTH, so nobody mounts the dialog and the notice is
+            // never seen at all. Reading `windows` also registers a snapshot read, so this re-evaluates
+            // when the first window closes and the role passes to the next one.
+            if (WindowManager.windows.firstOrNull()?.id == windowState.id) {
+                ai.rever.boss.performance.MemoryPressureNoticeDialog(
+                    onRestartRequested = {
+                        ai.rever.boss.config.ResourceModeConfig
+                            .requestUltraLiteOnNextLaunch()
+                        // A real relaunch, via the path the updater and Browser Engine settings
+                        // already use. Closing this window instead only removed one entry from
+                        // WindowManager, so with a second window open a button labelled "Restart"
+                        // made the user's tabs vanish and left the app running in the old tier.
+                        ai.rever.boss.utils.ApplicationRestarter
+                            .restartApplication()
+                    },
+                )
+            }
 
-        // Reset Browser Confirmation Dialog
-        if (showResetBrowserDialog) {
-            var isResetting by remember { mutableStateOf(false) }
+            // Reset Browser Confirmation Dialog
+            if (showResetBrowserDialog) {
+                var isResetting by remember { mutableStateOf(false) }
 
-            BossAlertDialog(
-                onDismissRequest = {
-                    if (!isResetting) {
-                        showResetBrowserDialog = false
-                        resetBrowserResult = null
-                    }
-                },
-                title = {
-                    Text("Reset Browser")
-                },
-                text = {
-                    Column {
+                BossAlertDialog(
+                    onDismissRequest = {
+                        if (!isResetting) {
+                            showResetBrowserDialog = false
+                            resetBrowserResult = null
+                        }
+                    },
+                    title = {
+                        Text("Reset Browser")
+                    },
+                    text = {
+                        Column {
+                            when {
+                                isResetting -> {
+                                    Text("Resetting browser profile...")
+                                    Spacer(
+                                        modifier =
+                                            androidx.compose.ui.Modifier
+                                                .height(8.dp),
+                                    )
+                                    Text("Please wait, this may take a moment.")
+                                }
+
+                                resetBrowserResult == null -> {
+                                    Text("This will reset the browser to fix persistent issues.")
+                                    Spacer(
+                                        modifier =
+                                            androidx.compose.ui.Modifier
+                                                .height(8.dp),
+                                    )
+                                    Text("The following will be cleared:")
+                                    Text("• Browser cache and cookies")
+                                    Text("• Saved login sessions")
+                                    Text("• Browser history")
+                                    Spacer(
+                                        modifier =
+                                            androidx.compose.ui.Modifier
+                                                .height(8.dp),
+                                    )
+                                    Text("All browser tabs will be closed. Continue?")
+                                }
+
+                                resetBrowserResult == true -> {
+                                    Text("✅ Browser reset successful!")
+                                    Spacer(
+                                        modifier =
+                                            androidx.compose.ui.Modifier
+                                                .height(8.dp),
+                                    )
+                                    Text("Please close any browser tabs and reopen them.")
+                                }
+
+                                else -> {
+                                    Text("❌ Browser reset failed.")
+                                    Spacer(
+                                        modifier =
+                                            androidx.compose.ui.Modifier
+                                                .height(8.dp),
+                                    )
+                                    Text("Please try restarting BOSS manually.")
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
                         when {
                             isResetting -> {
-                                Text("Resetting browser profile...")
-                                Spacer(
-                                    modifier =
-                                        androidx.compose.ui.Modifier
-                                            .height(8.dp),
-                                )
-                                Text("Please wait, this may take a moment.")
+                                // No button while resetting
                             }
 
                             resetBrowserResult == null -> {
-                                Text("This will reset the browser to fix persistent issues.")
-                                Spacer(
-                                    modifier =
-                                        androidx.compose.ui.Modifier
-                                            .height(8.dp),
-                                )
-                                Text("The following will be cleared:")
-                                Text("• Browser cache and cookies")
-                                Text("• Saved login sessions")
-                                Text("• Browser history")
-                                Spacer(
-                                    modifier =
-                                        androidx.compose.ui.Modifier
-                                            .height(8.dp),
-                                )
-                                Text("All browser tabs will be closed. Continue?")
-                            }
-
-                            resetBrowserResult == true -> {
-                                Text("✅ Browser reset successful!")
-                                Spacer(
-                                    modifier =
-                                        androidx.compose.ui.Modifier
-                                            .height(8.dp),
-                                )
-                                Text("Please close any browser tabs and reopen them.")
+                                Button(
+                                    onClick = {
+                                        isResetting = true
+                                        menuScope.launch {
+                                            val result = FluckEngine.resetBrowserProfile()
+                                            resetBrowserResult = result.success
+                                            isResetting = false
+                                        }
+                                    },
+                                    colors =
+                                        ButtonDefaults.buttonColors(
+                                            backgroundColor = BossTheme.colors.alert,
+                                        ),
+                                ) {
+                                    Text("Reset Browser", color = BossTheme.colors.onSignal)
+                                }
                             }
 
                             else -> {
-                                Text("❌ Browser reset failed.")
-                                Spacer(
-                                    modifier =
-                                        androidx.compose.ui.Modifier
-                                            .height(8.dp),
-                                )
-                                Text("Please try restarting BOSS manually.")
+                                Button(
+                                    onClick = {
+                                        showResetBrowserDialog = false
+                                        resetBrowserResult = null
+                                    },
+                                ) {
+                                    Text("Close")
+                                }
                             }
                         }
-                    }
-                },
-                confirmButton = {
-                    when {
-                        isResetting -> {
-                            // No button while resetting
-                        }
-
-                        resetBrowserResult == null -> {
-                            Button(
-                                onClick = {
-                                    isResetting = true
-                                    menuScope.launch {
-                                        val result = FluckEngine.resetBrowserProfile()
-                                        resetBrowserResult = result.success
-                                        isResetting = false
-                                    }
-                                },
-                                colors =
-                                    ButtonDefaults.buttonColors(
-                                        backgroundColor = BossTheme.colors.alert,
-                                    ),
-                            ) {
-                                Text("Reset Browser", color = BossTheme.colors.onSignal)
-                            }
-                        }
-
-                        else -> {
-                            Button(
+                    },
+                    dismissButton = {
+                        if (resetBrowserResult == null && !isResetting) {
+                            TextButton(
                                 onClick = {
                                     showResetBrowserDialog = false
-                                    resetBrowserResult = null
                                 },
                             ) {
-                                Text("Close")
+                                Text("Cancel")
                             }
                         }
-                    }
-                },
-                dismissButton = {
-                    if (resetBrowserResult == null && !isResetting) {
-                        TextButton(
-                            onClick = {
-                                showResetBrowserDialog = false
-                            },
-                        ) {
-                            Text("Cancel")
+                    },
+                )
+            }
+
+            // Reset Terminal Confirmation Dialog
+            if (showResetTerminalDialog) {
+                var isResetting by remember { mutableStateOf(false) }
+
+                BossAlertDialog(
+                    onDismissRequest = {
+                        if (!isResetting) {
+                            showResetTerminalDialog = false
+                            resetTerminalResult = null
                         }
-                    }
-                },
-            )
-        }
+                    },
+                    title = {
+                        Text("Reset Terminal")
+                    },
+                    text = {
+                        Column {
+                            when {
+                                isResetting -> {
+                                    Text("Resetting terminal sessions...")
+                                    Spacer(
+                                        modifier =
+                                            androidx.compose.ui.Modifier
+                                                .height(8.dp),
+                                    )
+                                    Text("Please wait, this may take a moment.")
+                                }
 
-        // Reset Terminal Confirmation Dialog
-        if (showResetTerminalDialog) {
-            var isResetting by remember { mutableStateOf(false) }
+                                resetTerminalResult == null -> {
+                                    Text("This will reset all terminals to fix persistent issues.")
+                                    Spacer(
+                                        modifier =
+                                            androidx.compose.ui.Modifier
+                                                .height(8.dp),
+                                    )
+                                    Text("The following will be cleared:")
+                                    Text("• All terminal sessions")
+                                    Text("• Terminal history in current session")
+                                    Text("• Running processes")
+                                    Spacer(
+                                        modifier =
+                                            androidx.compose.ui.Modifier
+                                                .height(8.dp),
+                                    )
+                                    Text("All terminals will be reset with fresh sessions. Continue?")
+                                }
 
-            BossAlertDialog(
-                onDismissRequest = {
-                    if (!isResetting) {
-                        showResetTerminalDialog = false
-                        resetTerminalResult = null
-                    }
-                },
-                title = {
-                    Text("Reset Terminal")
-                },
-                text = {
-                    Column {
+                                resetTerminalResult == true -> {
+                                    Text("✅ Terminal reset successful!")
+                                    Spacer(
+                                        modifier =
+                                            androidx.compose.ui.Modifier
+                                                .height(8.dp),
+                                    )
+                                    Text("Terminal tabs will refresh with new sessions automatically.")
+                                }
+
+                                else -> {
+                                    Text("❌ Terminal reset failed.")
+                                    Spacer(
+                                        modifier =
+                                            androidx.compose.ui.Modifier
+                                                .height(8.dp),
+                                    )
+                                    Text("Please try restarting BOSS manually.")
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
                         when {
                             isResetting -> {
-                                Text("Resetting terminal sessions...")
-                                Spacer(
-                                    modifier =
-                                        androidx.compose.ui.Modifier
-                                            .height(8.dp),
-                                )
-                                Text("Please wait, this may take a moment.")
+                                // No button while resetting
                             }
 
                             resetTerminalResult == null -> {
-                                Text("This will reset all terminals to fix persistent issues.")
-                                Spacer(
-                                    modifier =
-                                        androidx.compose.ui.Modifier
-                                            .height(8.dp),
-                                )
-                                Text("The following will be cleared:")
-                                Text("• All terminal sessions")
-                                Text("• Terminal history in current session")
-                                Text("• Running processes")
-                                Spacer(
-                                    modifier =
-                                        androidx.compose.ui.Modifier
-                                            .height(8.dp),
-                                )
-                                Text("All terminals will be reset with fresh sessions. Continue?")
-                            }
-
-                            resetTerminalResult == true -> {
-                                Text("✅ Terminal reset successful!")
-                                Spacer(
-                                    modifier =
-                                        androidx.compose.ui.Modifier
-                                            .height(8.dp),
-                                )
-                                Text("Terminal tabs will refresh with new sessions automatically.")
+                                Button(
+                                    onClick = {
+                                        isResetting = true
+                                        menuScope.launch {
+                                            try {
+                                                // Use IO dispatcher for resource disposal per CLAUDE.md threading guidelines
+                                                withContext(Dispatchers.IO) {
+                                                    TerminalAPIAccess.resetAllTerminals()
+                                                }
+                                                resetTerminalResult = true
+                                            } catch (e: Exception) {
+                                                bossWindowLogger.warn(
+                                                    LogCategory.TERMINAL,
+                                                    "Terminal reset failed - dialog shows failure state",
+                                                    error = e,
+                                                )
+                                                resetTerminalResult = false
+                                            }
+                                            isResetting = false
+                                        }
+                                    },
+                                    colors =
+                                        ButtonDefaults.buttonColors(
+                                            backgroundColor = BossTheme.colors.alert,
+                                        ),
+                                ) {
+                                    Text("Reset Terminal", color = BossTheme.colors.onSignal)
+                                }
                             }
 
                             else -> {
-                                Text("❌ Terminal reset failed.")
-                                Spacer(
-                                    modifier =
-                                        androidx.compose.ui.Modifier
-                                            .height(8.dp),
-                                )
-                                Text("Please try restarting BOSS manually.")
+                                Button(
+                                    onClick = {
+                                        showResetTerminalDialog = false
+                                        resetTerminalResult = null
+                                    },
+                                ) {
+                                    Text("Close")
+                                }
                             }
                         }
-                    }
-                },
-                confirmButton = {
-                    when {
-                        isResetting -> {
-                            // No button while resetting
-                        }
-
-                        resetTerminalResult == null -> {
-                            Button(
-                                onClick = {
-                                    isResetting = true
-                                    menuScope.launch {
-                                        try {
-                                            // Use IO dispatcher for resource disposal per CLAUDE.md threading guidelines
-                                            withContext(Dispatchers.IO) {
-                                                TerminalAPIAccess.resetAllTerminals()
-                                            }
-                                            resetTerminalResult = true
-                                        } catch (e: Exception) {
-                                            bossWindowLogger.warn(
-                                                LogCategory.TERMINAL,
-                                                "Terminal reset failed - dialog shows failure state",
-                                                error = e,
-                                            )
-                                            resetTerminalResult = false
-                                        }
-                                        isResetting = false
-                                    }
-                                },
-                                colors =
-                                    ButtonDefaults.buttonColors(
-                                        backgroundColor = BossTheme.colors.alert,
-                                    ),
-                            ) {
-                                Text("Reset Terminal", color = BossTheme.colors.onSignal)
-                            }
-                        }
-
-                        else -> {
-                            Button(
+                    },
+                    dismissButton = {
+                        if (resetTerminalResult == null && !isResetting) {
+                            TextButton(
                                 onClick = {
                                     showResetTerminalDialog = false
-                                    resetTerminalResult = null
                                 },
                             ) {
-                                Text("Close")
+                                Text("Cancel")
                             }
                         }
-                    }
-                },
-                dismissButton = {
-                    if (resetTerminalResult == null && !isResetting) {
-                        TextButton(
-                            onClick = {
-                                showResetTerminalDialog = false
-                            },
-                        ) {
-                            Text("Cancel")
-                        }
-                    }
-                },
-            )
-        }
+                    },
+                )
+            }
 
-        // Welcome Wizard Dialog
-        if (showWelcomeWizard) {
-            TerminalAPIAccess.TerminalOnboardingWizard(
-                onDismiss = { showWelcomeWizard = false },
-                onComplete = { showWelcomeWizard = false },
-            )
-        }
+            // Welcome Wizard Dialog
+            if (showWelcomeWizard) {
+                TerminalAPIAccess.TerminalOnboardingWizard(
+                    onDismiss = { showWelcomeWizard = false },
+                    onComplete = { showWelcomeWizard = false },
+                )
+            }
 
-        // Screen Capture Picker Dialog
-        val captureRequest by ScreenCaptureNotifier.captureRequest.collectAsState()
-        captureRequest?.let { request ->
-            ScreenCapturePickerDialog(
-                screens = request.screens,
-                windows = request.windows,
-                browsers = request.browsers,
-                onDismiss = { ScreenCaptureNotifier.cancel(request.requestId) },
-                onSelect = { source, audioMode ->
-                    ScreenCaptureNotifier.selectSource(request.requestId, source, audioMode)
-                },
-            )
-        }
+            // Screen Capture Picker Dialog
+            val captureRequest by ScreenCaptureNotifier.captureRequest.collectAsState()
+            captureRequest?.let { request ->
+                ScreenCapturePickerDialog(
+                    screens = request.screens,
+                    windows = request.windows,
+                    browsers = request.browsers,
+                    onDismiss = { ScreenCaptureNotifier.cancel(request.requestId) },
+                    onSelect = { source, audioMode ->
+                        ScreenCaptureNotifier.selectSource(request.requestId, source, audioMode)
+                    },
+                )
+            }
 
-        // Screen Recording permission rationale — explains why, before the macOS prompt.
-        val permissionRationale by ScreenCaptureNotifier.permissionRationale.collectAsState()
-        if (permissionRationale != null) {
-            BossAlertDialog(
-                onDismissRequest = { ScreenCaptureNotifier.resolvePermissionRationale(false) },
-                title = { Text("Allow screen sharing?") },
-                text = {
-                    Text(
-                        "To share a screen, window, or browser tab, BOSS needs macOS " +
-                            "Screen Recording permission. macOS will now ask you to allow \u201CBOSS\u201D. " +
-                            "You can change this anytime in System Settings \u203A Privacy & Security \u203A Screen Recording.",
-                    )
-                },
-                confirmButton = {
-                    TextButton(onClick = { ScreenCaptureNotifier.resolvePermissionRationale(true) }) { Text("Continue") }
-                },
-                dismissButton = {
-                    TextButton(onClick = { ScreenCaptureNotifier.resolvePermissionRationale(false) }) { Text("Not now") }
-                },
-            )
+            // Screen Recording permission rationale — explains why, before the macOS prompt.
+            val permissionRationale by ScreenCaptureNotifier.permissionRationale.collectAsState()
+            if (permissionRationale != null) {
+                BossAlertDialog(
+                    onDismissRequest = { ScreenCaptureNotifier.resolvePermissionRationale(false) },
+                    title = { Text("Allow screen sharing?") },
+                    text = {
+                        Text(
+                            "To share a screen, window, or browser tab, BOSS needs macOS " +
+                                "Screen Recording permission. macOS will now ask you to allow \u201CBOSS\u201D. " +
+                                "You can change this anytime in System Settings \u203A Privacy & Security \u203A Screen Recording.",
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { ScreenCaptureNotifier.resolvePermissionRationale(true) }) { Text("Continue") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { ScreenCaptureNotifier.resolvePermissionRationale(false) }) { Text("Not now") }
+                    },
+                )
+            }
         }
     }
 }

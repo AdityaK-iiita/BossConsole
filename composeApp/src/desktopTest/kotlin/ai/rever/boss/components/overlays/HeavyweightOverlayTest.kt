@@ -277,6 +277,7 @@ class HeavyweightOverlayTest {
         OverlayConfig.hideHeavyweightTooltip = null
         OverlayConfig.heavyweightHud = null
         OverlayConfig.heavyweightGhost = null
+        OverlayConfig.heavyweightCorner = null
         OverlayConfig.openHeavyweightPopups = 0
     }
 
@@ -290,6 +291,7 @@ class HeavyweightOverlayTest {
         assertNull(OverlayConfig.heavyweightPopup)
         assertNull(OverlayConfig.heavyweightModal)
         assertNull(OverlayConfig.heavyweightTooltip)
+        assertNull(OverlayConfig.heavyweightCorner)
         assertNull(OverlayConfig.hideHeavyweightTooltip)
         assertNull(OverlayConfig.heavyweightHud)
         assertNull(OverlayConfig.heavyweightGhost)

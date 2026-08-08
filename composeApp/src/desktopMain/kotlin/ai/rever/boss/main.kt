@@ -460,6 +460,14 @@ fun main(args: Array<String>) {
         ai.rever.boss.components.overlays
             .HeavyweightGhost(size, ghostContent)
     }
+    ai.rever.boss.components.overlays.OverlayConfig.heavyweightCorner = {
+        alignment,
+        initialSize,
+        cornerContent,
+        ->
+        ai.rever.boss.components.overlays
+            .HeavyweightCorner(alignment, initialSize, cornerContent)
+    }
     // plugin-ui-core owns the modal registry (plugins draw dialogs too) and depends on nothing but
     // Compose, so it cannot log. Give it this logger instead: the condition it reports is a dialog
     // that silently fell back to lightweight and is now hidden behind the page, which is invisible
