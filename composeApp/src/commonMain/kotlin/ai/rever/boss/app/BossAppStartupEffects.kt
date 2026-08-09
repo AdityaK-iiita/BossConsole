@@ -1,8 +1,6 @@
 package ai.rever.boss.app
 
-import ai.rever.boss.components.events.PanelEventBus
 import ai.rever.boss.components.plugin.DefaultPlugin
-import ai.rever.boss.components.plugin.PanelIds
 import ai.rever.boss.components.plugin.tab_types.fluck.FluckTabInfo
 import ai.rever.boss.components.plugin.tab_types.registerPanelHostTab
 import ai.rever.boss.components.registery.PanelComponentStoreRegistry
@@ -16,6 +14,7 @@ import ai.rever.boss.components.workspaces.WorkspaceSettingsManager
 import ai.rever.boss.components.workspaces.applyWorkspace
 import ai.rever.boss.components.workspaces.asLastSession
 import ai.rever.boss.components.workspaces.extractCurrentWorkspace
+import ai.rever.boss.components.workspaces.requiresProject
 import ai.rever.boss.components.workspaces.workspaceManager
 import ai.rever.boss.consumePendingInitialProject
 import ai.rever.boss.consumePendingInitialTab
@@ -175,8 +174,7 @@ internal fun BossAppStartupEffects(state: BossAppState) {
         val pendingProject = consumePendingInitialProject(windowId)
         if (pendingProject != null) {
             windowProjectState.selectProject(pendingProject)
-            PanelEventBus.openPanel(PanelIds.CODEBASE, sourceWindowId = windowId)
-            PanelEventBus.openPanel(PanelIds.RUN_CONFIGURATIONS, sourceWindowId = windowId)
+            openProjectPanels(windowId)
         }
     }
 
@@ -189,8 +187,7 @@ internal fun BossAppStartupEffects(state: BossAppState) {
     LaunchedEffect(windowProjectState) {
         val initialProject = windowProjectState.selectedProject.value
         if (initialProject.path.isNotEmpty()) {
-            PanelEventBus.openPanel(PanelIds.CODEBASE, sourceWindowId = windowId)
-            PanelEventBus.openPanel(PanelIds.RUN_CONFIGURATIONS, sourceWindowId = windowId)
+            openProjectPanels(windowId)
         }
     }
 
@@ -324,7 +321,17 @@ internal fun BossAppStartupEffects(state: BossAppState) {
     LaunchedEffect(selectedProject.path) {
         if (selectedProject.path.isNotEmpty()) {
             val defaultWorkspace = WorkspaceSettingsManager.getDefaultWorkspace()
-            if (defaultWorkspace != null) {
+            // A workspace that needs no project has nothing to re-derive from a new one, so
+            // re-applying it would only clearAllPanels over whatever the user has open. That
+            // is new since the fresh-start apply: a Windows install now comes up ON the
+            // browser workspace, browses somewhere, and selecting a project would have
+            // discarded the page. Project-shaped workspaces still re-apply, which is the
+            // point of this effect - their tabs are built from {projectPath}.
+            val alreadyApplied =
+                defaultWorkspace != null &&
+                    !defaultWorkspace.requiresProject() &&
+                    workspaceManager.currentWorkspace.value?.id == defaultWorkspace.id
+            if (defaultWorkspace != null && !alreadyApplied) {
                 // Apply the workspace
                 applyWorkspace(defaultWorkspace, splitViewState, windowProjectState)
                 workspaceManager.loadWorkspace(defaultWorkspace)
@@ -335,8 +342,7 @@ internal fun BossAppStartupEffects(state: BossAppState) {
     // Open CodeBase and RunConfigurations panels when project is selected (reactive architecture)
     LaunchedEffect(selectedProject.path, windowId) {
         if (selectedProject.path.isNotEmpty()) {
-            PanelEventBus.openPanel(PanelIds.CODEBASE, sourceWindowId = windowId)
-            PanelEventBus.openPanel(PanelIds.RUN_CONFIGURATIONS, sourceWindowId = windowId)
+            openProjectPanels(windowId)
         }
     }
 
@@ -592,6 +598,10 @@ internal fun BossAppStartupEffects(state: BossAppState) {
                             } catch (e: Exception) {
                                 logger.error(LogCategory.WORKSPACE, "Last Session restore failed - continuing startup", error = e)
                             }
+                        } else {
+                            // No Last Session: this is the layout a fresh install opens on.
+                            // Before markHandlersReady, since applyWorkspace clears panels.
+                            applyDefaultWorkspaceOnFreshStart(splitViewState, windowProjectState)
                         }
 
                         // Mark workspace restoration as complete (for auto-show dialog logic)
@@ -621,7 +631,10 @@ internal fun BossAppStartupEffects(state: BossAppState) {
             // plugin tab types) — let it mark handlers ready itself, otherwise
             // handler-created tabs get destroyed by the restore's clearAllPanels.
             if (!state.workspaceRestorationComplete && workspaceManager.currentWorkspace.value == null) {
-                // Still not complete after timeout - assume fresh install
+                // Still not complete after timeout - assume fresh install. Nothing was
+                // restored and there are no workspaces on disk, so this is the very first
+                // launch: apply the default layout before handlers can create tabs.
+                applyDefaultWorkspaceOnFreshStart(splitViewState, windowProjectState)
                 state.workspaceRestorationComplete = true
                 state.markHandlersReady(isSessionResolved)
             }

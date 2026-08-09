@@ -163,6 +163,22 @@ fun main(args: Array<String>) {
     ai.rever.boss.services.llm.BrokeredCredentialAccess
         .initialize(ai.rever.boss.llm.BrokeredCredentialProviderImpl)
 
+    // Warm the two settings singletons that load their file synchronously in `init`
+    // (WorkspaceSettingsManager and FocusModeSettingsManager). Both must be readable the
+    // instant a startup effect asks - the workspace one decides which layout a window opens
+    // on, and losing that read to an async load is the bug this replaced - but their first
+    // accessor would otherwise be a composition-thread LaunchedEffect, putting mkdirs, a
+    // read, and on the first launch after an upgrade a migration write, on the UI thread.
+    //
+    // This narrows that rather than eliminating it, and is correct either way: JVM class
+    // initialisation is locked, so a window that gets there first simply waits for this to
+    // finish instead of racing it. Launched here, hundreds of milliseconds of setup before
+    // any window composes, it has essentially always finished by then.
+    startupScope.launch(Dispatchers.IO) {
+        ai.rever.boss.components.workspaces.WorkspaceSettingsManager.currentSettings
+        ai.rever.boss.focusmode.FocusModeSettingsManager.currentSettings
+    }
+
     // Set WM_CLASS for Linux desktop integration (must be before any AWT init)
     setLinuxWMClass()
 

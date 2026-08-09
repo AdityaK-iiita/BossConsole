@@ -19,6 +19,7 @@ import ai.rever.boss.components.window_panel.components.main_window_panels.TabCy
 import ai.rever.boss.components.workspaces.applyWorkspace
 import ai.rever.boss.components.workspaces.extractCurrentWorkspace
 import ai.rever.boss.components.workspaces.workspaceManager
+import ai.rever.boss.focusmode.FocusModeSettings
 import ai.rever.boss.handleTabDropResult
 import ai.rever.boss.plugin.api.LocalBookmarkDataProvider
 import ai.rever.boss.plugin.api.LocalProjectPath
@@ -185,8 +186,7 @@ internal fun BossAppCompositionLocals(
 internal fun BossAppScaffold(
     state: BossAppState,
     reveal: FocusModeRevealState,
-    isFocusModeEnabled: Boolean,
-    isAutoRevealEnabled: Boolean,
+    focusModeSettings: FocusModeSettings,
     revealOffsetDp: Dp,
     showTitleBar: Boolean,
     onToggleMaximize: (() -> Unit)?,
@@ -404,8 +404,7 @@ internal fun BossAppScaffold(
             // Hover reveal strips for focus mode - dynamic sizing to avoid blocking clicks
             FocusModeHoverStrips(
                 state = reveal,
-                isFocusModeEnabled = isFocusModeEnabled,
-                isAutoRevealEnabled = isAutoRevealEnabled,
+                settings = focusModeSettings,
                 revealOffsetDp = revealOffsetDp,
             )
 

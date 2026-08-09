@@ -3,16 +3,12 @@ package ai.rever.boss.components.workspaces
 import ai.rever.boss.plugin.pathutils.BossDirectories
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
-import java.io.File
 
 /**
  * Desktop implementation of WorkspaceSettingsManager.
@@ -28,46 +24,76 @@ actual object WorkspaceSettingsManager {
             encodeDefaults = true
         }
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-
-    private val _currentSettings = MutableStateFlow(WorkspaceSettings())
+    // Seeded at the CURRENT version, so 0 means exactly one thing: a key absent from a
+    // file on disk. An in-memory default carrying 0 would re-arm the 0 -> 1 migration
+    // for the next launch as soon as anything persisted it through updateSettings.
+    private val _currentSettings =
+        MutableStateFlow(WorkspaceSettings(settingsVersion = WorkspaceSettings.CURRENT_SETTINGS_VERSION))
     actual val currentSettings: StateFlow<WorkspaceSettings> = _currentSettings.asStateFlow()
 
     init {
-        scope.launch {
-            loadSettingsAsync()
+        // Synchronous, like FocusModeSettingsManager, and for the same reason: this
+        // object initialises on first access, and its first accessor is the startup
+        // effect that immediately reads getDefaultWorkspace(). An async load loses that
+        // race every time, so the compiled-in default would win over the stored choice -
+        // on Windows that means applying the browser workspace over the layout of a user
+        // who picked something else, or "none". One small JSON file, read once.
+        loadSettingsSync()
+    }
+
+    private fun loadSettingsSync() {
+        try {
+            settingsFile.parentFile?.mkdirs()
+
+            if (!settingsFile.exists()) {
+                writeSettings(_currentSettings.value)
+                logger.debug(LogCategory.SYSTEM, "Created default settings file")
+                return
+            }
+
+            val settings = json.decodeFromString<WorkspaceSettings>(settingsFile.readText())
+            val migrated = WorkspaceSettingsMigrations.migrate(settings)
+            _currentSettings.value = migrated ?: settings
+            if (migrated == null) {
+                logger.debug(LogCategory.SYSTEM, "Loaded settings")
+                return
+            }
+
+            writeSettings(migrated)
+            // INFO only when a default actually moved. Every pre-v1 file is stamped, so
+            // logging the stamp at INFO would put a "Migrated" line on every existing
+            // install of every platform while nothing changed.
+            if (migrated.defaultWorkspaceId != settings.defaultWorkspaceId) {
+                logger.info(
+                    LogCategory.SYSTEM,
+                    "Migrated default workspace",
+                    mapOf(
+                        "from" to settings.defaultWorkspaceId,
+                        "to" to migrated.defaultWorkspaceId,
+                    ),
+                )
+            } else {
+                logger.debug(LogCategory.SYSTEM, "Stamped workspace settings version")
+            }
+        } catch (e: Exception) {
+            logger.warn(LogCategory.SYSTEM, "Error loading settings", error = e)
         }
     }
 
-    private suspend fun loadSettingsAsync() =
-        withContext(Dispatchers.IO) {
-            try {
-                settingsFile.parentFile?.mkdirs()
-
-                if (settingsFile.exists()) {
-                    val content = settingsFile.readText()
-                    val settings = json.decodeFromString<WorkspaceSettings>(content)
-                    _currentSettings.value = settings
-                    logger.debug(LogCategory.SYSTEM, "Loaded settings")
-                } else {
-                    val content = json.encodeToString(WorkspaceSettings.serializer(), _currentSettings.value)
-                    settingsFile.writeText(content)
-                    logger.debug(LogCategory.SYSTEM, "Created default settings file")
-                }
-            } catch (e: Exception) {
-                logger.warn(LogCategory.SYSTEM, "Error loading settings", error = e)
-            }
+    private fun writeSettings(settings: WorkspaceSettings) {
+        try {
+            settingsFile.writeText(json.encodeToString(WorkspaceSettings.serializer(), settings))
+            logger.debug(LogCategory.SYSTEM, "Settings saved")
+        } catch (e: Exception) {
+            logger.warn(LogCategory.SYSTEM, "Error saving settings", error = e)
         }
+    }
 
+    // One write path. The load runs it on whatever thread touched this object first
+    // (see init); every other caller gets it off the IO dispatcher.
     actual suspend fun saveSettings() =
         withContext(Dispatchers.IO) {
-            try {
-                val content = json.encodeToString(WorkspaceSettings.serializer(), _currentSettings.value)
-                settingsFile.writeText(content)
-                logger.debug(LogCategory.SYSTEM, "Settings saved")
-            } catch (e: Exception) {
-                logger.warn(LogCategory.SYSTEM, "Error saving settings", error = e)
-            }
+            writeSettings(_currentSettings.value)
         }
 
     actual suspend fun updateSettings(settings: WorkspaceSettings) {
@@ -76,7 +102,16 @@ actual object WorkspaceSettingsManager {
     }
 
     actual suspend fun setDefaultWorkspaceId(workspaceId: String) {
-        updateSettings(_currentSettings.value.copy(defaultWorkspaceId = workspaceId))
+        // Stamp the schema version too: an explicit choice must never be rewritten by a
+        // migration on the next launch. maxOf, so an older build writing over a newer
+        // file cannot stamp the version backwards and re-arm a step that already ran.
+        updateSettings(
+            _currentSettings.value.copy(
+                defaultWorkspaceId = workspaceId,
+                settingsVersion =
+                    maxOf(_currentSettings.value.settingsVersion, WorkspaceSettings.CURRENT_SETTINGS_VERSION),
+            ),
+        )
     }
 
     actual fun getDefaultWorkspace(): LayoutWorkspace? {

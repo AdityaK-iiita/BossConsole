@@ -102,7 +102,6 @@
     <ID>CyclomaticComplexMethod:FluckEngine.kt$FluckEngine$private fun classifyError(e: Throwable): EngineInitError</ID>
     <ID>CyclomaticComplexMethod:FluckEngine.kt$FluckEngine$private fun createEngineInstance( chromiumDir: java.nio.file.Path, profileDirPath: java.nio.file.Path, ): Engine</ID>
     <ID>CyclomaticComplexMethod:FluckEngine.kt$FluckEngine$private fun killStaleChromiumProcesses()</ID>
-    <ID>CyclomaticComplexMethod:FocusModeReveal.kt$@Composable internal fun rememberFocusModeReveal( isFocusModeEnabled: Boolean, revealDelayMs: Long, ): FocusModeRevealState</ID>
     <ID>CyclomaticComplexMethod:FormFieldDetector.kt$FormFieldDetector$private fun determineFieldType( inputType: String, fieldName: String, fieldId: String, placeholder: String, autocomplete: String, className: String, ariaLabel: String, ): FieldType</ID>
     <ID>CyclomaticComplexMethod:FormFieldInjector.kt$FormFieldInjector$suspend fun fillCredentials( browser: LockedBrowser, username: String, password: String, mode: FillMode = FillMode.BOTH, ): FillResult</ID>
     <ID>CyclomaticComplexMethod:GlobalSearchDialog.kt$@Composable fun GlobalSearchDialog( projectPath: String, workspaceManager: WorkspaceManager, onDismiss: () -&gt; Unit, onFileSelect: (String) -&gt; Unit, onTabSelect: ((windowId: String, panelId: String, tabId: String) -&gt; Unit)? = null, onBookmarkSelect: ((bookmarkId: String, collectionId: String) -&gt; Unit)? = null, onRunConfigSelect: ((configId: String) -&gt; Unit)? = null, onCommandSelect: ((actionId: String) -&gt; Unit)? = null, )</ID>
@@ -213,7 +212,7 @@
     <ID>LongMethod:BossAppDialogs.kt$@Composable internal fun BossAppDialogs(state: BossAppState)</ID>
     <ID>LongMethod:BossAppEventBusEffects.kt$@Composable internal fun BossAppEventBusEffects(state: BossAppState)</ID>
     <ID>LongMethod:BossAppMenuActionEffects.kt$@Composable internal fun BossAppMenuActionEffects( state: BossAppState, reveal: FocusModeRevealState, )</ID>
-    <ID>LongMethod:BossAppScaffold.kt$@Composable internal fun BossAppScaffold( state: BossAppState, reveal: FocusModeRevealState, isFocusModeEnabled: Boolean, isAutoRevealEnabled: Boolean, revealOffsetDp: Dp, showTitleBar: Boolean, onToggleMaximize: (() -&gt; Unit)?, )</ID>
+    <ID>LongMethod:BossAppScaffold.kt$@Composable internal fun BossAppScaffold( state: BossAppState, reveal: FocusModeRevealState, focusModeSettings: FocusModeSettings, revealOffsetDp: Dp, showTitleBar: Boolean, onToggleMaximize: (() -&gt; Unit)?, )</ID>
     <ID>LongMethod:BossAppStartupEffects.kt$@Composable internal fun BossAppStartupEffects(state: BossAppState)</ID>
     <ID>LongMethod:BossAppWithAuth.kt$@Composable fun ComponentContext.BossAppWithAuth( windowId: String, isFirstWindow: Boolean = false, panelRegistry: ai.rever.boss.components.registery.PanelRegistry, onToggleMaximize: (() -&gt; Unit)? = null, )</ID>
     <ID>LongMethod:BossBottomBar.kt$@Composable fun RowScope.BossLeftBottomBar(tabsComponent: BossTabsComponent? = null)</ID>
@@ -290,7 +289,6 @@
     <ID>LongMethod:FluckEngine.kt$FluckEngine$private fun killStaleChromiumProcesses()</ID>
     <ID>LongMethod:FluckEngine.kt$FluckEngine$suspend fun resetBrowserProfile(): ResetResult</ID>
     <ID>LongMethod:FluckEngine.kt$FluckEngine.BrowserFindBar$private fun createDialog(owner: java.awt.Window)</ID>
-    <ID>LongMethod:FocusModeReveal.kt$@Composable internal fun rememberFocusModeReveal( isFocusModeEnabled: Boolean, revealDelayMs: Long, ): FocusModeRevealState</ID>
     <ID>LongMethod:FocusModeSettings.kt$@Composable fun FocusModeSettings()</ID>
     <ID>LongMethod:FormFieldDetector.kt$FormFieldDetector$fun injectFormDetectionScript(browser: LockedBrowser)</ID>
     <ID>LongMethod:FormFieldInjector.kt$FormFieldInjector$private suspend fun applyDiscreteMode(browser: LockedBrowser)</ID>
@@ -478,7 +476,6 @@
     <ID>MatchingDeclarationName:DesktopWorkspaceFileManager.kt$WorkspaceFileManager</ID>
     <ID>MatchingDeclarationName:DesktopWorkspaceSettingsManager.kt$WorkspaceSettingsManager</ID>
     <ID>MatchingDeclarationName:FluckPanelProviders.kt$FluckPanelContentProviderImpl : FluckPanelContentProvider</ID>
-    <ID>MatchingDeclarationName:FocusModeReveal.kt$FocusModeRevealState</ID>
     <ID>MatchingDeclarationName:NewTabDialog.desktop.kt$UrlHistoryProvider</ID>
     <ID>MatchingDeclarationName:PluginCrashFallbackUI.kt$PluginProcessState</ID>
     <ID>MatchingDeclarationName:PresetDefinitions.kt$EmacsPresetDefinition</ID>

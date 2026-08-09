@@ -31,13 +31,34 @@ fun SplitConfig.extractPanels(prefix: String = ""): List<Pair<String, String>> =
  * Note: This object stays in composeApp as it contains project-specific configuration.
  */
 object PredefinedWorkspaces {
-    private fun generatePanelId() = "panel-${System.currentTimeMillis()}-${(Math.random() * 10000).toInt()}"
+    // A counter, not a timestamp plus a random draw: this whole list is built in one
+    // initializer, so every id would be minted in the same millisecond and collide on
+    // a 1-in-10000 draw. Panel ids key the split tree, so a collision is not cosmetic.
+    // A plain var is enough - the only caller is the single-threaded initializer below.
+    private var panelIdCounter = 0
+
+    private fun generatePanelId() = "panel-predefined-${++panelIdCounter}"
+
+    /** Id of the browser-only workspace, the platform default on Windows. */
+    const val BROWSER_ONLY_ID = "workspace-browser"
+
+    /** Id of the terminal + browser workspace, the platform default everywhere else. */
+    const val CLAUDE_CODE_ID = "workspace-claude-code"
+
+    /**
+     * Home page the browser-only workspace opens with.
+     *
+     * The `www` host, matching `JxBrowserConfig.defaultUrl`, `Fluck`'s fallback and the
+     * recent-pages seed: the apex 301s here, so the other spelling would cost a redirect
+     * and put the default workspace on a different origin from the browser's own default.
+     */
+    const val BROWSER_ONLY_URL = "https://www.risalabs.ai"
 
     val allWorkspaces =
         listOf(
             // Claude Code: Terminal + Browser
             LayoutWorkspace(
-                id = "workspace-claude-code",
+                id = CLAUDE_CODE_ID,
                 name = "Claude Code",
                 description = "Terminal with Claude CLI + Browser with GitHub",
                 layout =
@@ -321,6 +342,38 @@ object PredefinedWorkspaces {
                                         ),
                                 ),
                             ),
+                    ),
+            ),
+            // Browser only: a single browser panel on the BOSS home page.
+            // The default on Windows, where the terminal-first layouts are a poor
+            // first run (see defaultWorkspaceIdFor in WorkspaceSettingsManager.kt).
+            //
+            // Appended rather than prepended: this list is the order of the Settings
+            // picker and the workspace menu on every platform, and one platform's
+            // default is not a reason to reshuffle what everyone else sees.
+            //
+            // "Browser Only", not "Browser": WorkspaceManager identifies predefined
+            // workspaces by NAME (WorkspaceManager.kt:63 drops a saved workspace whose
+            // name collides, and WorkspaceButton decides renameable/deletable the same
+            // way), so a short generic name would silently swallow a user's own
+            // hand-rolled single-browser layout.
+            LayoutWorkspace(
+                id = BROWSER_ONLY_ID,
+                name = "Browser Only",
+                description = "A single browser panel on $BROWSER_ONLY_URL",
+                layout =
+                    SinglePanel(
+                        PanelConfig(
+                            id = generatePanelId(),
+                            tabs =
+                                listOf(
+                                    TabConfig(
+                                        type = "browser",
+                                        title = "RISA Labs",
+                                        url = BROWSER_ONLY_URL,
+                                    ),
+                                ),
+                        ),
                     ),
             ),
         )

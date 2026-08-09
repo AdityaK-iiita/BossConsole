@@ -1,5 +1,7 @@
 package ai.rever.boss.app
 
+import ai.rever.boss.focusmode.FocusModeEdge
+import ai.rever.boss.focusmode.FocusModeSettings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -21,235 +23,190 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.delay
 
 /**
+ * Hover-reveal state for one window edge.
+ *
+ * Three layers, in order:
+ * - [hoveringStrip]: raw cursor presence in the invisible edge strip
+ * - [hoverRevealed]: set after the reveal delay threshold is met
+ * - [shown]: debounced visibility with a grace period, so the bar doesn't flicker
+ *   while the mouse travels from the strip onto the revealed content
+ */
+internal class FocusModeEdgeRevealState {
+    var hoveringStrip by mutableStateOf(false)
+    var hoverRevealed by mutableStateOf(false)
+    var shown by mutableStateOf(false)
+
+    /** Hover on the revealed bar itself, which holds it open. */
+    val interactionSource = MutableInteractionSource()
+}
+
+/**
  * Focus-mode hover-reveal state for the four window edges.
  *
- * Each edge has three layers of state:
- * - `hovering*Strip`: raw cursor presence in the invisible edge strip
- * - `hoverReveal*`: set after the reveal delay threshold is met
- * - `show*`: debounced visibility with a grace period, so the bar doesn't
- *   flicker while the mouse travels from the strip onto the revealed content
+ * The named `show*` / `*InteractionSource` accessors are what the scaffold and the
+ * menu actions bind to; [get] is the per-edge view the effects and strips use.
  */
 internal class FocusModeRevealState {
-    // Hovering states track raw cursor position in hover strips
-    var hoveringTopStrip by mutableStateOf(false)
-    var hoveringLeftStrip by mutableStateOf(false)
-    var hoveringRightStrip by mutableStateOf(false)
-    var hoveringBottomStrip by mutableStateOf(false)
+    private val edges = FocusModeEdge.entries.associateWith { FocusModeEdgeRevealState() }
 
-    // Reveal states are set after delay threshold is met
-    var hoverRevealTop by mutableStateOf(false)
-    var hoverRevealLeft by mutableStateOf(false)
-    var hoverRevealRight by mutableStateOf(false)
-    var hoverRevealBottom by mutableStateOf(false)
+    operator fun get(edge: FocusModeEdge): FocusModeEdgeRevealState = edges.getValue(edge)
 
-    // Debounced visibility states with grace period for smoother transitions
-    var showTopBar by mutableStateOf(false)
-    var showLeftSidebar by mutableStateOf(false)
-    var showRightSidebar by mutableStateOf(false)
-    var showBottomBar by mutableStateOf(false)
+    var showTopBar: Boolean
+        get() = this[FocusModeEdge.TOP].shown
+        set(value) {
+            this[FocusModeEdge.TOP].shown = value
+        }
 
-    // Interaction sources for sidebar hover tracking
-    val topBarInteractionSource = MutableInteractionSource()
-    val leftSidebarInteractionSource = MutableInteractionSource()
-    val rightSidebarInteractionSource = MutableInteractionSource()
-    val bottomBarInteractionSource = MutableInteractionSource()
+    var showLeftSidebar: Boolean
+        get() = this[FocusModeEdge.LEFT].shown
+        set(value) {
+            this[FocusModeEdge.LEFT].shown = value
+        }
+
+    var showRightSidebar: Boolean
+        get() = this[FocusModeEdge.RIGHT].shown
+        set(value) {
+            this[FocusModeEdge.RIGHT].shown = value
+        }
+
+    var showBottomBar: Boolean
+        get() = this[FocusModeEdge.BOTTOM].shown
+        set(value) {
+            this[FocusModeEdge.BOTTOM].shown = value
+        }
+
+    val topBarInteractionSource get() = this[FocusModeEdge.TOP].interactionSource
+    val leftSidebarInteractionSource get() = this[FocusModeEdge.LEFT].interactionSource
+    val rightSidebarInteractionSource get() = this[FocusModeEdge.RIGHT].interactionSource
+    val bottomBarInteractionSource get() = this[FocusModeEdge.BOTTOM].interactionSource
 }
 
 /**
  * Creates the reveal state and runs its per-edge delay and grace-period effects.
- * When focus mode is off, all four bars are simply shown.
+ *
+ * Each edge is gated on [FocusModeSettings.hides] rather than on focus mode as a
+ * whole: an edge focus mode is not set to clear is simply shown, exactly as when
+ * focus mode is off. That is what keeps the sidebars up on Windows, where
+ * hover-reveal cannot fire.
  */
 @Composable
-internal fun rememberFocusModeReveal(
-    isFocusModeEnabled: Boolean,
-    revealDelayMs: Long,
-): FocusModeRevealState {
+internal fun rememberFocusModeReveal(settings: FocusModeSettings): FocusModeRevealState {
     val state = remember { FocusModeRevealState() }
+    FocusModeEdge.entries.forEach { edge ->
+        EdgeRevealEffects(
+            edge = state[edge],
+            hidden = settings.hides(edge),
+            revealDelayMs = settings.revealDelayMs,
+        )
+    }
+    return state
+}
 
-    // Track hover state on revealed content itself
-    val topBarHovered by state.topBarInteractionSource.collectIsHoveredAsState()
-    val leftSidebarHovered by state.leftSidebarInteractionSource.collectIsHoveredAsState()
-    val rightSidebarHovered by state.rightSidebarInteractionSource.collectIsHoveredAsState()
-    val bottomBarHovered by state.bottomBarInteractionSource.collectIsHoveredAsState()
+/**
+ * The delay-then-reveal and grace-period-then-hide effects for a single edge.
+ *
+ * [hidden] is the whole gate: an edge focus mode does not clear is simply shown and
+ * never runs a timer.
+ */
+@Composable
+private fun EdgeRevealEffects(
+    edge: FocusModeEdgeRevealState,
+    hidden: Boolean,
+    revealDelayMs: Long,
+) {
+    // Hover on the revealed bar itself holds it open while the pointer is on it.
+    val barHovered by edge.interactionSource.collectIsHoveredAsState()
 
     // Apply reveal delay before triggering reveal
-    LaunchedEffect(state.hoveringTopStrip, revealDelayMs) {
-        if (state.hoveringTopStrip) {
+    LaunchedEffect(edge.hoveringStrip, revealDelayMs) {
+        if (edge.hoveringStrip) {
             delay(revealDelayMs)
-            state.hoverRevealTop = true
+            edge.hoverRevealed = true
         } else {
-            state.hoverRevealTop = false
-        }
-    }
-
-    LaunchedEffect(state.hoveringLeftStrip, revealDelayMs) {
-        if (state.hoveringLeftStrip) {
-            delay(revealDelayMs)
-            state.hoverRevealLeft = true
-        } else {
-            state.hoverRevealLeft = false
-        }
-    }
-
-    LaunchedEffect(state.hoveringRightStrip, revealDelayMs) {
-        if (state.hoveringRightStrip) {
-            delay(revealDelayMs)
-            state.hoverRevealRight = true
-        } else {
-            state.hoverRevealRight = false
-        }
-    }
-
-    LaunchedEffect(state.hoveringBottomStrip, revealDelayMs) {
-        if (state.hoveringBottomStrip) {
-            delay(revealDelayMs)
-            state.hoverRevealBottom = true
-        } else {
-            state.hoverRevealBottom = false
+            edge.hoverRevealed = false
         }
     }
 
     // Add grace period before hiding to prevent flicker when moving mouse from strip to sidebar
-    LaunchedEffect(state.hoverRevealTop, topBarHovered, isFocusModeEnabled) {
-        if (!isFocusModeEnabled) {
-            state.showTopBar = true
-        } else if (state.hoverRevealTop || topBarHovered) {
-            state.showTopBar = true
+    LaunchedEffect(edge.hoverRevealed, barHovered, hidden) {
+        if (!hidden || edge.hoverRevealed || barHovered) {
+            edge.shown = true
         } else {
-            // Add 2000ms delay before hiding for menu interactions
-            delay(2000)
-            if (!state.hoverRevealTop && !topBarHovered) {
-                state.showTopBar = false
+            // Hold the bar briefly so an open menu is not yanked away
+            delay(HIDE_GRACE_PERIOD_MS)
+            if (!edge.hoverRevealed && !barHovered) {
+                edge.shown = false
             }
         }
     }
-
-    LaunchedEffect(state.hoverRevealLeft, leftSidebarHovered, isFocusModeEnabled) {
-        if (!isFocusModeEnabled) {
-            state.showLeftSidebar = true
-        } else if (state.hoverRevealLeft || leftSidebarHovered) {
-            state.showLeftSidebar = true
-        } else {
-            // Add 2000ms delay before hiding for menu interactions
-            delay(2000)
-            if (!state.hoverRevealLeft && !leftSidebarHovered) {
-                state.showLeftSidebar = false
-            }
-        }
-    }
-
-    LaunchedEffect(state.hoverRevealRight, rightSidebarHovered, isFocusModeEnabled) {
-        if (!isFocusModeEnabled) {
-            state.showRightSidebar = true
-        } else if (state.hoverRevealRight || rightSidebarHovered) {
-            state.showRightSidebar = true
-        } else {
-            // Add 2000ms delay before hiding for menu interactions
-            delay(2000)
-            if (!state.hoverRevealRight && !rightSidebarHovered) {
-                state.showRightSidebar = false
-            }
-        }
-    }
-
-    LaunchedEffect(state.hoverRevealBottom, bottomBarHovered, isFocusModeEnabled) {
-        if (!isFocusModeEnabled) {
-            state.showBottomBar = true
-        } else if (state.hoverRevealBottom || bottomBarHovered) {
-            state.showBottomBar = true
-        } else {
-            // Add 2000ms delay before hiding for menu interactions
-            delay(2000)
-            if (!state.hoverRevealBottom && !bottomBarHovered) {
-                state.showBottomBar = false
-            }
-        }
-    }
-
-    return state
 }
 
 /**
  * Hover reveal strips for focus mode — dynamic sizing to avoid blocking clicks.
  * Each strip uses revealOffset when hidden, 1dp when visible (doesn't block clicks).
+ *
+ * A strip is laid out only for an edge focus mode actually clears. An edge that
+ * stays visible has nothing to reveal, and its strip would otherwise be an
+ * invisible [revealOffsetDp]-wide band sitting over the edge of live content.
  */
-@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 internal fun BoxScope.FocusModeHoverStrips(
     state: FocusModeRevealState,
-    isFocusModeEnabled: Boolean,
-    isAutoRevealEnabled: Boolean,
+    settings: FocusModeSettings,
     revealOffsetDp: Dp,
 ) {
-    if (!isFocusModeEnabled || !isAutoRevealEnabled) return
+    if (!settings.autoRevealEnabled) return
 
-    // Top hover strip
+    FocusModeEdge.entries.forEach { edge ->
+        if (settings.hides(edge)) {
+            val edgeState = state[edge]
+            val thickness = if (edgeState.shown) 1.dp else revealOffsetDp
+            HoverStrip(
+                edge = edge,
+                modifier =
+                    when (edge) {
+                        FocusModeEdge.TOP -> Modifier.fillMaxWidth().height(thickness).align(Alignment.TopStart)
+                        FocusModeEdge.BOTTOM -> Modifier.fillMaxWidth().height(thickness).align(Alignment.BottomStart)
+                        FocusModeEdge.LEFT -> Modifier.fillMaxHeight().width(thickness).align(Alignment.CenterStart)
+                        FocusModeEdge.RIGHT -> Modifier.fillMaxHeight().width(thickness).align(Alignment.CenterEnd)
+                    },
+                onHoverChange = { edgeState.hoveringStrip = it },
+            )
+        }
+    }
+}
+
+/**
+ * Test tag of [edge]'s hover strip. The strips are invisible and hold no content,
+ * so a tag is the only way a test can tell one is there - see `FocusModeRevealTest`.
+ */
+internal fun focusStripTag(edge: FocusModeEdge) = "focus-strip-${edge.name.lowercase()}"
+
+/** One transparent edge band that reports the pointer entering and leaving it. */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun HoverStrip(
+    edge: FocusModeEdge,
+    modifier: Modifier,
+    onHoverChange: (Boolean) -> Unit,
+) {
     Box(
         modifier =
-            Modifier
-                .fillMaxWidth()
-                .height(if (state.showTopBar) 1.dp else revealOffsetDp)
-                .align(Alignment.TopStart)
+            modifier
                 .zIndex(10f)
+                .testTag(focusStripTag(edge))
                 .background(Color.Transparent)
-                .onPointerEvent(PointerEventType.Enter) {
-                    state.hoveringTopStrip = true
-                }.onPointerEvent(PointerEventType.Exit) {
-                    state.hoveringTopStrip = false
-                },
-    )
-
-    // Left hover strip
-    Box(
-        modifier =
-            Modifier
-                .fillMaxHeight()
-                .width(if (state.showLeftSidebar) 1.dp else revealOffsetDp)
-                .align(Alignment.CenterStart)
-                .zIndex(10f)
-                .background(Color.Transparent)
-                .onPointerEvent(PointerEventType.Enter) {
-                    state.hoveringLeftStrip = true
-                }.onPointerEvent(PointerEventType.Exit) {
-                    state.hoveringLeftStrip = false
-                },
-    )
-
-    // Right hover strip
-    Box(
-        modifier =
-            Modifier
-                .fillMaxHeight()
-                .width(if (state.showRightSidebar) 1.dp else revealOffsetDp)
-                .align(Alignment.CenterEnd)
-                .zIndex(10f)
-                .background(Color.Transparent)
-                .onPointerEvent(PointerEventType.Enter) {
-                    state.hoveringRightStrip = true
-                }.onPointerEvent(PointerEventType.Exit) {
-                    state.hoveringRightStrip = false
-                },
-    )
-
-    // Bottom hover strip
-    Box(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .height(if (state.showBottomBar) 1.dp else revealOffsetDp)
-                .align(Alignment.BottomStart)
-                .zIndex(10f)
-                .background(Color.Transparent)
-                .onPointerEvent(PointerEventType.Enter) {
-                    state.hoveringBottomStrip = true
-                }.onPointerEvent(PointerEventType.Exit) {
-                    state.hoveringBottomStrip = false
-                },
+                .onPointerEvent(PointerEventType.Enter) { onHoverChange(true) }
+                .onPointerEvent(PointerEventType.Exit) { onHoverChange(false) },
     )
 }
+
+/** How long a bar stays up after the pointer leaves, so menu interactions survive. */
+private const val HIDE_GRACE_PERIOD_MS = 2000L

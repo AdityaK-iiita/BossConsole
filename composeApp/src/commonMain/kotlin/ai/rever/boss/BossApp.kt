@@ -58,11 +58,7 @@ fun ComponentContext.BossApp(
     // Focus mode + window appearance settings drive the chrome.
     val focusModeSettings by FocusModeSettingsManager.currentSettings.collectAsState()
     val windowAppearanceSettings by WindowAppearanceSettingsManager.currentSettings.collectAsState()
-    val reveal =
-        rememberFocusModeReveal(
-            isFocusModeEnabled = focusModeSettings.enabled,
-            revealDelayMs = focusModeSettings.revealDelayMs,
-        )
+    val reveal = rememberFocusModeReveal(focusModeSettings)
 
     // Menu actions can force-reveal sidebars, so they take the reveal state too.
     BossAppMenuActionEffects(state, reveal)
@@ -72,8 +68,7 @@ fun ComponentContext.BossApp(
             BossAppScaffold(
                 state = state,
                 reveal = reveal,
-                isFocusModeEnabled = focusModeSettings.enabled,
-                isAutoRevealEnabled = focusModeSettings.autoRevealEnabled,
+                focusModeSettings = focusModeSettings,
                 revealOffsetDp = with(LocalDensity.current) { focusModeSettings.revealOffsetPx.toDp() },
                 showTitleBar = windowAppearanceSettings.showTitleBar,
                 onToggleMaximize = onToggleMaximize,
