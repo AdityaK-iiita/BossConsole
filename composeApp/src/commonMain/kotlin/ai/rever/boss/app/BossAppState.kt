@@ -5,6 +5,7 @@ import ai.rever.boss.components.model.BossDraggableComponent
 import ai.rever.boss.components.model.TabDraggableComponent
 import ai.rever.boss.components.plugin.AvailablePluginUpdate
 import ai.rever.boss.components.plugin.DefaultPlugin
+import ai.rever.boss.components.plugin.MissingDependencyPrompt
 import ai.rever.boss.components.plugin.providers.SplitViewOperationsImpl
 import ai.rever.boss.components.plugin.providers.WorkspaceDataProviderImpl
 import ai.rever.boss.components.registery.PanelComponentStore
@@ -89,6 +90,18 @@ internal class BossAppState(
     var showTerminalLinkDialog by mutableStateOf(false)
     var pendingTerminalLinkUrl by mutableStateOf("")
     var pendingTerminalSourceId by mutableStateOf<String?>(null)
+
+    /**
+     * A dependency a just-installed plugin declares but which is absent.
+     *
+     * One at a time rather than a queue, and the one being shown is the *oldest* unanswered
+     * prompt: the collector holds the rest in the bus until this is answered, so a second
+     * missing dependency never replaces a dialog the user is part-way through.
+     */
+    var pendingMissingPluginDependency by
+        mutableStateOf<MissingDependencyPrompt?>(null)
+    var installingMissingDependency by mutableStateOf(false)
+    var missingDependencyError by mutableStateOf<String?>(null)
 
     // A terminal command that arrived from outside this BOSS invocation and is
     // waiting for the operator to confirm it. Null whenever nothing is pending.

@@ -1,9 +1,12 @@
 package ai.rever.boss.components.wizard.plugin
 
+import ai.rever.boss.components.plugin.DynamicPluginInfo
 import ai.rever.boss.components.plugin.DynamicPluginManager
+import ai.rever.boss.plugin.MissingDependencyReporter
 import ai.rever.boss.plugin.PluginPersistence
 import ai.rever.boss.plugin.PluginStoreSetup
 import ai.rever.boss.plugin.api.PluginManifest
+import ai.rever.boss.plugin.api.PluginState
 import ai.rever.boss.plugin.repository.PluginWithSource
 import ai.rever.boss.utils.atomicMoveFrom
 import ai.rever.boss.utils.logging.BossLogger
@@ -25,6 +28,9 @@ import java.util.jar.JarFile
  */
 class PluginInstallService(
     private val dynamicPluginManager: DynamicPluginManager,
+    /** Raises the install-time dependency prompt; see [MissingDependencyReporter]. */
+    private val dependencyReporter: MissingDependencyReporter =
+        MissingDependencyReporter.forManager(dynamicPluginManager),
 ) {
     private val logger = BossLogger.forComponent("PluginInstallService")
 
@@ -41,6 +47,9 @@ class PluginInstallService(
     ): Result<PluginInstallResult> =
         withContext(Dispatchers.IO) {
             val installedIds = mutableListOf<String>()
+
+            /** Manifests of everything this batch loaded, for the one dependency report below. */
+            val installedManifests = mutableListOf<PluginManifest>()
             val failedIds = mutableListOf<Pair<String, String>>() // pluginId to error message
 
             if (plugins.isEmpty()) {
@@ -104,8 +113,14 @@ class PluginInstallService(
                     // If plugin has a GitHub URL, install from GitHub
                     if (plugin.githubUrl.isNotEmpty()) {
                         val result = installFromGitHub(plugin, pluginDir, progress, totalPlugins, onProgress)
-                        if (result.isSuccess) {
+                        val installedPlugin = result.getOrNull()
+                        if (installedPlugin != null) {
                             installedIds.add(plugin.id)
+                            // Same LOADED gate as the store branch: a plugin that installed but
+                            // did not register must not have its dependencies offered.
+                            if (installedPlugin.state == PluginState.LOADED) {
+                                installedManifests.add(installedPlugin.manifest)
+                            }
                         } else {
                             failedIds.add(plugin.id to (result.exceptionOrNull()?.message ?: "GitHub install failed"))
                         }
@@ -176,6 +191,22 @@ class PluginInstallService(
                     val installResult = dynamicPluginManager.installPlugin(jarPath, enabled = true)
 
                     if (installResult.isSuccess) {
+                        // Only a plugin that actually registered: `installPlugin` returns success
+                        // with `state = DISABLED` when registration failed as binary-incompatible,
+                        // and prompting then offers a second plugin to support a dead one.
+                        val registered = installResult.getOrNull()?.state == PluginState.LOADED
+                        if (manifest != null && registered) {
+                            installedManifests.add(manifest)
+                        } else if (manifest == null) {
+                            // Installed, but its dependencies were never checked. Say so rather
+                            // than leaving the batch quietly incomplete.
+                            logger.warn(
+                                LogCategory.SYSTEM,
+                                "Installed a plugin whose manifest could not be read, so dependencies went unchecked",
+                                mapOf("pluginId" to plugin.id),
+                            )
+                        }
+
                         // Persist the installation with actual version
                         PluginPersistence.addInstalledPlugin(
                             pluginId = plugin.id,
@@ -223,6 +254,18 @@ class PluginInstallService(
 
             onProgress(1f, "Installation complete")
 
+            // Report unmet dependencies once the whole batch is in, never per iteration.
+            // Reporting inside the loop meant a selection of [jupyter-notebook, ai-gateway] - the
+            // pick this feature exists for - prompted for the gateway while the wizard was still
+            // two lines from installing it: the loop runs on IO, so the collector on Main showed
+            // the dialog over the wizard, and taking Install raced the wizard's own download.
+            // (The two paths write different filenames for one plugin id, so nothing collides at
+            // the path level and the coalescing guard never sees a shared key.) After the loop,
+            // `installedAndOnDisk` already contains everything the batch installed, so nothing
+            // intra-batch is reported at all. This also covers the GitHub branch, which reports
+            // nowhere else.
+            installedManifests.forEach { installedManifest -> dependencyReporter.report(installedManifest) }
+
             // Log summary
             logger.info(
                 LogCategory.SYSTEM,
@@ -252,13 +295,39 @@ class PluginInstallService(
      * Install a plugin from GitHub.
      * Downloads the release JAR directly from GitHub releases.
      */
+
+    /**
+     * The manifest id is authoritative, so a mismatch with the wizard's expectation is logged and
+     * the install continues.
+     */
+    private fun warnOnIdMismatch(
+        plugin: WizardPluginInfo,
+        manifest: PluginManifest,
+    ) {
+        if (manifest.pluginId == plugin.id) return
+        logger.warn(
+            LogCategory.SYSTEM,
+            "Plugin ID mismatch between expected and manifest",
+            mapOf(
+                "expectedId" to plugin.id,
+                "manifestId" to manifest.pluginId,
+                "githubUrl" to plugin.githubUrl,
+            ),
+        )
+    }
+
+    /**
+     * Returns what the manager registered, so the caller's batch dependency report can include it
+     * *and* check that it actually loaded - `installPlugin` returns success with
+     * `state = DISABLED` for a registration-time binary incompatibility.
+     */
     private suspend fun installFromGitHub(
         plugin: WizardPluginInfo,
         pluginDir: File,
         baseProgress: Float,
         totalPlugins: Int,
         onProgress: (Float, String) -> Unit,
-    ): Result<Unit> =
+    ): Result<DynamicPluginInfo> =
         withContext(Dispatchers.IO) {
             try {
                 onProgress(baseProgress + (0.1f / totalPlugins), "Checking GitHub releases for ${plugin.name}...")
@@ -286,28 +355,18 @@ class PluginInstallService(
                     extractManifestFromJar(jarPath)
                         ?: return@withContext Result.failure(Exception("Downloaded JAR does not contain valid plugin manifest"))
 
-                // Verify manifest plugin ID matches expected ID
-                if (manifest.pluginId != plugin.id) {
-                    logger.warn(
-                        LogCategory.SYSTEM,
-                        "Plugin ID mismatch between expected and manifest",
-                        mapOf(
-                            "expectedId" to plugin.id,
-                            "manifestId" to manifest.pluginId,
-                            "githubUrl" to plugin.githubUrl,
-                        ),
-                    )
-                    // Continue with manifest ID as it's the authoritative source
-                }
+                warnOnIdMismatch(plugin, manifest)
 
                 onProgress(baseProgress + (0.7f / totalPlugins), "Installing ${plugin.name}...")
 
                 // Install the plugin
                 val installResult = dynamicPluginManager.installPlugin(jarPath, enabled = true)
 
-                if (installResult.isFailure) {
-                    return@withContext Result.failure(installResult.exceptionOrNull() ?: Exception("Install failed"))
-                }
+                val installed =
+                    installResult.getOrNull()
+                        ?: return@withContext Result.failure(
+                            installResult.exceptionOrNull() ?: Exception("Install failed"),
+                        )
 
                 // Persist the installation
                 PluginPersistence.addInstalledPlugin(
@@ -327,7 +386,7 @@ class PluginInstallService(
                     ),
                 )
 
-                Result.success(Unit)
+                Result.success(installed)
             } catch (e: Exception) {
                 logger.error(
                     LogCategory.SYSTEM,

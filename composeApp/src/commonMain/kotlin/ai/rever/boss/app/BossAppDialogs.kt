@@ -13,6 +13,8 @@ import ai.rever.boss.components.dialogs.TabType
 import ai.rever.boss.components.dialogs.TerminalLinkOpenDialog
 import ai.rever.boss.components.dialogs.TopOfMindDialog
 import ai.rever.boss.components.events.FileEventBus
+import ai.rever.boss.components.plugin.MissingDependencyDialog
+import ai.rever.boss.components.plugin.PluginDependencyEventBus
 import ai.rever.boss.components.plugin.PluginUpdateBridge
 import ai.rever.boss.components.plugin.providers.GenericDialogHostContent
 import ai.rever.boss.components.plugin.tab_types.fluck.FluckTabInfo
@@ -30,6 +32,8 @@ import ai.rever.boss.keymap.model.KeymapActions
 import ai.rever.boss.platform.rememberDirectoryPicker
 import ai.rever.boss.plugin.api.Panel.Companion.left
 import ai.rever.boss.plugin.api.Panel.Companion.top
+import ai.rever.boss.plugin.sandbox.notification.ToastMessage
+import ai.rever.boss.plugin.sandbox.notification.ToastType
 import ai.rever.boss.plugin.tab.codeeditor.EditorTabInfo
 import ai.rever.boss.plugin.tab.jupyter.JupyterTabInfo
 import ai.rever.boss.plugin.tab.terminal.TerminalTabInfo
@@ -48,6 +52,7 @@ import ai.rever.boss.window.selectProjectInWindow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -474,6 +479,67 @@ internal fun BossAppDialogs(state: BossAppState) {
                 )
                 state.pendingTerminalLinkUrl = ""
                 state.pendingTerminalSourceId = null
+            },
+        )
+    }
+
+    // A plugin the user just installed needs another plugin that is not there. Offer to
+    // install it rather than leaving the feature to fail silently later.
+    state.pendingMissingPluginDependency?.let { prompt ->
+        MissingDependencyDialog(
+            prompt = prompt,
+            installing = state.installingMissingDependency,
+            error = state.missingDependencyError,
+            onDismiss = {
+                // "Not now" is an answer for the session: three plugins declare the gateway
+                // optional, so without this, declining once means being asked again for the
+                // next one that needs it.
+                PluginDependencyEventBus.decline(prompt.missing)
+                state.pendingMissingPluginDependency = null
+                state.missingDependencyError = null
+            },
+            onInstall = {
+                state.installingMissingDependency = true
+                state.missingDependencyError = null
+                coroutineScope.launch {
+                    try {
+                        // runCatching rather than a catch block: a throw instead of a failed
+                        // Result would otherwise leave the dialog open with no message and an
+                        // "Install" button, looking like the click did nothing. Cancellation is
+                        // rethrown - the install is detached and continues, so nothing went wrong
+                        // and there is no longer anywhere to report it to.
+                        runCatching { prompt.installer.install(prompt.missing.missingPluginId) }
+                            .getOrElse { error ->
+                                if (error is CancellationException) throw error
+                                Result.failure(error)
+                            }.onSuccess {
+                                state.pendingMissingPluginDependency = null
+                                state.missingDependencyError = null
+                                // The dialog closing is otherwise the only signal, and since the
+                                // dependent is deliberately not reloaded, the user needs telling
+                                // that a feature may not light up until they relaunch.
+                                state.currentDefaultPlugin?.pluginToastState?.show(
+                                    ToastMessage(
+                                        type = ToastType.SUCCESS,
+                                        title = "Plugin installed",
+                                        message =
+                                            "${prompt.missing.dependentDisplayName} can use it now. " +
+                                                "Relaunch BOSS if a feature still reports it missing.",
+                                    ),
+                                )
+                            }.onFailure { error ->
+                                // Keep the dialog up with the reason and a Retry: dismissing on
+                                // failure would look like it worked.
+                                state.missingDependencyError =
+                                    error.message ?: "Could not install the plugin."
+                            }
+                    } finally {
+                        // Always, because "installing" disables every button and blocks
+                        // dismissal: a throw here rather than a failed Result would leave a
+                        // modal that can only be escaped by closing the window.
+                        state.installingMissingDependency = false
+                    }
+                }
             },
         )
     }

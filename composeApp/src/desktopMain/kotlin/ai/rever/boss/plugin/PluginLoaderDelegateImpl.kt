@@ -1,5 +1,6 @@
 package ai.rever.boss.plugin
 
+import ai.rever.boss.components.plugin.DynamicPluginInfo
 import ai.rever.boss.components.plugin.DynamicPluginManager
 import ai.rever.boss.components.plugin.MicrokernelRuntime
 import ai.rever.boss.components.plugin.findRelocatedPluginJar
@@ -55,7 +56,68 @@ class PluginLoaderDelegateImpl(
      */
     private val detachedReloads = KeyedDetachedJobs<String, LoadedPluginInfo?>(reloadScope)
 
-    override suspend fun loadPlugin(jarPath: String): LoadedPluginInfo? {
+    /**
+     * Raises the install-time dependency prompt. See [MissingDependencyReporter] for which
+     * paths report and, more importantly, which must not.
+     */
+    private val dependencyReporter = MissingDependencyReporter.forManager(dynamicPluginManager)
+
+    /**
+     * Report the plugin's unmet dependencies (unless this is a reload) and describe it for the
+     * caller.
+     *
+     * A function rather than an inline block only because the two together sit four levels deep
+     * inside [loadPlugin]'s try / isSuccess / let.
+     */
+    private fun describe(
+        info: DynamicPluginInfo,
+        reportDependencies: Boolean,
+    ): LoadedPluginInfo {
+        // Only for a plugin that actually registered. `installPlugin` returns success with
+        // `state = DISABLED` when registration failed as binary-incompatible or the plugin is
+        // hidden for lack of access - reporting there would say "Flow needs the AI Gateway" for
+        // something that is not running and will not run, and taking Install would download a
+        // second plugin to support a dead one.
+        if (reportDependencies && info.state == PluginState.LOADED) {
+            dependencyReporter.report(info.manifest)
+        }
+        return LoadedPluginInfo(
+            pluginId = info.manifest.pluginId,
+            displayName = info.manifest.displayName,
+            version = info.manifest.version,
+            description = info.manifest.description,
+            author = info.manifest.author,
+            url = info.manifest.url,
+            type =
+                info.manifest.type.name
+                    .lowercase(),
+            apiVersion = info.manifest.apiVersion,
+            minBossVersion = info.manifest.minBossVersion,
+            isSystemPlugin = info.manifest.systemPlugin,
+            canUnload = info.manifest.canUnload,
+            loadPriority = info.manifest.loadPriority,
+            isEnabled = info.enabled,
+            healthy = info.state == PluginState.LOADED,
+            jarPath = info.jarPath,
+            installedAt = System.currentTimeMillis(),
+            requiresAdmin = info.manifest.requiresAdmin,
+        )
+    }
+
+    override suspend fun loadPlugin(jarPath: String): LoadedPluginInfo? = loadPlugin(jarPath, reportDependencies = true)
+
+    /**
+     * @param reportDependencies whether an unmet dependency should prompt.
+     *
+     * False for reloads. `doReloadPlugin` finishes by calling this, and reload is reached by
+     * `resetPluginInstances`, the Toolbox's update flow and the evolver's hot reload - none of
+     * which is a user asking to install anything. Without the distinction, an optional
+     * dependency someone declined with "Not now" would be re-offered on every reload.
+     */
+    private suspend fun loadPlugin(
+        jarPath: String,
+        reportDependencies: Boolean,
+    ): LoadedPluginInfo? {
         // Never try to load the microkernel runtime via the plugin-install
         // path — it's a classpath dependency for OOP child JVMs, not a
         // loadable plugin. DefaultPlugin.loadExternalPlugins already skips
@@ -94,29 +156,7 @@ class PluginLoaderDelegateImpl(
             val result = dynamicPluginManager.installPlugin(jarPath, enabled = true)
             if (result.isSuccess) {
                 val loadedPlugin = result.getOrNull()
-                loadedPlugin?.let { info ->
-                    LoadedPluginInfo(
-                        pluginId = info.manifest.pluginId,
-                        displayName = info.manifest.displayName,
-                        version = info.manifest.version,
-                        description = info.manifest.description,
-                        author = info.manifest.author,
-                        url = info.manifest.url,
-                        type =
-                            info.manifest.type.name
-                                .lowercase(),
-                        apiVersion = info.manifest.apiVersion,
-                        minBossVersion = info.manifest.minBossVersion,
-                        isSystemPlugin = info.manifest.systemPlugin,
-                        canUnload = info.manifest.canUnload,
-                        loadPriority = info.manifest.loadPriority,
-                        isEnabled = info.enabled,
-                        healthy = info.state == PluginState.LOADED,
-                        jarPath = info.jarPath,
-                        installedAt = System.currentTimeMillis(),
-                        requiresAdmin = info.manifest.requiresAdmin,
-                    )
-                }
+                loadedPlugin?.let { info -> describe(info, reportDependencies) }
             } else {
                 logger.error(LogCategory.SYSTEM, "Failed to load plugin", error = result.exceptionOrNull())
                 null
@@ -213,7 +253,7 @@ class PluginLoaderDelegateImpl(
             }
 
             // Reload
-            loadPlugin(jarPath)
+            loadPlugin(jarPath, reportDependencies = false)
         } catch (e: Exception) {
             logger.error(LogCategory.SYSTEM, "Exception reloading plugin", error = e)
             null

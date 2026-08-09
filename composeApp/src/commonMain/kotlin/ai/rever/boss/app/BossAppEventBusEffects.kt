@@ -12,6 +12,7 @@ import ai.rever.boss.components.events.TerminalLinkEventBus
 import ai.rever.boss.components.events.URLEventBus
 import ai.rever.boss.components.events.WorkspaceEventBus
 import ai.rever.boss.components.plugin.PanelIds
+import ai.rever.boss.components.plugin.PluginDependencyEventBus
 import ai.rever.boss.components.window_panel.SplitOrientation
 import ai.rever.boss.components.workspaces.WorkspaceSerializer
 import ai.rever.boss.components.workspaces.applyWorkspace
@@ -40,11 +41,14 @@ import ai.rever.boss.utils.logging.LogCategory
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.withContext
 
 /**
  * Event-bus listeners for one BossApp window. Every bus is window-filtered by
@@ -176,6 +180,38 @@ internal fun BossAppEventBusEffects(state: BossAppState) {
                     operationName = event.operationName,
                 )
             }.launchIn(this)
+    }
+
+    // A plugin the user just installed declares a dependency that is not present. Only
+    // user-initiated installs report here (see PluginLoaderDelegateImpl), so this cannot
+    // fire during startup restore or the api hot-swap's reload-all.
+    LaunchedEffect(windowId) {
+        PluginDependencyEventBus.missingDependencies
+            .collect { prompt ->
+                // Re-check rather than trusting the report: two dependents of one missing
+                // plugin each raise a prompt, so installing for the first satisfies the
+                // second, whose dialog would otherwise claim something untrue and reinstall
+                // what is already loaded. Off the UI thread because the check stats the jar.
+                val present =
+                    withContext(Dispatchers.IO) {
+                        prompt.installer.isInstalled(prompt.missing.missingPluginId)
+                    }
+                if (present || PluginDependencyEventBus.wasDeclined(prompt.missing)) {
+                    return@collect
+                }
+                // Reset here rather than relying on the previous dialog's exit path having
+                // cleared them: the three fields are reused for every prompt, and ordering
+                // between that clear and this assignment should not be load-bearing.
+                state.installingMissingDependency = false
+                state.missingDependencyError = null
+                state.pendingMissingPluginDependency = prompt
+                // Back-pressure instead of a queue: the next prompt stays in the channel until
+                // this one is answered, so a second missing dependency is asked about after the
+                // first rather than replacing it or being dropped. Cancelling this effect (the
+                // window closing) leaves whatever is still in the channel for another window -
+                // though a prompt already received here and not yet shown does go with it.
+                snapshotFlow { state.pendingMissingPluginDependency }.first { it == null }
+            }
     }
 
     // Listen for terminal link click events (Issue #346)
