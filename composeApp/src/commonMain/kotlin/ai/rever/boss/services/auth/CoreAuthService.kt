@@ -25,6 +25,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.concurrent.Volatile
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -52,6 +54,46 @@ internal object CoreAuthService {
     // read in signOut() (callable from any dispatcher) sees the latest job.
     @Volatile
     private var recoveryJob: Job? = null
+
+    // Serialises every deliberate refresh in this process. See refreshSession().
+    private val refreshMutex = Mutex()
+
+    /**
+     * Refresh the current session, with at most one refresh in flight.
+     *
+     * Every caller that wants to force a refresh must come through here rather
+     * than calling [io.github.jan.supabase.auth.Auth.refreshCurrentSession]
+     * directly. Supabase rotates the refresh token, so two overlapping refreshes
+     * mean one of them presents an already-used token; that is reported as a
+     * rejected refresh token, which [SessionRecoveryPolicy] maps to
+     * [SessionRecoveryPolicy.Action.ClearSession] and the user is dropped to the
+     * login screen. [signOut] guards against the same hazard by cancelling the
+     * recovery loop first.
+     *
+     * The `expiresAt` comparison covers the case where the refresh we were
+     * queued behind already produced a new session: the library reschedules its
+     * own timer on import, so refreshing again would only re-open the race.
+     *
+     * Throws on failure so callers can classify the cause; the recovery loop
+     * depends on that.
+     */
+    internal suspend fun refreshSession() {
+        val before =
+            SupabaseConfig.client.auth
+                .currentSessionOrNull()
+                ?.expiresAt
+        refreshMutex.withLock {
+            val auth = SupabaseConfig.client.auth
+            val current =
+                auth.currentSessionOrNull()
+                    ?: error("There is no BOSS session to refresh.")
+            if (before != null && current.expiresAt > before) {
+                logger.info(LogCategory.AUTH, "Session already refreshed by another caller; skipping")
+                return@withLock
+            }
+            auth.refreshCurrentSession()
+        }
+    }
 
     /**
      * Initialize the auth service and check for existing session
@@ -278,7 +320,7 @@ internal object CoreAuthService {
                             logger.info(LogCategory.AUTH, "Session was refreshed elsewhere; stopping session recovery")
                             return@launch
                         }
-                        auth.refreshCurrentSession()
+                        refreshSession()
                         logger.info(LogCategory.AUTH, "Session recovered by manual refresh")
                         return@launch
                     } catch (e: CancellationException) {

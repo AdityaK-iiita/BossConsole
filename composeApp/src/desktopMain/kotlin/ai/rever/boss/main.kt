@@ -128,6 +128,17 @@ private fun containRenderFault(
 private val startupScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
 fun main(args: Array<String>) {
+    // Codex invokes this headless credential helper. Handle it before AWT,
+    // plugins, logging, or the single-instance lock so stdout stays token-only.
+    if (ai.rever.boss.llm.RisaLlmTokenCommand
+            .isRequested(args)
+    ) {
+        exitProcess(
+            ai.rever.boss.llm.RisaLlmTokenCommand
+                .execute(),
+        )
+    }
+
     val startupBeganMs = System.currentTimeMillis()
 
     // Logging FIRST, before anything that can log. Everything below this line does:
@@ -143,6 +154,14 @@ fun main(args: Array<String>) {
     // logging is opt-in through configure() with an explicit path.
     BossLogger.configureFromEnvironment()
     BossLogger.initialize() // Register shutdown hook for log flushing
+
+    // Serve credential brokers to plugins. Registered from here rather than from
+    // BossAppStartupEffects because the implementation exchanges a Supabase session over
+    // HTTP and so lives in desktopMain, while the PluginContext that exposes it is
+    // commonMain. Safe this early: the object holds no state and touches nothing until a
+    // plugin actually asks for a broker.
+    ai.rever.boss.services.llm.BrokeredCredentialAccess
+        .initialize(ai.rever.boss.llm.BrokeredCredentialProviderImpl)
 
     // Set WM_CLASS for Linux desktop integration (must be before any AWT init)
     setLinuxWMClass()

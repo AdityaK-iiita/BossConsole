@@ -70,7 +70,12 @@ intellij-platform = "243.21565.199"
 # bump it when consuming a new SDK release. Distribution is store/GitHub-
 # releases ONLY: plugin-platform/plugin-api-core downloads this release's jar and
 # filters the api package locally (no Maven registry involved).
-boss-plugin-api = "1.0.71"
+# NOTE: 1.0.74 is not released yet. It is cut by merging
+# risa-labs-inc/boss-plugin-api#31, and this pin must not land before that release
+# exists - fetchApiPluginJar has no Maven fallback, so CI fails with a 404 on the
+# release asset. For local work, build the jar into a sibling
+# boss_plugins/boss-plugin-api checkout at exactly this version.
+boss-plugin-api = "1.0.74"
 
 [libraries]
 kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }

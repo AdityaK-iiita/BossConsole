@@ -643,6 +643,18 @@ class DefaultPlugin(
     override val llmProvider: ai.rever.boss.plugin.api.LlmProvider?
         get() = getPluginAPI(ai.rever.boss.plugin.api.LlmProviderSettingsAPI::class.java)
 
+    /**
+     * Credential brokers, for a provider whose credential nobody types in.
+     *
+     * Read through a holder because the implementation exchanges a Supabase session over
+     * HTTP and so lives in desktopMain, while this class is commonMain. Null until desktop
+     * startup registers one.
+     */
+    override val brokeredCredentialProvider: ai.rever.boss.plugin.api.BrokeredCredentialProvider?
+        get() =
+            ai.rever.boss.services.llm.BrokeredCredentialAccess
+                .current()
+
     // Panel event provider for plugins that need to trigger panel events
     override val panelEventProvider: ai.rever.boss.plugin.api.PanelEventProvider by lazy {
         ai.rever.boss.components.plugin.providers

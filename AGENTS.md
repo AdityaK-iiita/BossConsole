@@ -75,6 +75,37 @@ MACOS_DEVELOPER_ID=Developer ID Application: ...  # Optional, signs local packag
 
 **Priority**: Environment variables > System properties > local.properties > Embedded build config
 
+### Credential brokers
+
+A provider whose credential nobody types in: the user is signed in to BOSS and an
+organisation gateway mints a short-lived scoped key for that identity. RISA Codex GLM works
+this way.
+
+The exchange is **host-side and stays that way**. Nothing on `PluginContext` exposes the
+Supabase access token - `AuthDataProvider` gives identity only, `SupabaseDataProvider` proxies
+queries with the host attaching auth - so `CredentialBrokerClient` hands a plugin the
+*downstream* credential and never the session that bought it.
+
+**A broker is named by id, never by URL.** `CredentialBrokers` owns the id to endpoint map. An
+`exchange(url)` shape would have handed every installed plugin a way to post the user's session
+token to a host of its choosing; as it is, the worst a plugin can do is name a broker this
+build does not have. `CredentialBrokersTest` pins that, plus that every broker declares an
+https endpoint and a `scopedTo` prefix (published so a careful plugin can check where it is
+about to send a bearer token).
+
+`RisaLlmTokenCommand` is a thin adapter over the same registry, so the `BOSS llm-token` helper
+Codex invokes and the plugin-facing `BrokeredCredentialProvider` cannot drift apart or hold two
+copies of the endpoint.
+
+Adding one means an entry in `CredentialBrokers.all()`. The plugin-facing side needs no change.
+
+**The three-wrapper rule applies.** `brokeredCredentialProvider` is overridden in
+`DefaultPlugin`, `TrackingPluginContext` **and**
+`plugin-platform/plugin-sandbox/.../SandboxedPluginContext`. Missing the sandbox one returns
+null for every plugin, silently - that has happened before with `mcpToolRegistry`. The
+implementation lives in `desktopMain` (it speaks HTTP), so `DefaultPlugin` reads it through
+`BrokeredCredentialAccess`, a commonMain holder that `main.kt` populates at startup.
+
 ### AI credentials are not configured here
 
 `OPENAI_API_KEY` used to be listed above as a `local.properties` key that enabled AI

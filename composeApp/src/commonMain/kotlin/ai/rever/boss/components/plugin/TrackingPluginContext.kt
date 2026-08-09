@@ -5,6 +5,7 @@ import ai.rever.boss.plugin.api.ApplicationEventBus
 import ai.rever.boss.plugin.api.AuthDataProvider
 import ai.rever.boss.plugin.api.BackgroundTaskProvider
 import ai.rever.boss.plugin.api.BookmarkDataProvider
+import ai.rever.boss.plugin.api.BrokeredCredentialProvider
 import ai.rever.boss.plugin.api.CacheProvider
 import ai.rever.boss.plugin.api.ClipboardProvider
 import ai.rever.boss.plugin.api.ContextMenuProvider
@@ -318,6 +319,8 @@ class TrackingPluginContext(
     override val fileSystemDataProvider: FileSystemDataProvider? get() = delegate.fileSystemDataProvider
     override val secretDataProvider: SecretDataProvider? get() = delegate.secretDataProvider
     override val llmProvider: LlmProvider? get() = delegate.llmProvider
+    override val brokeredCredentialProvider: BrokeredCredentialProvider?
+        get() = delegate.brokeredCredentialProvider
     override val runConfigurationDataProvider: RunConfigurationDataProvider? get() = delegate.runConfigurationDataProvider
     override val activeTabsProvider: ActiveTabsProvider? get() = delegate.activeTabsProvider
     override val windowId: String? get() = delegate.windowId
