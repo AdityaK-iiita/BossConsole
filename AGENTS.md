@@ -359,6 +359,37 @@ logger.error(LogCategory.NETWORK, "Request failed", error = exception)
 
 **Config**: Set `BOSS_LOG_LEVEL` env var or `boss.log.level` system property (TRACE/DEBUG/INFO/WARN/ERROR)
 
+## Browser telemetry, and how to turn it off
+
+The integrated browser reports which sites BOSS is used with and how - page views,
+dwell vs active time, navigation depth, and in-page interactions (clicks, scroll
+depth, field focus, form submits, copy/paste). `BrowserAnalytics` is the privacy
+boundary: a full URL goes in and only an **eTLD+1 registrable domain** comes out,
+and the injected collector is written never to *read* page text, input values,
+labels, ids or URLs in the first place. See its KDoc for what is deliberately not
+covered.
+
+**Kill switch**: `BOSS_BROWSER_TELEMETRY_DISABLED=true` (also `1` / `yes` / `on`),
+or the `boss.browser.telemetry.disabled` system property. It is enforced at the
+single point every browser event is published, *and* stops the collector script
+being injected into pages at all. Read once at startup, so a change needs a
+restart. There is no Settings row and no per-site exclusion.
+
+**Two things a deployment should know before building on this data:**
+
+- **Any installed plugin can subscribe.** `PluginContext.applicationEventBus` is
+  ungated, so `BrowserEvent` / `BrowserInteractionEvent` are readable by every
+  plugin, not only the analytics plugin that owns *egress* consent. This is the
+  largest change in what a third-party plugin can observe, and it is a deliberate
+  choice to keep the bus uniform rather than an oversight - gate at install time
+  by choosing which plugins are allowed, not by trusting the bus.
+- **The interaction numbers are attacker-influenceable.** `window.__bossInteraction`
+  is reachable by any script on the page, so a site can fabricate its own
+  engagement (bounded by the rate limiter) or suppress it by pre-setting
+  `window.__bossInteractionStarted`. The sanitizers bound what can be *smuggled*
+  through; nothing bounds a site lying about its own usage. Treat these as
+  indicative, not as measurements, wherever a site has an incentive to lie.
+
 **Three modules apply the Compose compiler with no Compose code, on purpose** -
 `plugin-logging`, `plugin-bookmark-types` and `plugin-workspace-types`.
 `boss-plugin-api` ships this same `ai.rever.boss.plugin.logging` package and *is* a Compose

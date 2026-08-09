@@ -70,12 +70,21 @@ intellij-platform = "243.21565.199"
 # bump it when consuming a new SDK release. Distribution is store/GitHub-
 # releases ONLY: plugin-platform/plugin-api-core downloads this release's jar and
 # filters the api package locally (no Maven registry involved).
-# NOTE: 1.0.74 is not released yet. It is cut by merging
-# risa-labs-inc/boss-plugin-api#31, and this pin must not land before that release
-# exists - fetchApiPluginJar has no Maven fallback, so CI fails with a 404 on the
-# release asset. For local work, build the jar into a sibling
-# boss_plugins/boss-plugin-api checkout at exactly this version.
-boss-plugin-api = "1.0.74"
+#
+# 1.0.76 is the release cut by risa-labs-inc/boss-plugin-api#25, which adds the
+# browser telemetry events this branch publishes (BrowserEvent's navigation and
+# engagement fields, BrowserInteractionEvent, BrowserNavigationType,
+# BrowserInteractionType).
+#
+# It is a SUPERSET of the 1.0.74 this replaces, verified against the release jar
+# rather than assumed - releases are cut from the api repo's main, so 1.0.76
+# carries #31's AiGatewayAPI and BrokeredCredentialProvider (the reason for the
+# 1.0.74 pin), #32's AiAvailability and AiReadiness, and 1.0.75's
+# LlmApiFormat.OPENAI_RESPONSES. Worth checking rather than trusting the ordering:
+# fetchApiPluginJar has no Maven fallback, so a pin that dropped a type would
+# surface as an unrelated compile error, and this comment is the only record of
+# which api PR a pin corresponds to.
+boss-plugin-api = "1.0.76"
 
 [libraries]
 kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }

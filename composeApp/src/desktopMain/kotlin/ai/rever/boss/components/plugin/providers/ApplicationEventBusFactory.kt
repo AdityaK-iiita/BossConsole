@@ -4,6 +4,8 @@ import ai.rever.boss.plugin.api.ApplicationEvent
 import ai.rever.boss.plugin.api.ApplicationEventBus
 import ai.rever.boss.plugin.api.ApplicationEventBusRegistry
 import ai.rever.boss.plugin.api.AuthEvent
+import ai.rever.boss.plugin.api.BrowserEvent
+import ai.rever.boss.plugin.api.BrowserInteractionEvent
 import ai.rever.boss.plugin.api.CustomPluginEvent
 import ai.rever.boss.plugin.api.FileChangeEvent
 import ai.rever.boss.plugin.api.PluginLifecycleEvent
@@ -73,6 +75,11 @@ class ApplicationEventBusImpl private constructor(
 
     override fun events(): Flow<ApplicationEvent> = _events.asSharedFlow()
 
+    /**
+     * Every event type the host publishes is listed rather than left to the reflective
+     * `else`: that branch pays a `KClass` check per element, and the browser interaction
+     * events are the highest-volume thing on this bus.
+     */
     override fun <T : ApplicationEvent> eventsOfType(eventType: Class<T>): Flow<T> {
         @Suppress("UNCHECKED_CAST")
         return when (eventType) {
@@ -84,6 +91,8 @@ class ApplicationEventBusImpl private constructor(
             AuthEvent::class.java -> _events.filterIsInstance<AuthEvent>() as Flow<T>
             TerminalSessionEvent::class.java -> _events.filterIsInstance<TerminalSessionEvent>() as Flow<T>
             CustomPluginEvent::class.java -> _events.filterIsInstance<CustomPluginEvent>() as Flow<T>
+            BrowserEvent::class.java -> _events.filterIsInstance<BrowserEvent>() as Flow<T>
+            BrowserInteractionEvent::class.java -> _events.filterIsInstance<BrowserInteractionEvent>() as Flow<T>
             else -> _events.filterIsInstance(eventType.kotlin)
         }
     }

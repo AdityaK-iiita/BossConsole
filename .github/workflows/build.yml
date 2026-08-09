@@ -54,6 +54,15 @@ jobs:
         # deterministic and does not consume credentials.
         run: bash scripts/test/test-jxbrowser-autorelease.sh
 
+      - name: 🧪 Browser interaction collector
+        # BrowserInteractionScript is JavaScript inside a Kotlin string, so the
+        # Kotlin suite can only grep it - and every budget bug in it so far was
+        # found by running it, not by reading it. This executes the real script
+        # against a fake DOM, and checks the paths it produces against the host's
+        # own MAX_PATH_LENGTH / PATH_SHAPE, which are hand-matched across two
+        # files and two languages and fail by making elementPath vanish silently.
+        run: node scripts/test/test-browser-collector.js
+
       - name: ✍️ No new em-dashes in prose
         # House style is a spaced hyphen. Scoped to ADDED lines on purpose: the
         # sweep left code comments alone by design, so a whole-tree check would
