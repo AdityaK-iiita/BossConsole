@@ -4,6 +4,7 @@ import ai.rever.boss.components.settings.shared.SettingsDropdown
 import ai.rever.boss.components.settings.shared.SettingsInfoRow
 import ai.rever.boss.components.settings.shared.SettingsSection
 import ai.rever.boss.components.settings.shared.SettingsToggle
+import ai.rever.boss.plugin.ui.menu.NativeContextMenus
 import ai.rever.boss.window.TabWidthMode
 import ai.rever.boss.window.WindowAppearanceSettingsManager
 import androidx.compose.foundation.layout.*
@@ -52,6 +53,8 @@ fun WindowAppearanceSettings() {
             )
         }
 
+        NativeContextMenuSection()
+
         SettingsSection(title = "Tab Bar") {
             SettingsDropdown(
                 label = "Tab Sizing",
@@ -71,6 +74,35 @@ fun WindowAppearanceSettings() {
                         "and the bar scrolls when they overflow.",
             )
         }
+    }
+}
+
+/**
+ * macOS only - see `shouldUseNativeMenus` for why Windows and Linux stay on the drawn menus.
+ * Offering a toggle where it does nothing would just be a lie, so the whole section is hidden.
+ */
+@Composable
+private fun NativeContextMenuSection() {
+    if (!NativeContextMenus.isSupported()) return
+    val settings by WindowAppearanceSettingsManager.currentSettings.collectAsState()
+    val coroutineScope = rememberCoroutineScope()
+
+    SettingsSection(title = "Menus") {
+        SettingsToggle(
+            label = "Native Context Menus",
+            checked = settings.useNativeContextMenus,
+            onCheckedChange = { enabled ->
+                coroutineScope.launch {
+                    WindowAppearanceSettingsManager.updateSettings(
+                        settings.copy(useNativeContextMenus = enabled),
+                    )
+                }
+            },
+            description =
+                "Use macOS's own right-click menus. They follow the system appearance rather " +
+                    "than the BOSS theme, and are never hidden behind a web page. Off restores " +
+                    "the BOSS-styled menus.",
+        )
     }
 }
 

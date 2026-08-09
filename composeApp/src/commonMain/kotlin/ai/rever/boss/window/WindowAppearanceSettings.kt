@@ -17,6 +17,18 @@ data class WindowAppearanceSettings(
      * Default: SHRINK_TO_FIT (Safari behaviour)
      */
     val tabWidthMode: TabWidthMode = TabWidthMode.SHRINK_TO_FIT,
+    /**
+     * Whether right-click menus are the operating system's own rather than BOSS-drawn.
+     *
+     * On macOS this renders a real NSMenu: system appearance and metrics, native keyboard
+     * navigation and accessibility, and correct behaviour over the browser's native surface,
+     * which a Compose popup is painted behind. Native menus cannot be themed, so turning this
+     * off restores the BOSS-styled menus.
+     *
+     * Currently macOS-only and ignored elsewhere - see `shouldUseNativeMenus` for why Windows
+     * and Linux stay on the drawn menus.
+     */
+    val useNativeContextMenus: Boolean = true,
 )
 
 /**

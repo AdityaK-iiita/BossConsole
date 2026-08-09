@@ -512,7 +512,9 @@ fun BossTabsComponent.BossMainTabBar(
                                     add(
                                         ContextMenuItem(
                                             if (isFavorited) "Unfavorite Workspace" else "Favorite Workspace",
-                                            if (isFavorited) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                                            // The icon shows what the action DOES, matching the label: "Unfavorite"
+                                            // empties the star, "Favorite" fills it.
+                                            if (isFavorited) Icons.Outlined.StarBorder else Icons.Filled.Star,
                                             onClick = {
                                                 if (isFavorited) {
                                                     BookmarkAPIAccess.removeFavoriteWorkspace(currentWorkspace.id)
@@ -661,7 +663,9 @@ fun BossTabsComponent.BossMainTabBar(
                                         add(
                                             ContextMenuItem(
                                                 if (isFavorited) "Unfavorite Workspace" else "Favorite Workspace",
-                                                if (isFavorited) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                                                // The icon shows what the action DOES, matching the label: "Unfavorite"
+                                                // empties the star, "Favorite" fills it.
+                                                if (isFavorited) Icons.Outlined.StarBorder else Icons.Filled.Star,
                                                 onClick = {
                                                     if (isFavorited) {
                                                         BookmarkAPIAccess.removeFavoriteWorkspace(currentWorkspace.id)

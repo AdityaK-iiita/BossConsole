@@ -7,6 +7,13 @@ import ai.rever.boss.platform.ContextMenuHandler
 import ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
 import ai.rever.boss.plugin.ui.BossPopupAnchoring
 import ai.rever.boss.plugin.ui.BossTheme
+import ai.rever.boss.plugin.ui.menu.NATIVE_MENU_ICON_POINTS
+import ai.rever.boss.plugin.ui.menu.NATIVE_MENU_ICON_SCALE
+import ai.rever.boss.plugin.ui.menu.NativeContextMenus
+import ai.rever.boss.plugin.ui.menu.NativeMenuAnchor
+import ai.rever.boss.plugin.ui.menu.NativeMenuNode
+import ai.rever.boss.plugin.ui.menu.shouldUseNativeMenus
+import ai.rever.boss.window.WindowAppearanceSettingsManager
 import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -26,9 +33,17 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.dp
@@ -65,6 +80,131 @@ data class ContextMenuItem(
 )
 
 /**
+ * Whether this menu can be rendered by an operating-system menu without losing anything the user
+ * can act on.
+ *
+ * A native menu item is a label, an enabled flag and an optional shortcut. Two of the app's extras
+ * have no native equivalent, and they are not equally important:
+ *
+ * - A **leading icon is decoration**. macOS menus mostly do not carry one, so dropping it costs
+ *   nothing but appearance. It is deliberately NOT disqualifying: nearly every menu item in the
+ *   app has an icon, so treating icons as blocking would leave essentially every menu on the
+ *   drawn path and make this whole feature invisible.
+ * - An **inline trailing button is a distinct action** - the sidebar, workspace and run-history
+ *   menus use them for edit and delete. Dropping one silently removes something the user relies
+ *   on, so those menus keep the drawn path until they are reshaped to express the same actions as
+ *   structure (a submenu).
+ */
+internal fun List<ContextMenuItem>.isNativeRepresentable(): Boolean =
+    all { item ->
+        item.trailingIcon == null &&
+            item.secondaryTrailingIcon == null &&
+            item.subMenu?.isNativeRepresentable() != false
+    }
+
+/** Icons already rasterised for a native menu, keyed by the vector they came from. */
+internal typealias MenuIcons = Map<ImageVector, ImageBitmap>
+
+/** Every distinct icon in the menu tree, so each is rasterised once rather than once per item. */
+internal fun List<ContextMenuItem>.collectIcons(): List<ImageVector> =
+    flatMap { item ->
+        listOfNotNull(item.icon) + (item.subMenu?.collectIcons() ?: emptyList())
+    }.distinct()
+
+/**
+ * Rasterise an icon for a native menu item.
+ *
+ * The tint is a fixed mid-grey rather than a theme colour: the menu's background is the system's,
+ * not the app's, and macOS offers no way to mark a peer-supplied image as a template - which is
+ * what would let the OS tint it per appearance and while highlighted. This grey approximates the
+ * system secondary label colour and stays legible on both the light and dark menu backgrounds.
+ */
+@Composable
+private fun ImageVector.toNativeMenuIcon(): ImageBitmap {
+    val painter = rememberVectorPainter(this)
+    val density = LocalDensity.current
+    val layoutDirection = LocalLayoutDirection.current
+    return remember(this, density, layoutDirection) {
+        // Fixed 2x of the point size, NOT the screen density: the point size is stated by the
+        // multi-resolution image the desktop side builds, so rasterising at the display's scale
+        // would just hand AppKit a bitmap it reads as an oversized icon.
+        val px = NATIVE_MENU_ICON_POINTS * NATIVE_MENU_ICON_SCALE
+        val bitmap = ImageBitmap(px, px)
+        CanvasDrawScope().draw(
+            density = density,
+            layoutDirection = layoutDirection,
+            canvas = Canvas(bitmap),
+            size = Size(px.toFloat(), px.toFloat()),
+        ) {
+            with(painter) { draw(size, colorFilter = ColorFilter.tint(NATIVE_MENU_ICON_TINT)) }
+        }
+        bitmap
+    }
+}
+
+private val NATIVE_MENU_ICON_TINT = Color(0xFF8A8A8E)
+
+/**
+ * Convert to the toolkit-neutral model the native engine speaks.
+ *
+ * The action is wrapped in [PluginExecutionBoundary.invokeAttributed] for the same reason the
+ * drawn rows are: a plugin-supplied callback must run inside its own attribution scope, or the
+ * next crash on that thread is blamed on nobody and takes the app down instead of the plugin.
+ * This is the one seam plugin crash recovery rests on, and it fails silently.
+ */
+internal fun List<ContextMenuItem>.toNativeMenuNodes(icons: MenuIcons = emptyMap()): List<NativeMenuNode> =
+    map { item ->
+        when {
+            item.isDivider -> {
+                NativeMenuNode.Separator
+            }
+
+            // isNullOrEmpty, matching the drawn renderer. An item with an EMPTY subMenu and a real
+            // onClick is a clickable row there; treating it as a submenu here would make
+            // planNativeMenu drop it as an unopenable dead row, so the item would vanish. Reachable
+            // through the plugin API, which maps `subMenu?.map { ... }` and hands back an empty
+            // non-null list.
+            !item.subMenu.isNullOrEmpty() -> {
+                NativeMenuNode.Submenu(item.text, item.subMenu.toNativeMenuNodes(icons))
+            }
+
+            else -> {
+                NativeMenuNode.Item(
+                    label = item.text,
+                    icon = item.icon?.let { icons[it] },
+                    action = { PluginExecutionBoundary.invokeAttributed(item.onClick) },
+                )
+            }
+        }
+    }
+
+/**
+ * Forces the menu path in tests.
+ *
+ * The drawn menu is a Compose tree a UI test can find nodes in; a native menu is an OS window
+ * that has none. Without this, every existing menu UI test would pass on CI and fail on a macOS
+ * developer machine purely because of which renderer ran.
+ */
+internal object NativeContextMenuTestOverride {
+    @Volatile
+    internal var enabled: Boolean? = null
+}
+
+/**
+ * Read per show, so toggling the preference takes effect on the next right-click without a
+ * restart. Falls back to enabled if the settings file cannot be read.
+ */
+@Composable
+private fun useNativeContextMenus(): Boolean {
+    NativeContextMenuTestOverride.enabled?.let { return it }
+    val settings by WindowAppearanceSettingsManager.currentSettings.collectAsState()
+    return shouldUseNativeMenus(
+        settingEnabled = settings.useNativeContextMenus,
+        isMacOs = NativeContextMenus.isSupported(),
+    )
+}
+
+/**
  * A custom context menu that can be shown on right-click or long press
  * depending on the platform.
  *
@@ -80,6 +220,48 @@ fun ContextMenu(
     modifier: Modifier = Modifier,
     onDismissRequest: () -> Unit,
 ) {
+    // A real OS menu, where the platform and the menu's shape both allow it.
+    //
+    // This is checked before the heavyweight branch below because it subsumes it: an NSMenu is an
+    // OS-owned window, so it is never occluded by the browser's native surface and needs none of
+    // the heavyweight-window machinery to say so.
+    //
+    // Falls through whenever the menu carries an icon or an inline trailing button, which a
+    // native menu item cannot render - see [isNativeRepresentable].
+    // Tracks a native attempt that could not produce a menu, so this composition falls through to
+    // the drawn paths instead of returning with nothing on screen. Every guard in the engine
+    // exists to make that decline possible; swallowing it here would defeat all of them, and the
+    // reachable causes (no pointer, no showing frame, a throwing `locationOnScreen`) are sticky
+    // rather than transient, so the user would get a right-click that repeatedly does nothing.
+    var nativeUnavailable by remember { mutableStateOf(false) }
+
+    if (useNativeContextMenus() && !nativeUnavailable && items.isNativeRepresentable()) {
+        val dismiss by rememberUpdatedState(onDismissRequest)
+        // Rasterised here in composition, where density is available; the effect below is not.
+        val icons = items.collectIcons().associateWith { it.toNativeMenuIcon() }
+        val nodes by rememberUpdatedState(items.toNativeMenuNodes(icons))
+        // Keyed on Unit, NOT on items. This composable exists only while the menu should be up, so
+        // entering composition IS the show and leaving it IS the dismissal. Keying on items would
+        // restart the effect on every recomposition, because the list is rebuilt each time and its
+        // lambdas capture unstable values so equality never holds - and the tab menu is rebuilt on
+        // every tab-bar recomposition, e.g. on each line of terminal output. That would tear down
+        // and reopen the menu under the user's cursor many times a second.
+        DisposableEffect(Unit) {
+            val shown =
+                NativeContextMenus.show(
+                    nodes = nodes,
+                    // The pointer IS the intended position for a right-click menu, and reading it
+                    // from the OS avoids converting node-relative Compose pixels into screen
+                    // coordinates - a conversion this codebase has nowhere else.
+                    anchor = NativeMenuAnchor.Cursor,
+                    onDismiss = { dismiss() },
+                )
+            if (!shown) nativeUnavailable = true
+            onDispose { NativeContextMenus.hide() }
+        }
+        if (!nativeUnavailable) return
+    }
+
     val heavyweight = OverlayConfig.heavyweightPopup
     if (routeOverlayHeavyweight(heavyweight != null) && heavyweight != null) {
         // HARDWARE_ACCELERATED browser: a lightweight Compose Popup renders BEHIND the

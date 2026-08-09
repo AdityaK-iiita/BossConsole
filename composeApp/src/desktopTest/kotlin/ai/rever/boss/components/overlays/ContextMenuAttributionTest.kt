@@ -2,6 +2,7 @@ package ai.rever.boss.components.overlays
 
 import ai.rever.boss.crash.pluginprobe.PluginProbeJar
 import ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
+import ai.rever.boss.plugin.ui.menu.NativeMenuNode
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
@@ -14,6 +15,7 @@ import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.rightClick
 import androidx.compose.ui.unit.dp
 import org.junit.After
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import kotlin.test.assertEquals
@@ -47,8 +49,22 @@ class ContextMenuAttributionTest {
 
     private val probe = PluginProbeJar.open(javaClass.classLoader)
 
+    /**
+     * These two tests find menu rows as Compose nodes, so they must run against the drawn menu.
+     * A native menu is an OS window with no Compose tree, which would make them fail on macOS and
+     * pass on CI for no reason connected to what they assert. The native path's own attribution is
+     * pinned separately below.
+     */
+    @Before
+    fun useDrawnMenu() {
+        NativeContextMenuTestOverride.enabled = false
+    }
+
     @After
-    fun tearDown() = probe.close()
+    fun tearDown() {
+        NativeContextMenuTestOverride.enabled = null
+        probe.close()
+    }
 
     @Test
     fun `a plugin's context-menu action runs inside that plugin's scope`() {
@@ -132,5 +148,44 @@ class ContextMenuAttributionTest {
         rule.waitForIdle()
         rule.onNodeWithText(label).performClick()
         rule.waitForIdle()
+    }
+
+    @Test
+    fun `the native path attributes a plugin action too`() {
+        // The native renderer builds java.awt.MenuItems, which cannot be constructed headlessly,
+        // so this asserts the conversion rather than the click: the wrapping is the whole of what
+        // attribution depends on, and it is what a port silently drops.
+        var scopeInsideAction: String? = "never invoked"
+        val pluginAction =
+            probe.action(
+                "probeReporter",
+                Runnable { scopeInsideAction = PluginExecutionBoundary.currentPluginId() },
+            )
+
+        val nodes = listOf(ContextMenuItem(text = ITEM_LABEL, onClick = pluginAction)).toNativeMenuNodes()
+        (nodes.single() as NativeMenuNode.Item).action()
+
+        assertEquals(
+            PluginProbeJar.PLUGIN_ID,
+            scopeInsideAction,
+            "a native menu item must invoke a plugin action inside that plugin's attribution scope",
+        )
+    }
+
+    @Test
+    fun `the native path does not leave the plugin scope behind`() {
+        var scopeAfter: String? = "never invoked"
+        val pluginAction = probe.action("probeReporter", Runnable { })
+        val hostAction = { scopeAfter = PluginExecutionBoundary.currentPluginId() }
+
+        val nodes =
+            listOf(
+                ContextMenuItem(text = ITEM_LABEL, onClick = pluginAction),
+                ContextMenuItem(text = HOST_ITEM_LABEL, onClick = hostAction),
+            ).toNativeMenuNodes()
+        (nodes[0] as NativeMenuNode.Item).action()
+        (nodes[1] as NativeMenuNode.Item).action()
+
+        assertEquals(null, scopeAfter, "the plugin's scope must not still be on that thread")
     }
 }
