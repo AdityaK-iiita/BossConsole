@@ -94,6 +94,10 @@ object PluginListProvider {
             // Productivity
             "ai.rever.boss.plugin.dynamic.bookmarks" to PluginCategory.PRODUCTIVITY,
             "ai.rever.boss.plugin.dynamic.topofmind" to PluginCategory.PRODUCTIVITY,
+            // Not an admin tool, despite living here until 9.4.7. It is a per-user
+            // credential vault (every RPC behind it is auth.uid()-scoped) and, since AI
+            // provider settings moved into it, the only place anyone adds their own key.
+            "ai.rever.boss.plugin.dynamic.secretmanager" to PluginCategory.PRODUCTIVITY,
             // Automation
             "ai.rever.boss.plugin.dynamic.llmrpa" to PluginCategory.AUTOMATION,
             "ai.rever.boss.plugin.dynamic.rparecorder" to PluginCategory.AUTOMATION,
@@ -101,7 +105,6 @@ object PluginListProvider {
             // Admin
             "ai.rever.boss.plugin.dynamic.adminrolemanagement" to PluginCategory.ADMIN,
             "ai.rever.boss.plugin.dynamic.rolecreation" to PluginCategory.ADMIN,
-            "ai.rever.boss.plugin.dynamic.secretmanager" to PluginCategory.ADMIN,
         )
 
     /**
@@ -412,11 +415,11 @@ object PluginListProvider {
                 WizardPluginInfo(
                     id = "ai.rever.boss.plugin.dynamic.secretmanager",
                     name = "Secret Manager",
-                    description = "Securely manage API keys and secrets",
+                    description = "Your encrypted credential vault, and where you add AI provider keys",
                     version = "1.0.0",
                     icon = Icons.Default.Key,
                     isDefault = false,
-                    category = PluginCategory.ADMIN,
+                    category = PluginCategory.PRODUCTIVITY,
                 ),
             )
 }

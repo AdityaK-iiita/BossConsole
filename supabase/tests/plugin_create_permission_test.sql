@@ -10,7 +10,7 @@
 -- auth.users row fires handle_new_user(), which assigns the 'user' role.
 
 begin;
-select plan(22);
+select plan(23);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -64,7 +64,12 @@ select set_eq(
               -- role (20260801010000), and boss_plugin_admin inherits from it.
               -- Revoking them from `user` is the kill-switch for self-service
               -- organisation creation, so this list tracks that grant.
-              ('organisation.create'),('organisation.read') $$,
+              ('organisation.create'),('organisation.read'),
+              -- Likewise `secret.read`, granted to `user` by 20260809000000 so that
+              -- everyone gets their own vault and Settings > AI Providers. Inherited,
+              -- not direct: this role still cannot share a secret with a role, which is
+              -- what the secret.share.role assertion below pins.
+              ('secret.read') $$,
     'boss_plugin_admin EFFECTIVE = direct + the inherited user.* baseline'
 );
 
@@ -78,11 +83,16 @@ select is(
     0,
     'boss_plugin_admin holds NO plugins.admin.* moderation permission'
 );
+-- `secret.read` is exempted rather than dropped from the family list: it is now part
+-- of the `user` baseline every role inherits (20260809000000), so its presence here is
+-- expected. Any OTHER secret.* -- notably secret.share.role -- must still be absent,
+-- which is the half of this assertion that still has teeth.
 select is(
     (select count(*)::int from unnest(public.get_effective_permissions('11111111-1111-1111-1111-111111111111')) perm
-     where perm like 'role.%' or perm like 'finance.%' or perm like 'rpa.%' or perm like 'secret.%'),
+     where perm like 'role.%' or perm like 'finance.%' or perm like 'rpa.%'
+        or (perm like 'secret.%' and perm <> 'secret.read')),
     0,
-    'boss_plugin_admin holds NO role.*, finance.*, rpa.* or secret.* permission'
+    'boss_plugin_admin holds NO role.*, finance.*, rpa.* or non-baseline secret.* permission'
 );
 
 -- ---------------------------------------------------------------------------
@@ -113,7 +123,12 @@ select is( public.authorize('plugins.create'), true,  'boss_plugin_admin authori
 select is( public.authorize('api_key.create'), true,  'boss_plugin_admin authorize(api_key.create) = true' );
 select is( public.authorize('plugins.admin.publish'), false,
            'boss_plugin_admin authorize(plugins.admin.publish) = false (moderation stays separate)' );
-select is( public.authorize('secret.read'), false, 'boss_plugin_admin authorize(secret.read) = false' );
+-- Was `false`. `user` holds secret.read from 20260809000000 and this role inherits it,
+-- so the vault is open to it like everyone else. The permission that still separates a
+-- plugin author from an admin is the role-share fan-out, asserted next.
+select is( public.authorize('secret.read'), true, 'boss_plugin_admin authorize(secret.read) = true (inherited from user)' );
+select is( public.authorize('secret.share.role'), false,
+           'boss_plugin_admin authorize(secret.share.role) = false (role shares stay admin-only)' );
 
 -- ---------------------------------------------------------------------------
 -- Delegated assignment. boss_plugin_admin is a grantable TARGET for boss_admin,

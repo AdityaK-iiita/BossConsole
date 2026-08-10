@@ -32,6 +32,12 @@ select u.id, r.id from auth.users u join public.roles r on
     (u.email = 'hadmin@pgtap.test'   and r.name = 'admin')
  or (u.email = 'hboss@pgtap.test'    and r.name = 'boss_admin')
  or (u.email = 'hfinance@pgtap.test' and r.name = 'finance_admin')
+ -- The owner needs boss_admin purely for its `secret.share.role`: since
+ -- 20260809000000, creating a role share takes that permission and a plain owner
+ -- is refused. This suite is about who can SEE a role share, not who may create
+ -- one, so the fixture buys the ability and moves on. The refusal itself is
+ -- covered in secret_read_for_user_role_test.sql.
+ or (u.email = 'howner@pgtap.test'   and r.name = 'boss_admin')
 on conflict do nothing;
 
 -- The owner creates a secret and shares it with finance_admin.

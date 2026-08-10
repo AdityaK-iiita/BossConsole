@@ -66,6 +66,38 @@ object LlmProviderAPIAccess {
         return remember(registryVersion) { getProvider() }
     }
 
+    /**
+     * The permissions the current user is missing for the plugin that owns AI provider
+     * settings, or an empty list when permissions are not why it is absent.
+     *
+     * `DynamicPluginManager` does not merely hide a plugin the user cannot access - it
+     * skips `register()` entirely, so the API is never contributed and this class's
+     * [getProvider] returns null. That is indistinguishable from "not installed" and
+     * "still starting up" at this layer, and the Settings section used to report all
+     * three as "isn't loaded yet" - which for the permission case is simply false: it
+     * will never load, and nothing told the user what to ask an admin for.
+     *
+     * Observes `pluginStates` rather than a permission flow because that is the public
+     * one, and it is written on exactly the transitions that matter: a plugin moving
+     * into or out of `hiddenPlugins` updates its state.
+     */
+    @Composable
+    fun rememberMissingPermissions(): List<String> {
+        val plugin = cachedDefaultPlugin ?: return emptyList()
+        val manager = plugin.dynamicPluginManager
+        val states by manager.pluginStates.collectAsState()
+        return remember(states) {
+            manager
+                .getInaccessiblePlugins()
+                .firstOrNull { it.pluginId == SECRET_MANAGER_PLUGIN_ID }
+                ?.missingPermissions
+                .orEmpty()
+        }
+    }
+
+    /** The plugin that owns AI provider settings. Also the credential vault. */
+    private const val SECRET_MANAGER_PLUGIN_ID = "ai.rever.boss.plugin.dynamic.secretmanager"
+
     // ==================== Composable Bridges (Settings) ====================
 
     /**

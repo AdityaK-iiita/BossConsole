@@ -23,10 +23,29 @@ the duplicate path is harmless because `get_role_descendants` uses `UNION`.
 
 **`boss_plugin_admin`** is the least-privilege plugin author: `plugins.create` +
 `api_key.create`, plus the inherited `user.*` baseline. It deliberately holds no
-`plugins.admin.*` moderation permission, no role/finance/RPA verb, and no
-`secret.read`. Note it cannot assign any role despite `user` being a strict
-descendant - `assign_role_to_user` requires `role.assign` first, which this role
-does not have. See migration `20260731000000_plugin_create_permission.sql`.
+`plugins.admin.*` moderation permission and no role/finance/RPA verb. Note it cannot
+assign any role despite `user` being a strict descendant - `assign_role_to_user`
+requires `role.assign` first, which this role does not have. See migration
+`20260731000000_plugin_create_permission.sql`. (It held no `secret.read` either until
+`20260809000000` put that on the `user` baseline; it now inherits it like everyone
+else, and still holds no `secret.share.role`.)
+
+**The `user` baseline** carries `user.read/write/update/delete`,
+`organisation.create`, `organisation.read` and `secret.read`. Each of those is a
+deliberate kill switch: revoking one from `user` disables that capability
+deployment-wide without touching any other role. `secret.read` is what makes the
+Secret Manager panel - and with it `Settings > AI Providers`, which that plugin owns -
+available to ordinary users. It was admin-only until `20260809000000`; see that
+migration's header for why that was a leftover from the pre-RBAC `requiresAdmin` flag
+rather than a security posture. The vault's RPCs are granted to `authenticated` and
+self-scope with `auth.uid()` regardless of the permission.
+
+**`secret.share.role`** (admin + boss_admin) is the one secret capability that is not
+everyone's. A role share reaches every holder of that role, and `user` is a descendant
+of every role, so a role target publishes a credential deployment-wide with no undo.
+`share_secret` enforces it; the Secret Manager panel hides the Roles tab without it.
+Sharing with an individual user is ungated, and sharing with an organisation requires
+membership of that organisation instead.
 
 - **Effective permissions** - a user's permissions = the union of permissions on each assigned role plus all of that role's descendants. Computed by `get_role_descendants(role_id)` (recursive, cycle-safe) and `get_effective_permissions(user_id)`. `authorize(permission)` walks this closure, so a permission granted to `user` is automatically held by `boss_admin`, `finance_admin`, and `admin`.
 - **JWT claim** - `custom_access_token_hook` injects the effective set as the `user_permissions` claim (for both magic-link and passkey logins). The client parses it into `RoleClaims.permissions` / `UserInfo.permissions` (UI/visibility only - server still enforces).
