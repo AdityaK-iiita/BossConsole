@@ -14,6 +14,7 @@ import ai.rever.boss.platform.rememberFilePicker
 import ai.rever.boss.plugin.api.FileNodeData
 import ai.rever.boss.plugin.api.FileTreeUtils
 import ai.rever.boss.plugin.api.NewTabContext
+import ai.rever.boss.plugin.api.NewTabSpec
 import ai.rever.boss.plugin.api.NodeLoadingStateData
 import ai.rever.boss.plugin.api.TabInfo
 import ai.rever.boss.plugin.api.TabRegistry
@@ -152,6 +153,25 @@ private fun encodeUrlParameter(input: String): String =
         .replace("=", "%3D")
         .replace("/", "%2F")
 
+/**
+ * A spec that declares no input at all (blank label and placeholder, input
+ * optional): clicking the tab type opens it instantly, no input step.
+ *
+ * **Not reachable by omission**, which is what makes a heuristic acceptable here
+ * instead of an explicit flag. Checked against the pinned boss-plugin-api 1.0.76
+ * jar: `inputLabel` defaults to "Input" and `inputOptional` to false, so a plugin
+ * writing `NewTabSpec(order = 5, confirmLabel = "Open")` fails two of the three
+ * conditions. Opting in means setting all three deliberately - blank label, blank
+ * placeholder, optional - which no author does by accident.
+ *
+ * That property is load-bearing and lives in a different repo, so it is worth
+ * re-checking if the api ever changes those defaults: flipping `inputOptional` to
+ * true would silently take the input field away from every spec that omits a label.
+ * An explicit `opensImmediately` on NewTabSpec would retire the heuristic, but it
+ * ships in the external artifact and so needs an api release.
+ */
+internal fun NewTabSpec.needsNoInput(): Boolean = inputOptional && inputLabel.isBlank() && inputPlaceholder.isBlank()
+
 // Platform-specific URL history provider
 expect object UrlHistoryProvider {
     fun getSuggestions(
@@ -215,30 +235,56 @@ fun NewTabDialog(
     val selectedPluginTypeInfo = selectedPluginType?.let { id -> pluginTypes.firstOrNull { it.typeId == id } }
     var pluginInput by remember(selectedPluginType) { mutableStateOf("") }
 
-    // Confirm a plugin tab type: the plugin builds the TabInfo (null = input
-    // rejected, dialog stays open). Crash-isolated — plugin code.
+    // Guards the create action against a second click landing before the dialog
+    // leaves composition. onCreateTabInfo + onDismiss are state-driven, so two
+    // clicks in that gap open two tabs. The confirm button always had this, but
+    // a TILE is a far more natural thing to double-click than a confirm button,
+    // so the instant-open path is where it actually becomes reachable.
+    //
+    // Latched, never reset: it is only ever set on a path that also calls
+    // onDismiss, so this composable is on its way out. That makes it depend on
+    // the caller honouring onDismiss - one that keeps the dialog composed would
+    // leave it permanently unable to create a plugin tab.
+    var opening by remember { mutableStateOf(false) }
+
+    // Open a plugin tab type with the given input: the plugin builds the
+    // TabInfo (null = input rejected, dialog stays open). Crash-isolated —
+    // plugin code. Returns whether a tab was actually opened, which the
+    // instant-open path needs: with no input on screen there is nothing for the
+    // user to correct, so a refusal has to surface as something.
+    val openPluginTab: (TabTypeInfo, String) -> Boolean = { typeInfo, input ->
+        if (opening) {
+            false
+        } else {
+            val tabInfo =
+                try {
+                    typeInfo.createTabInfo(input.trim(), NewTabContext(projectPath = projectPath, windowId = windowId))
+                } catch (e: Exception) {
+                    newTabDialogLogger.warn(
+                        LogCategory.UI,
+                        "Plugin createTabInfo failed",
+                        mapOf(
+                            "typeId" to typeInfo.typeId.typeId,
+                        ),
+                        e,
+                    )
+                    null
+                }
+            if (tabInfo != null) {
+                opening = true
+                onCreateTabInfo?.invoke(tabInfo)
+                onDismiss()
+            }
+            tabInfo != null
+        }
+    }
+
+    // Confirm the selected plugin tab type with the typed input.
     val confirmPluginTab: () -> Unit = confirm@{
         val typeInfo = selectedPluginTypeInfo ?: return@confirm
         val spec = typeInfo.newTabSpec ?: return@confirm
         if (!spec.inputOptional && pluginInput.isBlank()) return@confirm
-        val tabInfo =
-            try {
-                typeInfo.createTabInfo(pluginInput.trim(), NewTabContext(projectPath = projectPath, windowId = windowId))
-            } catch (e: Exception) {
-                newTabDialogLogger.warn(
-                    LogCategory.UI,
-                    "Plugin createTabInfo failed",
-                    mapOf(
-                        "typeId" to typeInfo.typeId.typeId,
-                    ),
-                    e,
-                )
-                null
-            }
-        if (tabInfo != null) {
-            onCreateTabInfo?.invoke(tabInfo)
-            onDismiss()
-        }
+        openPluginTab(typeInfo, pluginInput)
     }
     var urlText by remember { mutableStateOf("") }
     var fileText by remember { mutableStateOf("") }
@@ -443,6 +489,28 @@ fun NewTabDialog(
                                 label = pluginType.displayName,
                                 isSelected = selectedPluginType == pluginType.typeId,
                                 onClick = {
+                                    // Types that declare no input (e.g. Arcade)
+                                    // open on the click itself — no input step.
+                                    //
+                                    // If the plugin refuses, fall back to selecting
+                                    // the type. Without that the tile is inert: it
+                                    // does not even become selected, so a broken
+                                    // no-input type is a button that visibly does
+                                    // nothing, forever, with only a log line to say
+                                    // why. Selecting shows the confirm button, so the
+                                    // refusal is at least visible and retryable.
+                                    //
+                                    // `!opening` distinguishes the two falses
+                                    // openPluginTab returns. A refusal means select;
+                                    // "a create is already in flight" - the second half
+                                    // of a double-click - must NOT, or the dialog
+                                    // rearranges itself on its way out.
+                                    if (pluginType.newTabSpec?.needsNoInput() == true) {
+                                        if (!openPluginTab(pluginType, "") && !opening) {
+                                            selectedPluginType = pluginType.typeId
+                                        }
+                                        return@TabTypeOption
+                                    }
                                     when (selectedType) {
                                         TabType.URL -> {
                                             urlText = inputText
@@ -500,51 +568,73 @@ fun NewTabDialog(
                     Column {
                         // Plugin tab type input — one generic field driven by the
                         // type's NewTabSpec; the plugin validates via createTabInfo.
+                        //
+                        // Gated on the same predicate as the tile click, so the two
+                        // paths agree. A no-input type can arrive here without ever
+                        // being clicked: when no built-in types are available the
+                        // dialog auto-selects the first plugin type, which would
+                        // otherwise open showing the empty "(optional)" field, the
+                        // focus grab and the confirm button that this change exists
+                        // to remove.
+                        //
+                        // The no-input case is a branch INSIDE this one, never a
+                        // narrower condition on it. This `if` heads a chain that ends in
+                        // an unconditional `else` drawing the URL field, so excluding a
+                        // type here does not render nothing - it falls through to
+                        // whichever built-in matches `selectedType`, which starts as URL.
+                        // That put a focused "Enter URL or search term" next to a "Play"
+                        // button that discards whatever is typed, and on the refusal path
+                        // a whole file tree beside a button that silently fails again.
                         if (selectedPluginTypeInfo != null) {
                             val spec = selectedPluginTypeInfo.newTabSpec!!
-                            val pluginFocusRequester = remember { FocusRequester() }
-                            LaunchedEffect(selectedPluginType) {
-                                pluginFocusRequester.requestFocus()
+                            // Nothing to ask for. The confirm button below is already
+                            // plugin-scoped on this same condition, so it keeps carrying
+                            // spec.confirmLabel and confirmPluginTab.
+                            if (!spec.needsNoInput()) {
+                                val pluginFocusRequester = remember { FocusRequester() }
+                                LaunchedEffect(selectedPluginType) {
+                                    pluginFocusRequester.requestFocus()
+                                }
+                                OutlinedTextField(
+                                    value = pluginInput,
+                                    onValueChange = { pluginInput = it },
+                                    label = {
+                                        Text(
+                                            spec.inputLabel + if (spec.inputOptional) " (optional)" else "",
+                                            color = BossTheme.colors.textSecondary,
+                                        )
+                                    },
+                                    placeholder = {
+                                        Text(
+                                            spec.inputPlaceholder,
+                                            color = BossTheme.colors.textMuted,
+                                        )
+                                    },
+                                    modifier =
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .focusRequester(pluginFocusRequester)
+                                            .onPreviewKeyEvent { event ->
+                                                if (event.type == KeyEventType.KeyDown && event.key == Key.Enter) {
+                                                    confirmPluginTab()
+                                                    true
+                                                } else {
+                                                    false
+                                                }
+                                            },
+                                    colors =
+                                        TextFieldDefaults.outlinedTextFieldColors(
+                                            textColor = BossTheme.colors.textPrimary,
+                                            cursorColor = BossTheme.colors.textPrimary,
+                                            focusedBorderColor = BossTheme.colors.signal,
+                                            unfocusedBorderColor = BossTheme.colors.line,
+                                            backgroundColor = BossTheme.colors.panel,
+                                        ),
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                    keyboardActions = KeyboardActions(onDone = { confirmPluginTab() }),
+                                )
                             }
-                            OutlinedTextField(
-                                value = pluginInput,
-                                onValueChange = { pluginInput = it },
-                                label = {
-                                    Text(
-                                        spec.inputLabel + if (spec.inputOptional) " (optional)" else "",
-                                        color = BossTheme.colors.textSecondary,
-                                    )
-                                },
-                                placeholder = {
-                                    Text(
-                                        spec.inputPlaceholder,
-                                        color = BossTheme.colors.textMuted,
-                                    )
-                                },
-                                modifier =
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .focusRequester(pluginFocusRequester)
-                                        .onPreviewKeyEvent { event ->
-                                            if (event.type == KeyEventType.KeyDown && event.key == Key.Enter) {
-                                                confirmPluginTab()
-                                                true
-                                            } else {
-                                                false
-                                            }
-                                        },
-                                colors =
-                                    TextFieldDefaults.outlinedTextFieldColors(
-                                        textColor = BossTheme.colors.textPrimary,
-                                        cursorColor = BossTheme.colors.textPrimary,
-                                        focusedBorderColor = BossTheme.colors.signal,
-                                        unfocusedBorderColor = BossTheme.colors.line,
-                                        backgroundColor = BossTheme.colors.panel,
-                                    ),
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                                keyboardActions = KeyboardActions(onDone = { confirmPluginTab() }),
-                            )
                         } else if (selectedType == TabType.TERMINAL) {
                             // Terminal command input
                             LaunchedEffect(selectedType) {
