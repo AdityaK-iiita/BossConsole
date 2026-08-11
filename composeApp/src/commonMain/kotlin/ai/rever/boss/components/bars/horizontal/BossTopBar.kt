@@ -1,8 +1,8 @@
 package ai.rever.boss.components.bars.horizontal
 
 import ai.rever.boss.components.buttons.BossActionButton
+import ai.rever.boss.components.buttons.QuickActionHints
 import ai.rever.boss.components.dialogs.CommitDialog
-import ai.rever.boss.components.dialogs.LogoutConfirmationDialog
 import ai.rever.boss.components.dialogs.ProjectOpenModeDialog
 import ai.rever.boss.components.dialogs.ProjectSelectionDialog
 import ai.rever.boss.components.events.PanelEventBus
@@ -64,6 +64,11 @@ fun BossDraggableComponent.BossTopBar(
     onShowTopOfMind: (() -> Unit)? = null,
     onShowSettings: (() -> Unit)? = null,
     onShowSearch: (() -> Unit)? = null,
+    // Required, unlike its neighbours. Those were always callback-only; this one used to open the
+    // confirmation itself, and moving that to BossAppState turned Sign Out into a button that
+    // renders, hovers, shows its hint and does nothing if the argument is dropped. A required
+    // parameter makes that a compile error at the single call site instead.
+    onSignOut: () -> Unit,
     onNewProject: (() -> Unit)? = null,
     onCloneProject: (() -> Unit)? = null,
 ) {
@@ -89,7 +94,7 @@ fun BossDraggableComponent.BossTopBar(
             // Run/debug controls (Issue #91 / #321)
             BossTopRunBar()
             Spacer(modifier = Modifier.weight(0.1f))
-            BossTopRightBar(onShowSettings = onShowSettings, onShowSearch = onShowSearch)
+            BossTopRightBar(onShowSettings = onShowSettings, onShowSearch = onShowSearch, onSignOut = onSignOut)
         }
     }
     Divider(color = BossTheme.colors.line)
@@ -794,8 +799,9 @@ fun BossDraggableComponent.BossTopLeftBar(
 fun BossTopRightBar(
     onShowSettings: (() -> Unit)? = null,
     onShowSearch: (() -> Unit)? = null,
+    // Required - see BossTopBar's onSignOut.
+    onSignOut: () -> Unit,
 ) {
-    var showLogoutDialog by remember { mutableStateOf(false) }
     val currentUser by AuthService.currentUser.collectAsState()
 
     // Show user email if logged in
@@ -808,19 +814,21 @@ fun BossTopRightBar(
         )
     }
 
+    // Hint strings are shared with the focus-mode quick actions, which are these same three
+    // buttons drawn in the other place they are reachable from. See QuickActionHints.
     BossActionButton(
         imageVector = Icons.AutoMirrored.Outlined.Logout,
         text = "Sign Out",
-        hintText = "Sign out of your account",
+        hintText = QuickActionHints.SIGN_OUT,
     ) {
-        showLogoutDialog = true
+        onSignOut()
     }
 
     // Global search button (Issue #92)
     BossActionButton(
         imageVector = Icons.Outlined.Search,
         text = "Search",
-        hintText = "Search files, tabs, bookmarks (⇧⇧)",
+        hintText = QuickActionHints.SEARCH,
     ) {
         onShowSearch?.invoke()
     }
@@ -828,17 +836,14 @@ fun BossTopRightBar(
     BossActionButton(
         imageVector = Icons.Outlined.Settings,
         text = "Settings",
-        hintText = "Configure application settings",
+        hintText = QuickActionHints.SETTINGS,
     ) {
         onShowSettings?.invoke()
     }
 
-    // Logout confirmation dialog
-    if (showLogoutDialog) {
-        LogoutConfirmationDialog(
-            onDismiss = { showLogoutDialog = false },
-        )
-    }
+    // The confirmation itself is raised by BossAppScaffold, which owns the flag: the focus-mode
+    // quick actions offer the same action, and two owners would be two stacked dialogs. See
+    // BossAppState.showLogoutDialog.
 }
 
 /**

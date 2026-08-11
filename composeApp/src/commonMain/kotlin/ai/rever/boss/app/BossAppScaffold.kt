@@ -56,9 +56,13 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
@@ -97,8 +101,13 @@ private val TOAST_OVERLAY_INITIAL_SIZE = DpSize(432.dp, 600.dp)
  *    (`BossPluginNotificationService.notifyPluginDisabled`, an ERROR toast with a "Re-enable"
  *    action - precisely the kind a user leaves sitting while they go elsewhere). Escaping the
  *    scene is only worth anything while the user is looking at this window, so an unfocused window
- *    draws toasts in place, exactly as before this overlay existed. That also stops
- *    `HeavyweightCorner`'s frame-clock loop, which would otherwise run for as long as the toast.
+ *    draws toasts in place, exactly as before this overlay existed.
+ *
+ *    This guard used to carry a second justification: it also stopped `HeavyweightCorner`'s
+ *    frame-clock loop, which would otherwise have run for as long as the toast. That loop is gone -
+ *    the corner renderer is event-driven now - so the reason is gone with it. **The guard is not.**
+ *    The dead click region over another application is on its own sufficient, and it is the reason
+ *    that was always doing the work.
  *
  * Guarding on content matches what `TabCycleOverlayHost` and both drag ghosts already do.
  *
@@ -194,6 +203,19 @@ internal fun BossAppScaffold(
     val coroutineScope = state.coroutineScope
     val splitViewState = state.splitViewState
     val selectedProject by state.windowProjectState.selectedProject.collectAsState()
+
+    // The content area's distance from the window's end and bottom edges, i.e. the right sidebar's
+    // width plus the bottom bar's height, whatever they currently are. Measured rather than derived
+    // from the reveal flags because both animate, and the quick actions have to follow them.
+    //
+    // Written from onGloballyPositioned, which BossActionButton deliberately avoids ("non-observable
+    // holders: avoid triggering remeasure during the layout phase"). Safe here, and the difference
+    // is worth stating: this value feeds only the overlay WINDOW's placement, never the layout of
+    // the Box that reports it, so the write cannot feed back into its own measurement. It is passed
+    // to the cluster as a lambda so the read lands in that composable's restart scope rather than
+    // this one - see FocusModeQuickActions.
+    var contentInset by remember { mutableStateOf(DpSize.Zero) }
+    val density = LocalDensity.current.density
 
     with(state.draggablePanelComponent) {
         Box(
@@ -308,6 +330,9 @@ internal fun BossAppScaffold(
                             onShowSearch = {
                                 state.showGlobalSearchDialog = true
                             },
+                            onSignOut = {
+                                state.showLogoutDialog = true
+                            },
                             onNewProject = {
                                 state.showNewProjectDialog = true
                             },
@@ -343,19 +368,58 @@ internal fun BossAppScaffold(
                     }
 
                     // Main content area - always visible (contains tabs)
-                    BossWindow(
-                        modifier = Modifier.weight(1f),
-                        tabsComponent = state.tabsComponent,
-                        panelComponentStore = state.panelComponentStore,
-                        splitViewState = splitViewState,
-                        tabDragComponent = state.tabDragComponent,
-                        onTabDropResult = { result ->
-                            handleTabDropResult(result, splitViewState)
-                        },
-                        onShowSettings = { state.showSettingsDialog = true },
-                        onOpenProjectDialog = { state.showProjectDialog = true },
-                        onNewProject = { state.showNewProjectDialog = true },
-                    )
+                    Box(
+                        modifier =
+                            Modifier
+                                .weight(1f)
+                                .reportContentInset(density) { contentInset = it },
+                    ) {
+                        BossWindow(
+                            modifier = Modifier.fillMaxSize(),
+                            tabsComponent = state.tabsComponent,
+                            panelComponentStore = state.panelComponentStore,
+                            splitViewState = splitViewState,
+                            tabDragComponent = state.tabDragComponent,
+                            onTabDropResult = { result ->
+                                handleTabDropResult(result, splitViewState)
+                            },
+                            onShowSettings = { state.showSettingsDialog = true },
+                            onOpenProjectDialog = { state.showProjectDialog = true },
+                            onNewProject = { state.showNewProjectDialog = true },
+                        )
+
+                        // Settings / Search / Sign Out, which the top bar otherwise owns outright.
+                        // Composed inside the content area so the lightweight path aligns where it
+                        // draws; contentInset is what makes the heavyweight path agree.
+                        //
+                        // Deliberately NOT also gated on "is a dialog open". An earlier revision
+                        // listed the two dialogs this cluster opens, which would have had to grow
+                        // every time anyone added a dialog to BossAppDialogs and would have gone
+                        // stale silently. It is not needed on either path: a lightweight BossDialog
+                        // falls back to Compose's own Dialog, a real platform window ABOVE the
+                        // composition, so an in-place cluster is underneath it and never over it;
+                        // and a heavyweight modal takes window focus, which drops this to the same
+                        // in-place path by the focus guard in FocusModeQuickActions.
+                        //
+                        // `hides(TOP)` is not redundant with `!showTopBar`, it is what keeps this
+                        // off the launch path entirely. `FocusModeEdgeRevealState.shown` starts
+                        // false and is only turned back on by a LaunchedEffect, so on the FIRST
+                        // composition of every window `!showTopBar` is true whether or not focus
+                        // mode is even enabled. Without this the heavyweight path would create and
+                        // immediately dispose a native always-on-top window on every window open,
+                        // flash it in the corner for users who never turn focus mode on, and call
+                        // contentPaneBounds before the pane is reliably showing - which can burn
+                        // the one-per-session warning flag that exists to make a REAL failure
+                        // visible. Gating on the setting is also just the honest condition: the
+                        // cluster exists because focus mode clears the top bar.
+                        FocusModeQuickActions(
+                            visible = focusQuickActionsVisible(focusModeSettings, reveal.showTopBar),
+                            inset = { contentInset },
+                            onShowSettings = { state.showSettingsDialog = true },
+                            onShowSearch = { state.showGlobalSearchDialog = true },
+                            onSignOut = { state.showLogoutDialog = true },
+                        )
+                    }
 
                     // Right sidebar - hidden in focus mode with smooth expand/shrink animation
                     AnimatedVisibility(

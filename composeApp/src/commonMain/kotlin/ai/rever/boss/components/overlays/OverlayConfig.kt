@@ -144,11 +144,16 @@ object OverlayConfig {
      * up for as long as a key is held. Toasts linger for seconds while the user keeps working, so
      * their overlay must cover no more than itself. Null until injected; callers fall back to
      * drawing in place.
+     *
+     * `inset` shrinks the parent rectangle at its END and BOTTOM edges before the corner is
+     * resolved, so a caller anchored to a sub-region of the window (rather than to the window
+     * itself) can say so. See [OverlayCorner].
      */
     var heavyweightCorner: (
         @Composable (
             alignment: Alignment,
             initialSize: DpSize,
+            inset: DpSize,
             content: @Composable () -> Unit,
         ) -> Unit
     )? = null
@@ -223,20 +228,45 @@ fun BoxScope.OverlayHud(
  * [initialSize] is the size of the window before its content has been measured, so it must be a
  * generous UPPER bound - too small and the content measures clipped, then the overlay settles at
  * the clipped size. On the lightweight path it is unused, as the content sizes itself normally.
+ *
+ * [inset] exists because the two paths anchor to different things. The lightweight path aligns
+ * inside the CALLER's `BoxScope`, but the heavyweight one is a separate window placed against the
+ * parent window's whole content pane - so a caller that draws in a sub-region of the window (the
+ * main content area, say, rather than over the sidebars and status bar) is correct on one path and
+ * lands in the wrong corner on the other. Passing the sub-region's distance from the window's end
+ * and bottom edges makes both agree. It is applied to the heavyweight path only, where it shrinks
+ * the rectangle the corner is resolved inside; the overlay itself is not made any larger, so the
+ * region it covers - and therefore the region whose clicks it swallows - is unchanged.
  */
 @Composable
 fun BoxScope.OverlayCorner(
     alignment: Alignment,
     initialSize: DpSize,
+    inset: DpSize = DpSize.Zero,
     content: @Composable () -> Unit,
 ) {
     val hw = OverlayConfig.heavyweightCorner
     if (routeOverlayHeavyweight(hw != null) && hw != null) {
-        hw(alignment, initialSize) { content() }
+        hw(alignment, initialSize, inset) { content() }
     } else {
         Box(modifier = Modifier.align(alignment)) { content() }
     }
 }
+
+/**
+ * Whether [OverlayCorner] would escape into its own window right here.
+ *
+ * Exists because [OverlayCorner]'s two paths do not accept the same description of where to sit.
+ * The heavyweight one is placed against the whole content pane and so needs an `inset`; the
+ * lightweight one aligns inside the caller's own `BoxScope`, where that same inset would be
+ * double-counted and is therefore ignored. A caller whose spacing must survive both has to know
+ * which it is getting - the alternative is spacing that silently disappears on one path, which is
+ * exactly what happened to this cluster's corner margin.
+ *
+ * Asks the same question [OverlayCorner] does, in the same composition, so the two cannot disagree.
+ */
+@Composable
+internal fun overlayCornerIsHeavyweight(): Boolean = routeOverlayHeavyweight(OverlayConfig.heavyweightCorner != null)
 
 /**
  * A drag ghost of [size] following the pointer, layered above the browser.
