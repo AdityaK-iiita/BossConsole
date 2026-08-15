@@ -14,6 +14,7 @@ import ai.rever.boss.plugin.api.PanelId
 import ai.rever.boss.plugin.api.PluginLoaderDelegate
 import ai.rever.boss.plugin.api.PluginState
 import ai.rever.boss.plugin.loader.PluginSignatureSidecar
+import ai.rever.boss.plugin.loader.PluginUnloadException
 import ai.rever.boss.plugin.repository.remote.PluginStoreConfig
 import ai.rever.boss.plugin.sandbox.TabSandboxRegistry
 import ai.rever.boss.plugin.sandbox.ui.PluginCrashRegistry
@@ -171,6 +172,37 @@ class PluginLoaderDelegateImpl(
         try {
             logger.info(LogCategory.SYSTEM, "Unloading plugin via delegate", mapOf("pluginId" to pluginId))
             val result = dynamicPluginManager.uninstallPlugin(pluginId, force = false)
+            // The Boolean this returns is all the caller gets, so a failure would otherwise
+            // leave no trace anywhere: uninstallPlugin logs "Uninstalling plugin" *before*
+            // deciding, so the log just stopped mid-sequence and the reasons the manager
+            // assembled (which name the plugins standing in the way) were dropped here. That is
+            // what made the Toolbox's Update button look like it did nothing at all.
+            //
+            // Refusal and failure are logged apart because uninstallPlugin returns
+            // Result.failure for both, and they send a reader to opposite places: a refusal
+            // means some other plugin is in the way, while "Plugin not found" or a
+            // pluginLoader.unloadPlugin error is a fault worth a stack trace. Reasons come off
+            // PluginUnloadException.reasons rather than the joined message, so this keeps
+            // working if that message is ever reworded.
+            val cause = result.exceptionOrNull()
+            val refusalReasons = (cause as? PluginUnloadException)?.reasons.orEmpty()
+            if (refusalReasons.isNotEmpty()) {
+                logger.warn(
+                    LogCategory.SYSTEM,
+                    "Plugin unload refused",
+                    mapOf(
+                        "pluginId" to pluginId,
+                        "reasons" to refusalReasons.joinToString("; "),
+                    ),
+                )
+            } else if (cause != null) {
+                logger.error(
+                    LogCategory.SYSTEM,
+                    "Plugin unload failed",
+                    mapOf("pluginId" to pluginId),
+                    cause,
+                )
+            }
             result.isSuccess
         } catch (e: Exception) {
             logger.error(LogCategory.SYSTEM, "Exception unloading plugin", error = e)

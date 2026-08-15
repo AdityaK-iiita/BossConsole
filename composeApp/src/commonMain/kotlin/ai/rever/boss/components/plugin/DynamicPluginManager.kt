@@ -1188,14 +1188,19 @@ class DynamicPluginManager(
             }
         }
 
-        // Check for dependent plugins
-        val loadedPlugins = pluginLoader.getLoadedPlugins()
-        for (plugin in loadedPlugins) {
-            val hasDependency = plugin.manifest.dependencies.any { it.pluginId == pluginId }
-            if (hasDependency) {
-                reasons.add("Plugin '${plugin.manifest.displayName}' depends on this plugin")
-            }
-        }
+        // Check for dependent plugins. Only plugins that actually require this one veto the
+        // unload; see PluginDependencyResolution.blockingDependentsOf for why optional
+        // declarations must not.
+        reasons.addAll(
+            PluginDependencyResolution
+                .blockingDependentsOf(
+                    pluginId = pluginId,
+                    loadedManifests = pluginLoader.getLoadedPlugins().map { it.manifest },
+                    // Fails closed: only a state we positively recognise as DISABLED stops a
+                    // dependent counting. An untracked plugin, or any other state, still vetoes.
+                    isDisabled = { id -> _pluginStates.value[id]?.state == PluginState.DISABLED },
+                ).map { displayName -> "Plugin '$displayName' depends on this plugin" },
+        )
 
         return if (reasons.isEmpty()) {
             CanUnloadResult.Ok

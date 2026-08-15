@@ -324,6 +324,217 @@ class PluginDependencyResolutionTest {
         // has to name something rather than reading "Flow needs null".
         assertTrue(required.description("com.example.gateway").contains("com.example.gateway"))
     }
+
+    // What `DynamicPluginManager.checkCanUnload` refuses on. The install side above and the
+    // unload side here read the same declarations, and they disagreed: an optional dependency
+    // was reported as "works without it" at install time and then treated as a hard veto at
+    // unload time.
+
+    @Test
+    fun `an optional dependent does not block an unload`() {
+        // The AI Gateway case. jupyter-notebook, flow-tab and llmrpa each declare the gateway
+        // optional, so treating that as a veto made the gateway impossible to unload - and the
+        // Toolbox's update path is uninstall-then-reinstall, so its Update button did nothing.
+        val blocking =
+            PluginDependencyResolution.blockingDependentsOf(
+                pluginId = "com.example.gateway",
+                loadedManifests =
+                    listOf(
+                        manifest(
+                            pluginId = "com.example.jupyter",
+                            displayName = "Jupyter Notebook",
+                            dependencies = listOf(dependency("com.example.gateway", optional = true)),
+                        ),
+                    ),
+                isDisabled = { false },
+            )
+
+        assertEquals(emptyList(), blocking)
+    }
+
+    @Test
+    fun `a required dependent blocks an unload and is named`() {
+        val blocking =
+            PluginDependencyResolution.blockingDependentsOf(
+                pluginId = "com.example.gateway",
+                loadedManifests =
+                    listOf(
+                        manifest(
+                            pluginId = "com.example.jupyter",
+                            displayName = "Jupyter Notebook",
+                            dependencies = listOf(dependency("com.example.gateway")),
+                        ),
+                    ),
+                isDisabled = { false },
+            )
+
+        // The display name, because it goes straight into a reason the user reads.
+        assertEquals(listOf("Jupyter Notebook"), blocking)
+    }
+
+    @Test
+    fun `a plugin declaring itself does not block its own unload`() {
+        // Otherwise a manifest typo is permanent: the plugin could never be unloaded, updated
+        // or removed, and the reason would name the plugin being unloaded.
+        val blocking =
+            PluginDependencyResolution.blockingDependentsOf(
+                pluginId = "com.example.gateway",
+                loadedManifests =
+                    listOf(
+                        manifest(
+                            pluginId = "com.example.gateway",
+                            displayName = "AI Gateway",
+                            dependencies = listOf(dependency("com.example.gateway")),
+                        ),
+                    ),
+                isDisabled = { false },
+            )
+
+        assertEquals(emptyList(), blocking)
+    }
+
+    @Test
+    fun `a plugin depending on something else does not block`() {
+        val blocking =
+            PluginDependencyResolution.blockingDependentsOf(
+                pluginId = "com.example.gateway",
+                loadedManifests =
+                    listOf(
+                        manifest(
+                            pluginId = "com.example.other",
+                            displayName = "Other",
+                            dependencies = listOf(dependency("com.example.unrelated")),
+                        ),
+                    ),
+                isDisabled = { false },
+            )
+
+        assertEquals(emptyList(), blocking)
+    }
+
+    @Test
+    fun `one required dependent among optional ones still blocks`() {
+        val blocking =
+            PluginDependencyResolution.blockingDependentsOf(
+                pluginId = "com.example.gateway",
+                loadedManifests =
+                    listOf(
+                        manifest(
+                            pluginId = "com.example.jupyter",
+                            displayName = "Jupyter Notebook",
+                            dependencies = listOf(dependency("com.example.gateway", optional = true)),
+                        ),
+                        manifest(
+                            pluginId = "com.example.flow",
+                            displayName = "Flow",
+                            dependencies = listOf(dependency("com.example.gateway")),
+                        ),
+                        manifest(
+                            pluginId = "com.example.llmrpa",
+                            displayName = "LLM RPA",
+                            dependencies = listOf(dependency("com.example.gateway", optional = true)),
+                        ),
+                    ),
+                isDisabled = { false },
+            )
+
+        assertEquals(listOf("Flow"), blocking)
+    }
+
+    @Test
+    fun `a disabled dependent does not block an unload`() {
+        // disablePlugin unregisters the tracking context and flips state to DISABLED but never
+        // calls pluginLoader.unloadPlugin, so a disabled plugin is still in getLoadedPlugins().
+        // Letting it veto raises a refusal on behalf of something that is not running.
+        val blocking =
+            PluginDependencyResolution.blockingDependentsOf(
+                pluginId = "com.example.gateway",
+                loadedManifests =
+                    listOf(
+                        manifest(
+                            pluginId = "com.example.jupyter",
+                            displayName = "Jupyter Notebook",
+                            dependencies = listOf(dependency("com.example.gateway")),
+                        ),
+                    ),
+                isDisabled = { it == "com.example.jupyter" },
+            )
+
+        assertEquals(emptyList(), blocking)
+    }
+
+    @Test
+    fun `an enabled dependent still blocks when a disabled one does not`() {
+        val blocking =
+            PluginDependencyResolution.blockingDependentsOf(
+                pluginId = "com.example.gateway",
+                loadedManifests =
+                    listOf(
+                        manifest(
+                            pluginId = "com.example.jupyter",
+                            displayName = "Jupyter Notebook",
+                            dependencies = listOf(dependency("com.example.gateway")),
+                        ),
+                        manifest(
+                            pluginId = "com.example.flow",
+                            displayName = "Flow",
+                            dependencies = listOf(dependency("com.example.gateway")),
+                        ),
+                    ),
+                isDisabled = { it == "com.example.jupyter" },
+            )
+
+        assertEquals(listOf("Flow"), blocking)
+    }
+
+    @Test
+    fun `the disabled check fails closed`() {
+        // The host answers false for a state it does not recognise or does not track, so an
+        // untracked-but-loaded dependent still vetoes. Over-vetoing an unfamiliar state is
+        // recoverable; dropping a real dependent silently is what this whole predicate is
+        // about not doing.
+        val blocking =
+            PluginDependencyResolution.blockingDependentsOf(
+                pluginId = "com.example.gateway",
+                loadedManifests =
+                    listOf(
+                        manifest(
+                            pluginId = "com.example.untracked",
+                            displayName = "Untracked",
+                            dependencies = listOf(dependency("com.example.gateway")),
+                        ),
+                    ),
+                isDisabled = { false },
+            )
+
+        assertEquals(listOf("Untracked"), blocking)
+    }
+
+    @Test
+    fun `a dependency declared both ways blocks, as the stricter declaration`() {
+        // Mirrors `missingFor`, which resolves a doubled declaration to the stricter one: a
+        // plugin that requires something does not stop requiring it by also listing it
+        // optionally.
+        val blocking =
+            PluginDependencyResolution.blockingDependentsOf(
+                pluginId = "com.example.gateway",
+                loadedManifests =
+                    listOf(
+                        manifest(
+                            pluginId = "com.example.flow",
+                            displayName = "Flow",
+                            dependencies =
+                                listOf(
+                                    dependency("com.example.gateway", optional = true),
+                                    dependency("com.example.gateway"),
+                                ),
+                        ),
+                    ),
+                isDisabled = { false },
+            )
+
+        assertEquals(listOf("Flow"), blocking)
+    }
 }
 
 /**
