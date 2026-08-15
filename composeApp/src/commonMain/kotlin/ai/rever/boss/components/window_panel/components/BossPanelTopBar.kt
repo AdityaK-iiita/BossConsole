@@ -5,6 +5,8 @@ import ai.rever.boss.components.overlays.ContextMenu
 import ai.rever.boss.components.overlays.ContextMenuItem
 import ai.rever.boss.components.overlays.contextMenu
 import ai.rever.boss.components.plugin.AvailablePluginUpdate
+import ai.rever.boss.components.plugin.PluginBuildInfo
+import ai.rever.boss.components.plugin.PluginBuildTag
 import ai.rever.boss.components.plugin.registries.PanelMenuRegistryImpl
 import ai.rever.boss.plugin.api.PanelId
 import ai.rever.boss.plugin.ui.BossTheme
@@ -20,11 +22,12 @@ import androidx.compose.material.Icon
 import androidx.compose.material.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BugReport
+import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.MonitorHeart
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Remove
-import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.Tab
 import androidx.compose.material.icons.outlined.Upgrade
 import androidx.compose.runtime.*
@@ -34,6 +37,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -44,15 +48,18 @@ private val UpdateBadgeColor: Color get() = BossThemeColors.SuccessColor
 fun BossPanelTopBar(
     title: String?,
     isHovered: Boolean,
-    onReset: (() -> Unit)? = null,
     onReloadPlugin: (() -> Unit)? = null,
     onOpenAsTab: (() -> Unit)? = null,
     onCheckForUpdates: (() -> Unit)? = null,
     onOpenEvolver: (() -> Unit)? = null,
     onReportIssue: (() -> Unit)? = null,
+    onUninstallPlugin: (() -> Unit)? = null,
+    uninstallEnabled: Boolean = true,
     onMinimize: () -> Unit,
     updateAvailable: AvailablePluginUpdate? = null,
     onUpdateClick: (() -> Unit)? = null,
+    buildInfo: PluginBuildInfo? = null,
+    onBuildTagClick: (() -> Unit)? = null,
     panelId: PanelId? = null,
     windowId: String? = null,
     dragModifier: Modifier = Modifier,
@@ -78,12 +85,42 @@ fun BossPanelTopBar(
     // built-ins and Minimize.
     val menuItems =
         buildList {
-            onReset?.let { cb -> add(ContextMenuItem(text = "Restart Panel", icon = Icons.Outlined.RestartAlt, onClick = cb)) }
-            onReloadPlugin?.let { cb -> add(ContextMenuItem(text = "Reload Plugin", icon = Icons.Outlined.Refresh, onClick = cb)) }
+            // Which build is running, first and clickable, for a plugin that is not on the released
+            // version. The version has to be the item's TEXT rather than a badge widget: with no
+            // trailing icon this menu is native-representable, so on macOS it renders as a real
+            // NSMenu whose items are a label and an enabled flag, nothing more.
+            buildInfo?.takeIf { it.isTagged }?.let { info ->
+                add(
+                    ContextMenuItem(
+                        text = "Version ${info.displayVersion}",
+                        icon = Icons.Outlined.Info,
+                        onClick = { onBuildTagClick?.invoke() },
+                    ),
+                )
+                add(ContextMenuItem(isDivider = true))
+            }
+            // "Reload Panel" is the user-facing name for what is really a reload of the owning
+            // plugin: the jar is unloaded and re-read, and every window's slots for it are reset.
+            // Named for the thing the user is pointing at, since this menu belongs to one panel.
+            onReloadPlugin?.let { cb ->
+                add(ContextMenuItem(text = "Reload Panel", icon = Icons.Outlined.Refresh, onClick = cb))
+            }
             onCheckForUpdates?.let { cb -> add(ContextMenuItem(text = "Check for Updates", icon = Icons.Outlined.Upgrade, onClick = cb)) }
             onOpenEvolver?.let { cb -> add(ContextMenuItem(text = "Open Evolver", icon = Icons.Outlined.MonitorHeart, onClick = cb)) }
             onReportIssue?.let { cb -> add(ContextMenuItem(text = "Report Issue", icon = Icons.Outlined.BugReport, onClick = cb)) }
             onOpenAsTab?.let { cb -> add(ContextMenuItem(text = "Open as Tab", icon = Icons.Outlined.Tab, onClick = cb)) }
+            // Shown for every plugin panel, disabled for the ones the manager refuses to unload
+            // (system plugins), so the action's absence is never mistaken for the feature missing.
+            onUninstallPlugin?.let { cb ->
+                add(
+                    ContextMenuItem(
+                        text = "Uninstall Plugin",
+                        icon = Icons.Outlined.DeleteOutline,
+                        enabled = uninstallEnabled,
+                        onClick = cb,
+                    ),
+                )
+            }
             if (pluginEntries.isNotEmpty() && panelId != null) {
                 add(ContextMenuItem(isDivider = true))
                 for ((contribution, item) in pluginEntries) {
@@ -115,10 +152,28 @@ fun BossPanelTopBar(
             color = BossThemeColors.TextPrimary,
             fontSize = 12.sp,
             fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier =
                 Modifier
+                    // Give way rather than grow: an unbounded title in a narrow side panel would push
+                    // the build tag - the entire signal - off the end of the row. fill = false so a
+                    // short title still hugs its text and the tag sits next to it, not at the edge.
+                    .weight(1f, fill = false)
                     .align(Alignment.CenterVertically),
         )
+
+        // Next to the name, not out at the edge: the tag qualifies which build of this panel you are
+        // looking at, so it belongs with the thing it qualifies. Not hover-gated - a panel running
+        // unreleased code should say so whether or not the pointer is over it.
+        if (buildInfo?.isTagged == true) {
+            Spacer(modifier = Modifier.width(6.dp))
+            PluginBuildTag(
+                info = buildInfo,
+                modifier = Modifier.align(Alignment.CenterVertically),
+                onClick = onBuildTagClick,
+            )
+        }
 
         Spacer(modifier = Modifier.weight(1f))
 

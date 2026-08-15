@@ -78,3 +78,13 @@ object PluginUpdateRegistry {
  * RegistrationTracker; defaults to null (no plugin / built-in panel).
  */
 val LocalPanelPluginIdResolver = compositionLocalOf<(PanelId) -> String?> { { null } }
+
+/**
+ * Whether a plugin may be uninstalled, i.e. it is not a system plugin and declares `canUnload`.
+ * Provided by BossApp from the loaded manifest.
+ *
+ * Defaults to false, so anywhere the manifest cannot be reached (tests, a window composed before the
+ * plugin layer exists) shows the action disabled rather than offering a removal that the manager
+ * would refuse halfway through.
+ */
+val LocalPluginUninstallable = compositionLocalOf<(String) -> Boolean> { { false } }

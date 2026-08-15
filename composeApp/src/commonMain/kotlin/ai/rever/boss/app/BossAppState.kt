@@ -6,6 +6,8 @@ import ai.rever.boss.components.model.TabDraggableComponent
 import ai.rever.boss.components.plugin.AvailablePluginUpdate
 import ai.rever.boss.components.plugin.DefaultPlugin
 import ai.rever.boss.components.plugin.MissingDependencyPrompt
+import ai.rever.boss.components.plugin.PluginUninstallPrompt
+import ai.rever.boss.components.plugin.StoreVersionPrompt
 import ai.rever.boss.components.plugin.providers.SplitViewOperationsImpl
 import ai.rever.boss.components.plugin.providers.WorkspaceDataProviderImpl
 import ai.rever.boss.components.registery.PanelComponentStore
@@ -125,6 +127,12 @@ internal class BossAppState(
 
     // Plugin update confirmation prompt (from "Check for Updates" or the header badge)
     var pluginUpdatePrompt by mutableStateOf<AvailablePluginUpdate?>(null)
+
+    // "Install the released build?" prompt, from a panel's build tag or its version menu row
+    var storeVersionPrompt by mutableStateOf<StoreVersionPrompt?>(null)
+
+    // "Remove this plugin?" prompt, from a panel's overflow menu
+    var pluginUninstallPrompt by mutableStateOf<PluginUninstallPrompt?>(null)
 
     // --- Plugin install wizard (shown on first login) ------------------------
     var showPluginInstallWizard by mutableStateOf(false)

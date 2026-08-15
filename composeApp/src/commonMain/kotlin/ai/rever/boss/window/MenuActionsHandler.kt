@@ -582,6 +582,16 @@ object MenuActionsHandler {
     private val _checkPluginUpdatesEvents = MutableSharedFlow<Pair<String, ai.rever.boss.plugin.api.PanelId>>(extraBufferCapacity = 10)
     val checkPluginUpdatesEvents: SharedFlow<Pair<String, ai.rever.boss.plugin.api.PanelId>> = _checkPluginUpdatesEvents.asSharedFlow()
 
+    private val _installStoreVersionEvents =
+        MutableSharedFlow<Pair<String, ai.rever.boss.plugin.api.PanelId>>(extraBufferCapacity = 10)
+    val installStoreVersionEvents: SharedFlow<Pair<String, ai.rever.boss.plugin.api.PanelId>> =
+        _installStoreVersionEvents.asSharedFlow()
+
+    private val _uninstallPluginEvents =
+        MutableSharedFlow<Pair<String, ai.rever.boss.plugin.api.PanelId>>(extraBufferCapacity = 10)
+    val uninstallPluginEvents: SharedFlow<Pair<String, ai.rever.boss.plugin.api.PanelId>> =
+        _uninstallPluginEvents.asSharedFlow()
+
     /**
      * Trigger a "Reload All Plugins" action for the specified window.
      *
@@ -592,7 +602,8 @@ object MenuActionsHandler {
     }
 
     /**
-     * Trigger a "Reload Plugin" action for a specific panel in the specified window.
+     * Trigger the "Reload Panel" action for a specific panel in the specified window. Despite the
+     * menu's wording this reloads the owning plugin's jar and resets its slots in every window.
      *
      * @param windowId The ID of the window where the action was triggered
      * @param panelId The PanelId used to look up the owning plugin
@@ -615,6 +626,34 @@ object MenuActionsHandler {
         panelId: ai.rever.boss.plugin.api.PanelId,
     ) {
         _checkPluginUpdatesEvents.tryEmit(Pair(windowId, panelId))
+    }
+
+    /**
+     * Trigger "install the store version" for the plugin owning a specific panel, from its build tag
+     * or the version row in its overflow menu.
+     *
+     * @param windowId The ID of the window where the action was triggered
+     * @param panelId The PanelId used to look up the owning plugin
+     */
+    fun triggerInstallStoreVersion(
+        windowId: String,
+        panelId: ai.rever.boss.plugin.api.PanelId,
+    ) {
+        _installStoreVersionEvents.tryEmit(Pair(windowId, panelId))
+    }
+
+    /**
+     * Trigger "Uninstall Plugin" for the plugin owning a specific panel. Raises a confirmation
+     * prompt; nothing is removed until it is confirmed.
+     *
+     * @param windowId The ID of the window where the action was triggered
+     * @param panelId The PanelId used to look up the owning plugin
+     */
+    fun triggerUninstallPlugin(
+        windowId: String,
+        panelId: ai.rever.boss.plugin.api.PanelId,
+    ) {
+        _uninstallPluginEvents.tryEmit(Pair(windowId, panelId))
     }
 
     // ========== Plugin Wizard Events ==========

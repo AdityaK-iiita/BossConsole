@@ -427,7 +427,7 @@ class PluginLoaderDelegateImpl(
      * then truly live for panels too, and the stale component stops pinning
      * the pre-reload classloader (#856). Invoked by the shared (re)install
      * path via [DynamicPluginManager.pluginPanelsRefresh]. Fire-and-forget on
-     * the EDT, matching the manual ⋮ → Restart Panel path.
+     * the EDT, using the same `resetComponent` the ⋮ → Reload Panel action ends in.
      */
     fun refreshPluginPanels(
         pluginId: String,

@@ -22,8 +22,12 @@ import ai.rever.boss.components.model.TabDropTarget
 import ai.rever.boss.components.overlays.ContextMenuItem
 import ai.rever.boss.components.overlays.contextMenu
 import ai.rever.boss.components.plugin.DynamicPluginManager
+import ai.rever.boss.components.plugin.LocalPanelPluginIdResolver
+import ai.rever.boss.components.plugin.PluginBuildRegistry
+import ai.rever.boss.components.plugin.PluginBuildTag
 import ai.rever.boss.components.plugin.TabUpdateRegistry
 import ai.rever.boss.components.plugin.providers.publishSystemEvent
+import ai.rever.boss.components.plugin.tab_types.PanelHostTabInfo
 import ai.rever.boss.components.plugin.tab_types.fluck.FluckTabInfo
 import ai.rever.boss.components.tabs_navigation.TabsNavigation
 import ai.rever.boss.components.window_panel.SplitOrientation
@@ -64,7 +68,9 @@ import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import ai.rever.boss.utils.revealInFileManager
 import ai.rever.boss.utils.revealInFileManagerLabel
+import ai.rever.boss.window.LocalWindowId
 import ai.rever.boss.window.LocalWindowProjectState
+import ai.rever.boss.window.MenuActionsHandler
 import ai.rever.boss.window.Project
 import ai.rever.boss.window.TabWidthMode
 import ai.rever.boss.window.WindowAppearanceSettingsManager
@@ -154,11 +160,37 @@ private fun BossTabButtonWithFavicon(
     // Determine which icon to use: loaded favicon > config.tabIcon > fallback to config.icon
     val effectiveTabIcon = loadedFavicon ?: config.tabIcon
 
+    // A plugin panel opened as a tab carries the same build tag its sidebar header would. Resolved
+    // here rather than baked into PanelHostTabInfo.title: tab titles are persisted into workspace
+    // layouts, so a suffixed title would be restored later and go stale.
+    val panelHost = config as? PanelHostTabInfo
+    val pluginBuilds by PluginBuildRegistry.builds.collectAsState()
+    val resolvePluginId = LocalPanelPluginIdResolver.current
+    val tabWindowId = LocalWindowId.current
+    val buildInfo =
+        panelHost?.let { host -> resolvePluginId(host.panelId)?.let { pluginBuilds[it] } }?.takeIf { it.isTagged }
+
     // Middle-click handling is now in BossTabButton.kt (Issue #328)
     BossTabButton(
         fileName = config.title,
         icon = config.icon,
         tabIcon = effectiveTabIcon,
+        titleBadge =
+            buildInfo?.let { info ->
+                // panelHost is non-null here by construction: buildInfo was resolved from it.
+                val hostedPanelId = panelHost.panelId
+                {
+                    PluginBuildTag(
+                        info = info,
+                        onClick =
+                            if (tabWindowId != null) {
+                                { MenuActionsHandler.triggerInstallStoreVersion(tabWindowId, hostedPanelId) }
+                            } else {
+                                null
+                            },
+                    )
+                }
+            },
         isSelected = isSelected,
         isFocused = isFocused,
         onClick = onClick,

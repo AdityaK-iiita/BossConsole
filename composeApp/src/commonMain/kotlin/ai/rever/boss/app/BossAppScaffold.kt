@@ -9,6 +9,7 @@ import ai.rever.boss.components.overlays.DraggingItemOverlay
 import ai.rever.boss.components.overlays.OverlayCorner
 import ai.rever.boss.components.overlays.TabDraggingOverlay
 import ai.rever.boss.components.plugin.LocalPanelPluginIdResolver
+import ai.rever.boss.components.plugin.LocalPluginUninstallable
 import ai.rever.boss.components.plugin.panels.left_bottom.TopOfMind.LocalSplitViewState
 import ai.rever.boss.components.plugin.panels.left_bottom.TopOfMind.LocalWorkspaceManager
 import ai.rever.boss.components.plugin.providers.TopOfMindDataProvider
@@ -157,6 +158,13 @@ internal fun BossAppCompositionLocals(
                 ?.dynamicPluginManager
                 ?.getRegistrationTracker()
                 ?.getPluginIdForPanel(panelId)
+        },
+        LocalPluginUninstallable provides { pluginId ->
+            state.currentDefaultPlugin
+                ?.dynamicPluginManager
+                ?.getPluginInfo(pluginId)
+                ?.manifest
+                ?.let { !it.systemPlugin && it.canUnload } ?: false
         },
         LocalSplitViewState provides state.splitViewState,
         LocalSplitViewOperations provides state.splitViewOperations,

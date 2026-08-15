@@ -4,6 +4,8 @@ import ai.rever.boss.components.bars.horizontal.StatusMessageManager
 import ai.rever.boss.components.model.BossDraggableComponent
 import ai.rever.boss.components.plugin.DynamicPluginManager
 import ai.rever.boss.components.plugin.LocalPanelPluginIdResolver
+import ai.rever.boss.components.plugin.LocalPluginUninstallable
+import ai.rever.boss.components.plugin.PluginBuildRegistry
 import ai.rever.boss.components.plugin.PluginUpdateRegistry
 import ai.rever.boss.components.registery.PanelComponentStore
 import ai.rever.boss.components.window_panel.components.BossPanelTopBar
@@ -78,6 +80,28 @@ fun BossDraggableComponent.SidePanel(
         val pluginId = pluginContentId?.let { LocalPanelPluginIdResolver.current(it) }
         val availableUpdates by PluginUpdateRegistry.updates.collectAsState()
         val updateForPlugin = pluginId?.let { availableUpdates[it] }
+
+        // Which build this panel's plugin is running. Collected (not read once) so the tag appears
+        // the moment a hot reload lands, without the panel having to be reopened.
+        val pluginBuilds by PluginBuildRegistry.builds.collectAsState()
+        val buildForPlugin = pluginId?.let { pluginBuilds[it] }
+        val installStoreVersion: (() -> Unit)? =
+            if (pluginContentId != null && windowId != null && buildForPlugin?.isTagged == true) {
+                { MenuActionsHandler.triggerInstallStoreVersion(windowId, pluginContentId) }
+            } else {
+                null
+            }
+
+        // Uninstall is offered for every plugin panel and disabled for the ones the manager refuses
+        // to unload, so a system plugin shows why the action is unavailable instead of hiding it.
+        val uninstallable = LocalPluginUninstallable.current
+        val uninstallPlugin: (() -> Unit)? =
+            if (pluginContentId != null && windowId != null && pluginId != null) {
+                { MenuActionsHandler.triggerUninstallPlugin(windowId, pluginContentId) }
+            } else {
+                null
+            }
+        val uninstallEnabled = pluginId != null && uninstallable(pluginId)
         val checkForUpdates: (() -> Unit)? =
             if (pluginContentId != null && windowId != null) {
                 { MenuActionsHandler.triggerCheckPluginUpdates(windowId, pluginContentId) }
@@ -159,19 +183,16 @@ fun BossDraggableComponent.SidePanel(
         BossPanelTopBar(
             title = title,
             isHovered = isHovered,
-            onReset =
-                pluginContentId?.let { panelId ->
-                    {
-                        // Reset sandbox health if this panel has a sandbox
-                        PanelSandboxRegistry.getSandbox(panelId)?.resetHealth()
-                        // Trigger component reset via PanelComponentStore
-                        panelComponentStore.resetComponent(panelId)
-                    }
-                },
             onReloadPlugin =
                 pluginContentId?.let { panelId ->
                     windowId?.let { wId ->
                         {
+                            // Clear the sandbox's consecutive-error count first: a reload replaces
+                            // the code that was failing, so carrying its error tally over would
+                            // leave a freshly loaded plugin one fault away from being quarantined.
+                            // This was the only thing the removed "Restart Panel" item did that
+                            // reloading did not, and it is the half worth keeping.
+                            PanelSandboxRegistry.getSandbox(panelId)?.resetHealth()
                             MenuActionsHandler.triggerReloadPlugin(wId, panelId)
                         }
                     }
@@ -183,11 +204,15 @@ fun BossDraggableComponent.SidePanel(
             onCheckForUpdates = checkForUpdates,
             onOpenEvolver = openEvolver,
             onReportIssue = reportIssue,
+            onUninstallPlugin = uninstallPlugin,
+            uninstallEnabled = uninstallEnabled,
             onMinimize = {
                 setPanelVisible(panel, false)
             },
             updateAvailable = updateForPlugin,
             onUpdateClick = checkForUpdates,
+            buildInfo = buildForPlugin,
+            onBuildTagClick = installStoreVersion,
             panelId = pluginContentId,
             windowId = windowId,
             dragModifier = headerDragModifier,

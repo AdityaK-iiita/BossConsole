@@ -63,6 +63,11 @@ import androidx.compose.ui.window.PopupProperties
  * @param secondaryTrailingIcon Optional second trailing icon (e.g., delete button)
  * @param secondaryTrailingIconColor Color for secondary trailing icon (defaults to gray)
  * @param onSecondaryTrailingClick Action when secondary trailing icon is clicked
+ * @param enabled Whether this item can be acted on. A disabled item is shown greyed out and does
+ *   not react to a click, which is how a menu says "this action exists but not for this target"
+ *   (e.g. a system plugin cannot be uninstalled) rather than hiding it and leaving the user to
+ *   wonder where it went. Honoured on the drawn path and by the native menu, which carries its own
+ *   enabled flag, so the two renderers agree.
  * @param onClick The action to perform when this item is clicked (last param for trailing lambda)
  */
 data class ContextMenuItem(
@@ -76,6 +81,7 @@ data class ContextMenuItem(
     val secondaryTrailingIconColor: Color? = null,
     val onSecondaryTrailingClick: (() -> Unit)? = null,
     val subMenu: List<ContextMenuItem>? = null, // Submenu items
+    val enabled: Boolean = true,
     val onClick: () -> Unit = {},
 )
 
@@ -171,6 +177,7 @@ internal fun List<ContextMenuItem>.toNativeMenuNodes(icons: MenuIcons = emptyMap
             else -> {
                 NativeMenuNode.Item(
                     label = item.text,
+                    enabled = item.enabled,
                     icon = item.icon?.let { icons[it] },
                     action = { PluginExecutionBoundary.invokeAttributed(item.onClick) },
                 )
@@ -356,8 +363,10 @@ private fun ContextMenuContent(
                 // Trade-off: popup position won't update if parent moves while open (acceptable for menus).
                 val rowWidthRef = remember { intArrayOf(0) }
 
-                // Keep parent highlighted when submenu is open
-                val isHighlighted = isHovered || (hasSubMenu && expandedSubMenuIndex == index)
+                // Keep parent highlighted when submenu is open. A disabled row never highlights:
+                // hover feedback on something that cannot be clicked reads as a dead click target.
+                val isHighlighted = item.enabled && (isHovered || (hasSubMenu && expandedSubMenuIndex == index))
+                val rowColor = if (item.enabled) colors.textPrimary else colors.textMuted
 
                 Box {
                     Row(
@@ -365,7 +374,7 @@ private fun ContextMenuContent(
                             Modifier
                                 .hoverable(interactionSource)
                                 .then(
-                                    if (hasSubMenu) {
+                                    if (hasSubMenu || !item.enabled) {
                                         Modifier
                                     } else {
                                         Modifier.clickable {
@@ -406,14 +415,14 @@ private fun ContextMenuContent(
                             Icon(
                                 imageVector = item.icon,
                                 contentDescription = item.text,
-                                tint = colors.textPrimary,
+                                tint = rowColor,
                                 modifier = Modifier.size(16.dp),
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                         }
                         Text(
                             text = item.text,
-                            color = colors.textPrimary,
+                            color = rowColor,
                             fontSize = 13.sp,
                             modifier =
                                 Modifier
@@ -588,8 +597,10 @@ private fun SubMenuContent(
             // Non-observable holder to avoid triggering remeasure during layout
             val rowWidthRef = remember { intArrayOf(0) }
 
-            // Keep parent highlighted when nested submenu is open
-            val isHighlighted = subIsHovered || (hasNestedSubMenu && expandedSubMenuIndex == index)
+            // Keep parent highlighted when nested submenu is open. Disabled rows never highlight -
+            // see the same treatment in ContextMenuContent.
+            val isHighlighted = subItem.enabled && (subIsHovered || (hasNestedSubMenu && expandedSubMenuIndex == index))
+            val subRowColor = if (subItem.enabled) colors.textPrimary else colors.textMuted
 
             Box {
                 Row(
@@ -597,7 +608,7 @@ private fun SubMenuContent(
                         Modifier
                             .hoverable(subInteractionSource)
                             .then(
-                                if (hasNestedSubMenu) {
+                                if (hasNestedSubMenu || !subItem.enabled) {
                                     Modifier
                                 } else {
                                     Modifier.clickable {
@@ -622,14 +633,14 @@ private fun SubMenuContent(
                         Icon(
                             imageVector = subItem.icon,
                             contentDescription = subItem.text,
-                            tint = colors.textPrimary,
+                            tint = subRowColor,
                             modifier = Modifier.size(16.dp),
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                     }
                     Text(
                         text = subItem.text,
-                        color = Color.White,
+                        color = subRowColor,
                         fontSize = 13.sp,
                         modifier =
                             Modifier

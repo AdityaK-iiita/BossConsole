@@ -79,6 +79,12 @@ fun BossTabButton(
      * back to the legacy intrinsic-min sizing with a 180–450 dp width clamp.
      */
     tabWidth: Dp? = null,
+    /**
+     * Optional marker drawn immediately after the title, before the close button. Used for the
+     * plugin build tag, which qualifies the title (this panel is not running the released build) and
+     * so belongs beside it rather than out at the tab's edge.
+     */
+    titleBadge: (@Composable () -> Unit)? = null,
     // Drag-related parameters
     tabDragComponent: TabDraggableComponent? = null,
     tabInfo: TabInfo? = null,
@@ -359,6 +365,7 @@ fun BossTabButton(
                     modifier = Modifier.weight(1f),
                     softWrap = false,
                 )
+                titleBadge?.invoke()
                 // Only show close icon when needed to save space
                 if (isSelected || isHovered) {
                     Icon(

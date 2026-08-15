@@ -3,8 +3,14 @@ package ai.rever.boss.app
 import ai.rever.boss.components.bars.horizontal.StatusMessageManager
 import ai.rever.boss.components.dialogs.TabType
 import ai.rever.boss.components.plugin.AvailablePluginUpdate
+import ai.rever.boss.components.plugin.DynamicPluginManager
 import ai.rever.boss.components.plugin.InstalledPluginRef
+import ai.rever.boss.components.plugin.PluginBuildRegistry
+import ai.rever.boss.components.plugin.PluginStoreVersionBridge
+import ai.rever.boss.components.plugin.PluginUninstallPrompt
 import ai.rever.boss.components.plugin.PluginUpdateBridge
+import ai.rever.boss.components.plugin.StoreVersionLookup
+import ai.rever.boss.components.plugin.StoreVersionPrompt
 import ai.rever.boss.components.plugin.UpdateCheckOutcome
 import ai.rever.boss.components.plugin.tab_types.fluck.FluckTabComponent
 import ai.rever.boss.components.plugin.tab_types.fluck.FluckTabInfo
@@ -475,7 +481,7 @@ internal fun BossAppMenuActionEffects(
             }.launchIn(this)
     }
 
-    // Handle Reload Plugin (by panel ID) menu events
+    // Handle "Reload Panel" (by panel ID) menu events, which reload the owning plugin
     LaunchedEffect(windowId) {
         MenuActionsHandler.reloadPluginEvents
             .onEach { (eventWindowId, panelId) ->
@@ -532,6 +538,94 @@ internal fun BossAppMenuActionEffects(
                             StatusMessageManager.showMessage("Couldn't check for updates: ${outcome.message}")
                         }
                     }
+                }
+            }.launchIn(this)
+    }
+
+    // Handle "install the store version" events, from a panel's build tag or its version menu row.
+    LaunchedEffect(windowId) {
+        MenuActionsHandler.installStoreVersionEvents
+            .onEach { (eventWindowId, panelId) ->
+                if (eventWindowId == windowId) {
+                    val manager = state.currentDefaultPlugin?.dynamicPluginManager ?: return@onEach
+                    val pluginId = manager.getRegistrationTracker().getPluginIdForPanel(panelId) ?: return@onEach
+                    val info = manager.getPluginInfo(pluginId) ?: return@onEach
+                    val running =
+                        PluginBuildRegistry.get(pluginId)?.displayVersion ?: info.manifest.version
+                    // The lookup is a network call, so say something before making one: without this a
+                    // click on the tag looks ignored until the store answers.
+                    StatusMessageManager.showMessage("Checking the store for ${info.manifest.displayName}…")
+                    state.storeVersionPrompt =
+                        when (val lookup = PluginStoreVersionBridge.lookup(pluginId)) {
+                            is StoreVersionLookup.Available -> {
+                                StoreVersionPrompt(
+                                    pluginId = pluginId,
+                                    displayName = info.manifest.displayName,
+                                    runningVersion = running,
+                                    storeVersion = lookup.version,
+                                    storeSourceUrl = lookup.sourceUrl,
+                                )
+                            }
+
+                            StoreVersionLookup.NotPublished -> {
+                                StoreVersionPrompt(
+                                    pluginId = pluginId,
+                                    displayName = info.manifest.displayName,
+                                    runningVersion = running,
+                                    storeVersion = null,
+                                    note = "This plugin has no published version in the plugin store yet.",
+                                )
+                            }
+
+                            is StoreVersionLookup.Unavailable -> {
+                                StoreVersionPrompt(
+                                    pluginId = pluginId,
+                                    displayName = info.manifest.displayName,
+                                    runningVersion = running,
+                                    storeVersion = null,
+                                    note = lookup.message,
+                                )
+                            }
+                        }
+                }
+            }.launchIn(this)
+    }
+
+    // Handle "Uninstall Plugin" events. This only raises the confirmation; the removal itself lives
+    // with the dialog in BossAppDialogs.
+    LaunchedEffect(windowId) {
+        MenuActionsHandler.uninstallPluginEvents
+            .onEach { (eventWindowId, panelId) ->
+                if (eventWindowId == windowId) {
+                    val manager = state.currentDefaultPlugin?.dynamicPluginManager ?: return@onEach
+                    val tracker = manager.getRegistrationTracker()
+                    val pluginId = tracker.getPluginIdForPanel(panelId) ?: return@onEach
+                    val info = manager.getPluginInfo(pluginId) ?: return@onEach
+                    // The menu item is disabled for these, so this is the belt-and-braces half: the
+                    // manager would refuse the unload anyway and leave the plugin half-removed.
+                    if (info.manifest.systemPlugin || !info.manifest.canUnload) {
+                        StatusMessageManager.showMessage(
+                            "${info.manifest.displayName} is a system plugin and cannot be uninstalled",
+                        )
+                        return@onEach
+                    }
+                    // A bundled plugin passes the manifest gate but is copied back into the plugins
+                    // directory at the next launch, so removing it would quietly undo itself.
+                    val veto = DynamicPluginManager.pluginRemovalVeto?.invoke(pluginId)
+                    if (veto != null) {
+                        StatusMessageManager.showMessage("${info.manifest.displayName} $veto")
+                        return@onEach
+                    }
+                    // Panel ids and jar path captured NOW: the uninstall clears the tracker and the
+                    // plugin's state, so neither is available afterwards.
+                    state.pluginUninstallPrompt =
+                        PluginUninstallPrompt(
+                            pluginId = pluginId,
+                            displayName = info.manifest.displayName,
+                            version = info.manifest.version,
+                            jarPath = info.jarPath,
+                            panelIds = tracker.getPanelsForPlugin(pluginId),
+                        )
                 }
             }.launchIn(this)
     }
