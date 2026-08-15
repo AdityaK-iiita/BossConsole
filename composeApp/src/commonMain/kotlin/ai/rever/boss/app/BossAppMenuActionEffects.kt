@@ -25,6 +25,7 @@ import ai.rever.boss.components.workspaces.workspaceManager
 import ai.rever.boss.focusmode.FocusModeSettingsManager
 import ai.rever.boss.plugin.tab.terminal.TerminalTabInfo
 import ai.rever.boss.plugin.tab.terminal.TerminalTabType
+import ai.rever.boss.project.DefaultWorkingDirectory
 import ai.rever.boss.topofmind.TabTreeState
 import ai.rever.boss.window.MenuActionsHandler
 import ai.rever.boss.window.WindowOperations
@@ -229,7 +230,7 @@ internal fun BossAppMenuActionEffects(
                                 id = "terminal-${Random.nextLong()}",
                                 typeId = TerminalTabType.typeId,
                                 title = "Terminal",
-                                workingDirectory = projectPath.ifEmpty { null },
+                                workingDirectory = DefaultWorkingDirectory.resolve(projectPath),
                             )
                         component.addTab(terminalTab)
                     }

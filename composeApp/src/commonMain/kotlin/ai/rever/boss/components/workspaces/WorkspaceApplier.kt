@@ -19,12 +19,15 @@ import ai.rever.boss.plugin.tab.terminal.TerminalTabType
 import ai.rever.boss.plugin.workspace.SplitConfig.HorizontalSplit
 import ai.rever.boss.plugin.workspace.SplitConfig.SinglePanel
 import ai.rever.boss.plugin.workspace.SplitConfig.VerticalSplit
+import ai.rever.boss.project.DefaultWorkingDirectory
 import ai.rever.boss.utils.awaitRegistryCondition
 import ai.rever.boss.utils.extractFileName
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import ai.rever.boss.window.Project
 import ai.rever.boss.window.WindowProjectState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.random.Random
 import kotlin.time.Clock
 
@@ -69,14 +72,32 @@ suspend fun applyWorkspace(
         }
     }
 
-    // Get current project path for tab creation
-    val currentProjectPath = windowProjectState?.selectedProject?.value?.path ?: workspace.projectPath ?: ""
-
     // Try to restore preserved state first
     if (splitViewState.restorePreservedState(workspaceId)) {
         // State restored successfully
         return
     }
+
+    // Get current project path for tab creation. Below the early return, not above it:
+    // switching back to a workspace whose state is still in memory builds no tabs, so
+    // resolving there would touch the filesystem for nothing.
+    //
+    // On IO because resolve() stats and may create - every caller launches this from a Compose
+    // scope, i.e. Main, and docs/THREADING.md rule 1 is about exactly that. Resolved once for
+    // the whole tree rather than per tab, mirroring WorkspaceExtractor on the way out.
+    //
+    // The `?:` is load-bearing in a way that reads like a bug and is left alone deliberately:
+    // the window's path is "" when no project is selected, and "" is not null, so
+    // `workspace.projectPath` is unreachable whenever windowProjectState is non-null. Using
+    // selectedOrNull here instead would make a saved workspace's recorded project win over the
+    // no-project default - a different answer to "which project do these terminals open in",
+    // which is not what this change is about. Pre-existing, and left that way.
+    val currentProjectPath =
+        withContext(Dispatchers.IO) {
+            DefaultWorkingDirectory.resolve(
+                windowProjectState?.selectedProject?.value?.path ?: workspace.projectPath,
+            )
+        }
 
     // No preserved state, apply workspace from scratch.
     // Wait (bounded) for the plugin-provided tab types this workspace needs —
@@ -280,17 +301,16 @@ private fun getFirstTab(workspaceConfig: SplitConfig): TabConfig? =
         is HorizontalSplit -> getFirstTab(workspaceConfig.top)
     }
 
+/**
+ * @param resolvedProjectPath the selected project's path, or the no-project default when there
+ *   is none - already through `DefaultWorkingDirectory.resolve`, once, in [applyWorkspace].
+ *   Never empty, which is why the terminal branch below has no null case left.
+ */
 private fun createTabFromWorkspaceConfig(
     tabConfig: TabConfig,
-    projectPath: String,
+    resolvedProjectPath: String,
     splitViewState: SplitViewState,
 ): TabInfo? {
-    // Resolve project path for placeholder resolution
-    val resolvedProjectPath =
-        projectPath.ifEmpty {
-            System.getProperty("user.home") ?: ""
-        }
-
     // Dispatch on the resolved type id (see tabTypeIdFor) so the mapping that
     // decides what restore waits for and the mapping that constructs tabs
     // cannot drift apart.
@@ -317,10 +337,14 @@ private fun createTabFromWorkspaceConfig(
 
         TerminalTabType.typeId -> {
             // Process working directory placeholder
+            // No stored working directory means "wherever the project is", which is what
+            // resolvedProjectPath already holds. `restored` also reads a stored home directory
+            // that way - layouts written before this change carry a literal `~` for every
+            // no-project terminal, and honouring it would restore the problem on every launch.
             val workingDir =
-                tabConfig.workingDirectory?.let {
+                DefaultWorkingDirectory.restored(tabConfig.workingDirectory)?.let {
                     SplitTemplatesManager.processPlaceholders(it, resolvedProjectPath, null)
-                } ?: resolvedProjectPath.ifEmpty { null }
+                } ?: resolvedProjectPath
 
             // Process initial command placeholder (shell command → quote {projectPath})
             val initialCmd =

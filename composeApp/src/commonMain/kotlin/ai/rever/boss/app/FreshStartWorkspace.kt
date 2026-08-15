@@ -15,12 +15,12 @@ import ai.rever.boss.window.WindowProjectState
  * - **No project selected.** With a project, the reactive apply in
  *   `BossAppStartupEffects` already owns this and would apply the same workspace a
  *   second time.
- * - **The workspace can stand without one.** `{projectPath}` silently falls back to the
- *   user's home directory, so applying the Claude Code default here would open a
- *   terminal running `claude --dangerously-skip-permissions` in `~` on the first launch
- *   of a fresh install. Browser-only needs nothing, which is why the Windows default
- *   reaches first launch and the terminal-first defaults keep waiting for a project,
- *   on every platform, exactly as before.
+ * - **The workspace can stand without one.** `{projectPath}` silently falls back to
+ *   `~/BossProjects` (see `DefaultWorkingDirectory`), so applying the Claude Code default
+ *   here would open a terminal running `claude --dangerously-skip-permissions` in an
+ *   empty projects folder on the first launch of a fresh install. Browser-only needs
+ *   nothing, which is why the Windows default reaches first launch and the terminal-first
+ *   defaults keep waiting for a project, on every platform, exactly as before.
  */
 internal fun shouldApplyOnFreshStart(
     workspace: LayoutWorkspace?,

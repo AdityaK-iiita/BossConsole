@@ -42,6 +42,9 @@ import kotlin.test.assertTrue
  *
  * Note: neither SplitNode nor SplitConfig carries a split ratio, so there is no
  * ratio to preserve — structure, panel ids, and tab mapping are the contract.
+ *
+ * Everything goes through [extract] rather than calling [extractCurrentWorkspace] directly, so
+ * the assertions do not depend on the real home directory of the machine running them.
  */
 class WorkspaceExtractorTest {
     private object JupyterStubType : TabTypeInfo {
@@ -96,7 +99,7 @@ class WorkspaceExtractorTest {
 
     @Test
     fun `fresh state extracts as a single empty main panel`() {
-        val workspace = extractCurrentWorkspace(newSplitViewState())
+        val workspace = extract(newSplitViewState())
 
         val layout = assertIs<SinglePanel>(workspace.layout)
         assertEquals("main", layout.panel.id)
@@ -108,7 +111,7 @@ class WorkspaceExtractorTest {
         val state = newSplitViewState()
         val newPanelId = state.splitPanel("main", SplitOrientation.VERTICAL)
 
-        val layout = assertIs<VerticalSplit>(extractCurrentWorkspace(state).layout)
+        val layout = assertIs<VerticalSplit>(extract(state).layout)
         assertEquals("main", assertIs<SinglePanel>(layout.left).panel.id)
         assertEquals(newPanelId, assertIs<SinglePanel>(layout.right).panel.id)
     }
@@ -118,7 +121,7 @@ class WorkspaceExtractorTest {
         val state = newSplitViewState()
         val newPanelId = state.splitPanel("main", SplitOrientation.HORIZONTAL)
 
-        val layout = assertIs<HorizontalSplit>(extractCurrentWorkspace(state).layout)
+        val layout = assertIs<HorizontalSplit>(extract(state).layout)
         assertEquals("main", assertIs<SinglePanel>(layout.top).panel.id)
         assertEquals(newPanelId, assertIs<SinglePanel>(layout.bottom).panel.id)
     }
@@ -135,7 +138,7 @@ class WorkspaceExtractorTest {
         state.getPanel(bottomId)!!.tabsComponent.addTab(TerminalTabInfo(id = "t-bottom", title = "Bottom Term"))
 
         // main | (right / bottom)
-        val layout = assertIs<VerticalSplit>(extractCurrentWorkspace(state).layout)
+        val layout = assertIs<VerticalSplit>(extract(state).layout)
         val left = assertIs<SinglePanel>(layout.left)
         assertEquals("main", left.panel.id)
         assertEquals(listOf("Main Term"), left.panel.tabs.map { it.title })
@@ -156,7 +159,7 @@ class WorkspaceExtractorTest {
         state.getPanel("main")!!.tabsComponent.addTab(TerminalTabInfo(id = "t-1", title = "Term"))
         val newPanelId = state.splitPanel("main", SplitOrientation.VERTICAL)
 
-        val layout = assertIs<VerticalSplit>(extractCurrentWorkspace(state).layout)
+        val layout = assertIs<VerticalSplit>(extract(state).layout)
         assertEquals(1, assertIs<SinglePanel>(layout.left).panel.tabs.size)
         val right = assertIs<SinglePanel>(layout.right)
         assertEquals(newPanelId, right.panel.id)
@@ -184,6 +187,22 @@ class WorkspaceExtractorTest {
         assertEquals("/repo", tab.workingDirectory)
         assertNull(tab.url)
         assertNull(tab.filePath)
+    }
+
+    /**
+     * A terminal sitting in the no-project default is saved with a null working directory,
+     * which is how a saved layout says "wherever the project is when this is applied". Writing
+     * the resolved path would freeze the no-project answer: re-applying the layout with a
+     * project selected would open the projects folder instead of the project.
+     */
+    @Test
+    fun `a terminal in the default working directory is persisted as null`() {
+        val state = newSplitViewState()
+        state.getPanel("main")!!.tabsComponent.addTab(
+            TerminalTabInfo(id = "term-1", title = "Term", workingDirectory = DEFAULT_WORKING_DIRECTORY),
+        )
+
+        assertNull(singleTab(state).workingDirectory)
     }
 
     @Test
@@ -254,7 +273,7 @@ class WorkspaceExtractorTest {
         component.addTab(PanelHostTabInfo(PanelId("test-panel", 1), "Promoted", Icons.Outlined.Language))
         component.addTab(EditorTabInfo(id = "ed-1", title = "App.kt", filePath = "/repo/App.kt"))
 
-        val layout = assertIs<SinglePanel>(extractCurrentWorkspace(state).layout)
+        val layout = assertIs<SinglePanel>(extract(state).layout)
         assertEquals(listOf("terminal" to "Term", "editor" to "App.kt"), layout.panel.tabs.map { it.type to it.title })
     }
 
@@ -262,7 +281,7 @@ class WorkspaceExtractorTest {
 
     @Test
     fun `defaults - generated id, default name and description, blank project path becomes null`() {
-        val workspace = extractCurrentWorkspace(newSplitViewState())
+        val workspace = extract(newSplitViewState())
 
         assertTrue(workspace.id.startsWith("workspace-"))
         assertEquals("Current", workspace.name)
@@ -274,7 +293,7 @@ class WorkspaceExtractorTest {
     @Test
     fun `explicit name, description and project path are preserved`() {
         val workspace =
-            extractCurrentWorkspace(
+            extract(
                 newSplitViewState(),
                 projectPath = "/Users/dev/proj",
                 name = "My Workspace",
@@ -287,8 +306,27 @@ class WorkspaceExtractorTest {
     }
 
     private fun singleTab(state: SplitViewState): TabConfig {
-        val layout = assertIs<SinglePanel>(extractCurrentWorkspace(state).layout)
+        val layout = assertIs<SinglePanel>(extract(state).layout)
         assertEquals(1, layout.panel.tabs.size)
         return layout.panel.tabs.single()
+    }
+
+    /** [extractCurrentWorkspace] with a default working directory that is not the real one. */
+    private fun extract(
+        splitViewState: SplitViewState,
+        projectPath: String = "",
+        name: String = "Current",
+        description: String = "Current layout workspace",
+    ) = extractCurrentWorkspace(
+        splitViewState,
+        projectPath,
+        name,
+        description,
+        defaultWorkingDirectory = DEFAULT_WORKING_DIRECTORY,
+    )
+
+    private companion object {
+        /** Stands in for `DefaultWorkingDirectory.nominalPath()`, and is not a real path. */
+        const val DEFAULT_WORKING_DIRECTORY = "/nowhere/BossProjects"
     }
 }

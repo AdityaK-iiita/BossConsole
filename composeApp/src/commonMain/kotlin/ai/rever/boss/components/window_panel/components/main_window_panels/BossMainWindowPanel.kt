@@ -59,6 +59,7 @@ import ai.rever.boss.plugin.tab.fluck.FluckTabType
 import ai.rever.boss.plugin.tab.jupyter.JupyterTabInfo
 import ai.rever.boss.plugin.tab.terminal.TerminalTabInfo
 import ai.rever.boss.plugin.ui.BossTheme
+import ai.rever.boss.project.DefaultWorkingDirectory
 import ai.rever.boss.run.RUNNER_TERMINAL_PREFIX
 import ai.rever.boss.run.RunnerTerminalService
 import ai.rever.boss.services.bookmarks.BookmarkAPIAccess
@@ -773,7 +774,7 @@ fun BossTabsComponent.BossMainTabBar(
                                 title = "Terminal",
                                 icon = ai.rever.boss.plugin.tab.terminal.TerminalTabType.icon,
                                 initialCommand = path.ifBlank { null },
-                                workingDirectory = projectPath.ifEmpty { null },
+                                workingDirectory = DefaultWorkingDirectory.resolve(projectPath),
                             )
                         val tabIndex = addTab(terminalTab)
                         if (tabIndex >= 0) {
@@ -1089,7 +1090,7 @@ fun BossTabsComponent.BossMainPanelContent(
                             typeId = ai.rever.boss.plugin.tab.terminal.TerminalTabType.typeId,
                             title = "Terminal",
                             icon = ai.rever.boss.plugin.tab.terminal.TerminalTabType.icon,
-                            workingDirectory = projectPath.ifEmpty { null },
+                            workingDirectory = DefaultWorkingDirectory.resolve(projectPath),
                         )
                     val tabIndex = addTab(terminalTab)
                     if (tabIndex >= 0) {
@@ -1194,7 +1195,7 @@ fun BossTabsComponent.BossMainPanelContent(
                                 title = "Terminal",
                                 icon = ai.rever.boss.plugin.tab.terminal.TerminalTabType.icon,
                                 initialCommand = path.ifBlank { null },
-                                workingDirectory = projectPath.ifEmpty { null },
+                                workingDirectory = DefaultWorkingDirectory.resolve(projectPath),
                             )
                         val tabIndex = addTab(terminalTab)
                         if (tabIndex >= 0) {
@@ -1239,10 +1240,7 @@ private fun BossTabsComponent.applySplitTemplate(
 ) {
     if (splitViewState == null || currentPanelId == null) return
 
-    val resolvedProjectPath =
-        projectPath.ifEmpty {
-            System.getProperty("user.home") ?: ""
-        }
+    val resolvedProjectPath = DefaultWorkingDirectory.resolve(projectPath)
 
     // Process the template panels
     val panels = template.panels
@@ -1302,7 +1300,8 @@ private fun createTabFromConfig(
                 title = "Terminal",
                 icon = ai.rever.boss.plugin.tab.terminal.TerminalTabType.icon,
                 initialCommand = command,
-                workingDirectory = projectPath,
+                // Already resolved by every caller; see the same call in TabFactories.
+                workingDirectory = DefaultWorkingDirectory.resolve(projectPath),
             )
         }
 

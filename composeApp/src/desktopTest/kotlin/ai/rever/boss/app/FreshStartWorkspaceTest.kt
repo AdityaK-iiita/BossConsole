@@ -21,8 +21,8 @@ import kotlin.test.assertTrue
  *
  * The predicate is deliberately about the *workspace*, not the platform. Applying a
  * project-shaped workspace with no project is worse than applying nothing: `{projectPath}`
- * falls back to the user's home directory, so the Claude Code default would open a
- * terminal running `claude --dangerously-skip-permissions` in `~` on first launch.
+ * falls back to `~/BossProjects`, so the Claude Code default would open a terminal running
+ * `claude --dangerously-skip-permissions` in an empty projects folder on first launch.
  */
 class FreshStartWorkspaceTest {
     private val browserOnly =
@@ -39,7 +39,7 @@ class FreshStartWorkspaceTest {
     fun `a project-shaped workspace is never applied without a project`() {
         assertFalse(
             shouldApplyOnFreshStart(claudeCode, hasProject = false),
-            "would run the Claude CLI in the user's home directory",
+            "would run the Claude CLI in a directory the user never chose",
         )
     }
 
@@ -73,7 +73,7 @@ class FreshStartWorkspaceTest {
      * The placeholder list mirrors `SplitTemplatesManager.processPlaceholders`, and nothing
      * links the two. A fifth placeholder added there and missed here would not mark a
      * workspace as project-requiring, and the failure mode is the one the KDoc warns about:
-     * a CLI running in the user's home directory.
+     * a CLI running somewhere the user never chose.
      */
     @Test
     fun `every placeholder the substitution handles is treated as project-requiring`() {

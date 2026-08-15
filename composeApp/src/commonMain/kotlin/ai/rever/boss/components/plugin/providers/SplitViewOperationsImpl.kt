@@ -208,6 +208,16 @@ class SplitViewOperationsImpl(
 private class TabsComponentWrapper(
     private val bossTabsComponent: ai.rever.boss.components.window_panel.components.main_window_panels.BossTabsComponent,
 ) : TabsComponent {
+    /**
+     * A null [workingDirectory] is passed through, not defaulted.
+     *
+     * The host's own no-project terminals resolve to `~/BossProjects` (see
+     * `DefaultWorkingDirectory`); this one does not, and the difference is deliberate. This is
+     * an explicit-parameter API, so null here is the caller's answer rather than the absence of
+     * one, and it reaches the terminal service's own `ifBlank { user.home }` - the shell starts
+     * in the user's home directory. A plugin that means "wherever BOSS would work" should pass
+     * `projectDataProvider`'s path, or the host default, rather than leaving this out.
+     */
     override fun addTerminalTab(
         id: String,
         title: String,

@@ -2,6 +2,7 @@ package ai.rever.boss.dashboard
 
 import ai.rever.boss.components.workspaces.CommandProcessor
 import ai.rever.boss.plugin.pathutils.BossDirectories
+import ai.rever.boss.project.DefaultWorkingDirectory
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import kotlinx.coroutines.CoroutineScope
@@ -69,6 +70,13 @@ data class CustomTemplatesData(
  */
 object SplitTemplatesManager {
     private val logger = BossLogger.forComponent("SplitTemplatesManager")
+
+    // Also the guards in [processPlaceholders], so a guard and its substitution cannot drift.
+    // Every placeholder whose value costs something to compute needs one: a mkdir, a `git`
+    // subprocess and a directory listing respectively.
+    private const val PROJECT_PATH_PLACEHOLDER = "{projectPath}"
+    private const val GIT_REMOTE_URL_PLACEHOLDER = "{gitRemoteUrl}"
+    private const val CLAUDE_CONTINUE_FLAG_PLACEHOLDER = "{claudeContinueFlag}"
     private val settingsFile = BossDirectories.resolve("split-templates.json")
     private val json =
         Json {
@@ -365,7 +373,7 @@ object SplitTemplatesManager {
         pathValue: String,
         quote: Boolean,
     ): String {
-        if (!quote) return content.replace("{projectPath}", pathValue)
+        if (!quote) return content.replace(PROJECT_PATH_PLACEHOLDER, pathValue)
         val quoted = CommandProcessor.quotePath(pathValue)
         // Quote only occurrences NOT already adjacent to a quote char. The
         // lambda form does literal replacement (no $-group interpretation),
@@ -386,7 +394,12 @@ object SplitTemplatesManager {
      * - {currentFile}: Currently open file path
      *
      * @param content The content string with placeholders
-     * @param projectPath The current project path
+     * @param projectPath The current project path, or null/blank for no project. This function
+     *   handles the no-project case for all three project placeholders consistently, so a
+     *   caller may pass a raw path straight from window state - but note that every production
+     *   caller resolves first (it needs the same directory for a tab's `workingDirectory`), so
+     *   the no-project branch below is reached only by a direct caller. Passing an
+     *   already-resolved path is not a second answer, just a no-op.
      * @param currentFile The currently open file (optional)
      * @param quoteProjectPath When true, {projectPath} is substituted as a
      *   shell-quoted argument. Pass true ONLY for shell command content
@@ -406,22 +419,54 @@ object SplitTemplatesManager {
     ): String {
         var result = content
 
-        // Replace project path (shell-quoted when used inside a command)
-        val pathValue = projectPath ?: System.getProperty("user.home")
-        result = substituteProjectPath(result, pathValue, quoteProjectPath)
+        // One reading of "is there a project" for all three project placeholders. They used to
+        // disagree about a blank path: {projectPath} treated it as absent, while the two below
+        // took it as a real path - getClaudeContinueFlag("") looks in ~/.claude/projects/
+        // itself.
+        //
+        // Reachable only by a direct caller. Every production caller resolves first, because
+        // it needs the same directory for a tab's workingDirectory, so with no project
+        // selected all three see ~/BossProjects and take the has-a-project branch: the git
+        // lookup runs in the projects folder and finds no remote, and the session lookup
+        // misses. That is what the old code did with the home directory too. What this buys is
+        // that the branches agree with each other, whichever one a caller lands on.
+        val selectedProject = DefaultWorkingDirectory.selectedOrNull(projectPath)
 
-        // Replace git remote URL
-        val gitUrl = projectPath?.let { getGitRemoteUrl(it) } ?: "https://google.com"
-        result = result.replace("{gitRemoteUrl}", gitUrl)
+        // Replace project path (shell-quoted when used inside a command). With no project the
+        // fallback is ~/BossProjects, not the home directory - see DefaultWorkingDirectory.
+        //
+        // Guarded on the placeholder being present, which substituteProjectPath would handle
+        // by itself: the point is that DefaultWorkingDirectory.ensureDefaultDirectory() *creates a directory*,
+        // and evaluating it for content with no {projectPath} in it - "{gitRemoteUrl}", a
+        // plain string - makes a mkdir a side effect of a function called processPlaceholders.
+        if (result.contains(PROJECT_PATH_PLACEHOLDER)) {
+            val pathValue = selectedProject ?: DefaultWorkingDirectory.ensureDefaultDirectory()
+            result = substituteProjectPath(result, pathValue, quoteProjectPath)
+        }
+
+        // Replace git remote URL. Deliberately not resolved to the default: the projects
+        // folder is not a repository, so "no project" means there is no remote to link to.
+        //
+        // Guarded for the same reason as {projectPath}, and this is the expensive one:
+        // getGitRemoteUrl forks `git remote get-url origin` and waits for it. Restoring a
+        // workspace calls this once per placeholder-carrying field on the composition thread,
+        // so an unguarded lookup was a subprocess spawn per tab for content that never asked
+        // for a remote.
+        if (result.contains(GIT_REMOTE_URL_PLACEHOLDER)) {
+            val gitUrl = selectedProject?.let { getGitRemoteUrl(it) } ?: "https://google.com"
+            result = result.replace(GIT_REMOTE_URL_PLACEHOLDER, gitUrl)
+        }
 
         // Replace current file
         if (currentFile != null) {
             result = result.replace("{currentFile}", currentFile)
         }
 
-        // Replace Claude continue flag based on session existence
-        val claudeFlag = getClaudeContinueFlag(projectPath)
-        result = result.replace("{claudeContinueFlag}", claudeFlag)
+        // Replace Claude continue flag based on session existence. Guarded too:
+        // checkClaudeSessionExists lists ~/.claude/projects/<encoded>.
+        if (result.contains(CLAUDE_CONTINUE_FLAG_PLACEHOLDER)) {
+            result = result.replace(CLAUDE_CONTINUE_FLAG_PLACEHOLDER, getClaudeContinueFlag(selectedProject))
+        }
 
         // Normalize command separators for current platform (MUST be last step)
         result = CommandProcessor.normalizeCommand(result)

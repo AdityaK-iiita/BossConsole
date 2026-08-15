@@ -26,6 +26,7 @@ import ai.rever.boss.plugin.api.Panel.Companion.right
 import ai.rever.boss.plugin.api.Panel.Companion.top
 import ai.rever.boss.plugin.tab.terminal.TerminalTabInfo
 import ai.rever.boss.plugin.tab.terminal.TerminalTabType
+import ai.rever.boss.project.DefaultWorkingDirectory
 import ai.rever.boss.run.RunConfigurationManager
 import ai.rever.boss.run.RunExecutionService
 import ai.rever.boss.run.RunnerSettingsManager
@@ -126,18 +127,26 @@ internal fun BossAppEventBusEffects(state: BossAppState) {
                             windowId = windowId,
                             configId = event.configId,
                             command = event.command,
-                            workingDirectory = event.workingDirectory,
+                            // Same reason and same shape as openRunnerInMainPanel: an unset
+                            // run-configuration working directory arrives null and would start
+                            // the shell in the home directory, and the selected project comes
+                            // before the no-project default.
+                            workingDirectory =
+                                DefaultWorkingDirectory.selectedOrNull(event.workingDirectory)
+                                    ?: DefaultWorkingDirectory.resolve(
+                                        windowProjectState.selectedProject.value.path,
+                                    ),
                             tabTitle = "Run: ${event.configName}",
                             isRerun = event.isRerun,
                         )
 
                     if (!success) {
                         // Fallback to main panel if sidebar terminal not available
-                        openRunnerInMainPanel(event, splitViewState)
+                        openRunnerInMainPanel(event, splitViewState, windowProjectState.selectedProject.value.path)
                     }
                 } else {
                     // Open in main panel (original behavior)
-                    openRunnerInMainPanel(event, splitViewState)
+                    openRunnerInMainPanel(event, splitViewState, windowProjectState.selectedProject.value.path)
                 }
             }.launchIn(this)
 
@@ -560,7 +569,7 @@ internal fun BossAppEventBusEffects(state: BossAppState) {
                         typeId = TerminalTabType.typeId,
                         title = "Terminal",
                         icon = TerminalTabType.icon,
-                        workingDirectory = projectPath.ifEmpty { null },
+                        workingDirectory = DefaultWorkingDirectory.resolve(projectPath),
                     )
                 splitViewState.getActiveTabsComponent()?.addTab(terminalTab)
             }.launchIn(this)
@@ -597,9 +606,7 @@ internal fun BossAppEventBusEffects(state: BossAppState) {
                 if (activeComponent != null) {
                     val activePanelId = splitViewState.activePanelId
                     val projectPath =
-                        windowProjectState.selectedProject.value.path.ifEmpty {
-                            System.getProperty("user.home")
-                        }
+                        DefaultWorkingDirectory.resolve(windowProjectState.selectedProject.value.path)
                     // Create tabs from template panels
                     val leftPanelConfig = event.template.panels.find { it.position == "left" }
                     val rightPanelConfig = event.template.panels.find { it.position == "right" }

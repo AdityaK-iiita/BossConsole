@@ -5,8 +5,6 @@ expect object SystemUtils {
 
     fun getCurrentDirectory(): String
 
-    fun getDefaultProjectPath(): String
-
     /**
      * Returns true if the current platform is macOS.
      * Used for platform-aware keyboard shortcut handling.

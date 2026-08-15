@@ -20,6 +20,7 @@ import ai.rever.boss.plugin.pathutils.BossDirectories
 import ai.rever.boss.plugin.sandbox.ui.PluginCrashInterceptor
 import ai.rever.boss.plugin.sandbox.ui.PluginRenderRecovery
 import ai.rever.boss.plugin.ui.BossThemeController
+import ai.rever.boss.project.DefaultWorkingDirectory
 import ai.rever.boss.services.passkey.PasskeyPlatformInit
 import ai.rever.boss.utils.DeepLinkHandler
 import ai.rever.boss.utils.DeepLinkOrigin
@@ -387,6 +388,27 @@ fun main(args: Array<String>) {
     // rather than beside JPopupMenu.setDefaultLightWeightPopupEnabled: neither should be made to
     // start a window system to do its job. Everything from here on is a session that gets a window.
     DefaultWindowIcon.install()
+
+    // Create ~/BossProjects before a window asks for it. Every no-project path now resolves
+    // there instead of to the home directory (see DefaultWorkingDirectory), and the first of
+    // them is a window opening a terminal - creating it on demand would put the mkdirs on the
+    // thread doing that. Best-effort and idempotent: ensureDefaultDirectory() creates the directory itself if
+    // this has not finished, or did not work.
+    //
+    // Here for the same reason the icon install above is - "everything from here on is a
+    // session that gets a window". Up with the other startup warm-ups it would run for
+    // `--unregister-protocol` and for a deep-link forward, both of which exitProcess after
+    // doing something headless, and neither should leave a folder in the user's home behind.
+    //
+    // Unconditional, on every platform, and that is the decision rather than an oversight: a
+    // browser-only user on Windows has no TCC prompts to avoid and may never create a
+    // project, so they get an empty folder they did not ask for. Gating it on macOS would
+    // buy that user nothing back - the placeholder fallback and every terminal resolve there
+    // on all three platforms, so the directory gets created on first use anyway - while
+    // giving the two platforms different startup states to reason about.
+    startupScope.launch(Dispatchers.IO) {
+        DefaultWorkingDirectory.ensureDefaultDirectory()
+    }
 
     // Register shutdown hook to release the single-instance lock AND close browser engine
     Runtime.getRuntime().addShutdownHook(

@@ -13,6 +13,7 @@ import ai.rever.boss.plugin.tab.codeeditor.EditorTabInfo
 import ai.rever.boss.plugin.tab.fluck.FluckTabType
 import ai.rever.boss.plugin.tab.terminal.TerminalTabInfo
 import ai.rever.boss.plugin.tab.terminal.TerminalTabType
+import ai.rever.boss.project.DefaultWorkingDirectory
 import ai.rever.boss.utils.extractFileName
 import kotlin.random.Random
 
@@ -80,7 +81,11 @@ internal fun createTabFromTemplateConfig(
                 typeId = TerminalTabType.typeId,
                 title = command?.substringBefore(" ")?.extractFileName() ?: "Terminal",
                 icon = TerminalTabType.icon,
-                workingDirectory = projectPath,
+                // Every caller already hands this a resolved path, so this is a no-op that
+                // costs nothing (resolve() on a non-blank path touches no filesystem). It is
+                // here so "a terminal never starts in the home directory" holds at the point
+                // of construction rather than by caller discipline.
+                workingDirectory = DefaultWorkingDirectory.resolve(projectPath),
                 initialCommand = command,
             )
         }

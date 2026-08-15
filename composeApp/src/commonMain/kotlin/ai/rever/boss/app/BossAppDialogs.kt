@@ -45,6 +45,7 @@ import ai.rever.boss.plugin.tab.terminal.TerminalTabInfo
 import ai.rever.boss.plugin.tab.terminal.TerminalTabType
 import ai.rever.boss.plugin.ui.BossAlertDialog
 import ai.rever.boss.plugin.ui.BossTheme
+import ai.rever.boss.project.DefaultWorkingDirectory
 import ai.rever.boss.run.RunConfigurationManager
 import ai.rever.boss.run.RunExecutionService
 import ai.rever.boss.services.auth.UserDataStorage
@@ -266,7 +267,7 @@ internal fun BossAppDialogs(state: BossAppState) {
                                 id = "terminal-${Random.nextLong()}",
                                 typeId = TerminalTabType.typeId,
                                 title = "Terminal",
-                                workingDirectory = projectPath.ifEmpty { null },
+                                workingDirectory = DefaultWorkingDirectory.resolve(projectPath),
                             )
                         targetComponent.addTab(tab)
                     }

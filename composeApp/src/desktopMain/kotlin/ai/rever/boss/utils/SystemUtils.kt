@@ -7,10 +7,9 @@ actual object SystemUtils {
 
     actual fun getCurrentDirectory(): String = System.getProperty("user.dir") ?: getUserHome()
 
-    actual fun getDefaultProjectPath(): String {
-        // For desktop, use current directory if available, otherwise user home
-        return getCurrentDirectory()
-    }
+    // getDefaultProjectPath() was here and had no callers. It answered with the process
+    // working directory - "/" for a packaged .app - and the one thing that would want it,
+    // "where does BOSS work with no project selected", is DefaultWorkingDirectory.ensureDefaultDirectory().
 
     actual val isMacOS: Boolean = osName.contains("mac")
 
