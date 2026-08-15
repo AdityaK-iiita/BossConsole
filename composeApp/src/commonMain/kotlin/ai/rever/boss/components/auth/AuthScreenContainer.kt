@@ -134,7 +134,10 @@ fun AuthScreenContainer(onLoginSuccess: () -> Unit) {
             modifier =
                 Modifier
                     .fillMaxSize()
-                    .background(BossThemeController.current.colors.panel),
+                    // ink, the design system's base floor. AuthScaffold paints its own panes over
+                    // this, so it only shows for the one screen that does not use the scaffold
+                    // (PASSKEY_BROWSER, which fills the window with a web view).
+                    .background(BossThemeController.current.colors.ink),
         ) {
             when (currentScreen) {
                 AuthScreen.LOGIN -> {

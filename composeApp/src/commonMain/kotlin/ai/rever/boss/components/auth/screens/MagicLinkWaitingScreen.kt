@@ -9,11 +9,8 @@ import ai.rever.boss.viewmodels.LoginViewModel
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
@@ -24,7 +21,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -75,282 +71,265 @@ fun MagicLinkWaitingScreen(
         }
     }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier =
-                Modifier
-                    .heightIn(min = maxHeight)
-                    .verticalScroll(rememberScrollState())
-                    .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
+    AuthScaffold(title = "Check Your Email") {
+        // Main instruction
+        Text(
+            text = "We've sent a magic link to:",
+            fontSize = 14.sp,
+            color = BossTheme.colors.textSecondary,
+            textAlign = TextAlign.Center,
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Email address confirmation
+        Text(
+            text = email,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Medium,
+            color = BossTheme.colors.signalText,
+            textAlign = TextAlign.Center,
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Instructions
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = BossTheme.radius.cardShape,
+            backgroundColor = BossTheme.colors.raised,
+            elevation = 0.dp,
+            border = BorderStroke(1.dp, BossTheme.colors.line),
         ) {
-            BossLogo()
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            AuthCard {
-                AuthCardTitle("Check Your Email")
-
-                // Main instruction
-                Text(
-                    text = "We've sent a magic link to:",
-                    fontSize = 14.sp,
-                    color = BossTheme.colors.textSecondary,
-                    textAlign = TextAlign.Center,
+            Column(
+                modifier = Modifier.padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Email,
+                    contentDescription = "Email",
+                    tint = BossTheme.colors.signalText,
+                    modifier = Modifier.size(24.dp),
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Email address confirmation
                 Text(
-                    text = email,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = BossTheme.colors.signalText,
+                    text = "Click the link in your email to sign in automatically",
+                    fontSize = 13.sp,
+                    color = BossTheme.colors.textSecondary,
                     textAlign = TextAlign.Center,
+                    lineHeight = 18.sp,
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // Success message for resend
+        if (showSuccessMessage) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = "Success",
+                    tint = BossTheme.colors.ok,
+                    modifier = Modifier.size(16.dp),
                 )
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.width(8.dp))
 
-                // Instructions
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(6.dp),
-                    backgroundColor = BossTheme.colors.panel,
-                    elevation = 0.dp,
-                    border = BorderStroke(1.dp, BossTheme.colors.line),
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Email,
-                            contentDescription = "Email",
-                            tint = BossTheme.colors.signalText,
-                            modifier = Modifier.size(24.dp),
-                        )
+                Text(
+                    text = "Magic link sent successfully!",
+                    fontSize = 13.sp,
+                    color = BossTheme.colors.ok,
+                )
+            }
 
-                        Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(16.dp))
+        }
 
-                        Text(
-                            text = "Click the link in your email to sign in automatically",
-                            fontSize = 13.sp,
-                            color = BossTheme.colors.textSecondary,
-                            textAlign = TextAlign.Center,
-                            lineHeight = 18.sp,
-                        )
-                    }
-                }
+        // Only show actual error messages, not success messages (which are handled by UI state)
+        if (errorMessage != null && !errorMessage.contains("sent") && !errorMessage.contains("Check your email")) {
+            ErrorMessage(errorMessage)
+            Spacer(modifier = Modifier.height(16.dp))
+        }
 
-                Spacer(modifier = Modifier.height(20.dp))
-
-                // Success message for resend
-                if (showSuccessMessage) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CheckCircle,
-                            contentDescription = "Success",
-                            tint = BossTheme.colors.ok,
-                            modifier = Modifier.size(16.dp),
-                        )
-
-                        Spacer(modifier = Modifier.width(8.dp))
-
-                        Text(
-                            text = "Magic link sent successfully!",
-                            fontSize = 13.sp,
-                            color = BossTheme.colors.ok,
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-                }
-
-                // Only show actual error messages, not success messages (which are handled by UI state)
-                if (errorMessage != null && !errorMessage.contains("sent") && !errorMessage.contains("Check your email")) {
-                    ErrorMessage(errorMessage)
-                    Spacer(modifier = Modifier.height(16.dp))
-                }
-
-                // Resend button with cooldown
-                OutlinedButton(
-                    onClick = {
-                        if (resendCooldown == 0) {
-                            // Calculate cooldown based on attempts (exponential backoff)
-                            val cooldownTime =
-                                when (resendAttempts) {
-                                    0 -> 60
-                                    1 -> 120
-                                    2 -> 300
-                                    else -> 600
-                                }
-
-                            resendAttempts++
-                            resendCooldown = cooldownTime
-
-                            // Check if user is already authenticated - if so, don't send magic link
-                            val authState = AuthService.authState.value
-                            if (authState is AuthService.AuthState.Authenticated) {
-                                logger.debug(LogCategory.AUTH, "User already authenticated, skipping magic link resend")
-                                showSuccessMessage = true // Show success message without actually sending
-                                return@OutlinedButton
-                            }
-
-                            viewModel.sendMagicLink(email) {
-                                showSuccessMessage = true
-                            }
+        // Resend button with cooldown
+        OutlinedButton(
+            onClick = {
+                if (resendCooldown == 0) {
+                    // Calculate cooldown based on attempts (exponential backoff)
+                    val cooldownTime =
+                        when (resendAttempts) {
+                            0 -> 60
+                            1 -> 120
+                            2 -> 300
+                            else -> 600
                         }
-                    },
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .height(48.dp),
-                    enabled = !isLoading && resendCooldown == 0,
-                    shape = RoundedCornerShape(4.dp),
-                    colors =
-                        ButtonDefaults.outlinedButtonColors(
-                            contentColor =
-                                if (resendCooldown == 0) {
-                                    BossTheme.colors.textPrimary
-                                } else {
-                                    BossTheme.colors.textSecondary
-                                },
-                        ),
-                    border = BorderStroke(1.dp, BossTheme.colors.line),
-                ) {
-                    if (isLoading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            color = BossTheme.colors.textSecondary,
-                            strokeWidth = 2.dp,
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = "Resend",
-                            modifier = Modifier.size(20.dp),
-                            tint = if (resendCooldown == 0) BossTheme.colors.textPrimary else BossTheme.colors.textSecondary,
-                        )
 
-                        Spacer(modifier = Modifier.width(8.dp))
+                    resendAttempts++
+                    resendCooldown = cooldownTime
 
-                        Text(
-                            text =
-                                if (resendCooldown == 0) {
-                                    "Resend Magic Link"
-                                } else {
-                                    "Resend in ${resendCooldown}s"
-                                },
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium,
-                        )
+                    // Check if user is already authenticated - if so, don't send magic link
+                    val authState = AuthService.authState.value
+                    if (authState is AuthService.AuthState.Authenticated) {
+                        logger.debug(LogCategory.AUTH, "User already authenticated, skipping magic link resend")
+                        showSuccessMessage = true // Show success message without actually sending
+                        return@OutlinedButton
+                    }
+
+                    viewModel.sendMagicLink(email) {
+                        showSuccessMessage = true
                     }
                 }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Manual input toggle
-                TextButton(
-                    onClick = { showManualInput = !showManualInput },
-                ) {
-                    Text(
-                        text = if (showManualInput) "Hide Manual Input" else "Having trouble? Paste magic link manually",
-                        fontSize = 12.sp,
-                        color = BossTheme.colors.textSecondary,
-                        textDecoration = TextDecoration.Underline,
-                    )
-                }
-
-                // Manual magic link input (for debugging)
-                if (showManualInput) {
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    OutlinedTextField(
-                        value = magicLinkInput,
-                        onValueChange = { magicLinkInput = it },
-                        label = { Text("Magic Link URL", color = BossTheme.colors.textSecondary, fontSize = 12.sp) },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Default.Link,
-                                contentDescription = "Link",
-                                tint = BossTheme.colors.textSecondary,
-                                modifier = Modifier.size(20.dp),
-                            )
+            },
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .height(AuthButtonHeight),
+            enabled = !isLoading && resendCooldown == 0,
+            shape = BossTheme.radius.buttonShape,
+            colors =
+                ButtonDefaults.outlinedButtonColors(
+                    contentColor =
+                        if (resendCooldown == 0) {
+                            BossTheme.colors.textPrimary
+                        } else {
+                            BossTheme.colors.textSecondary
                         },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        keyboardOptions =
-                            KeyboardOptions(
-                                keyboardType = KeyboardType.Uri,
-                                imeAction = ImeAction.Done,
-                            ),
-                        keyboardActions =
-                            KeyboardActions(
-                                onDone = {
-                                    keyboardController?.hide()
-                                    if (magicLinkInput.isNotBlank()) {
-                                        // Process the manual magic link
-                                        processMagicLink(magicLinkInput, onSuccess)
-                                    }
-                                },
-                            ),
-                        colors =
-                            TextFieldDefaults.outlinedTextFieldColors(
-                                textColor = BossTheme.colors.textPrimary,
-                                backgroundColor = BossTheme.colors.panel,
-                                focusedBorderColor = BossTheme.colors.signal,
-                                unfocusedBorderColor = BossTheme.colors.line,
-                                cursorColor = BossTheme.colors.signal,
-                                focusedLabelColor = BossTheme.colors.signalText,
-                                unfocusedLabelColor = BossTheme.colors.textSecondary,
-                            ),
+                ),
+            border = BorderStroke(1.dp, BossTheme.colors.line),
+        ) {
+            if (isLoading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    color = BossTheme.colors.textSecondary,
+                    strokeWidth = 2.dp,
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = "Resend",
+                    modifier = Modifier.size(20.dp),
+                    tint = if (resendCooldown == 0) BossTheme.colors.textPrimary else BossTheme.colors.textSecondary,
+                )
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Text(
+                    text =
+                        if (resendCooldown == 0) {
+                            "Resend Magic Link"
+                        } else {
+                            "Resend in ${resendCooldown}s"
+                        },
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Manual input toggle
+        TextButton(
+            onClick = { showManualInput = !showManualInput },
+        ) {
+            Text(
+                text = if (showManualInput) "Hide Manual Input" else "Having trouble? Paste magic link manually",
+                fontSize = 12.sp,
+                color = BossTheme.colors.textSecondary,
+                textDecoration = TextDecoration.Underline,
+            )
+        }
+
+        // Manual magic link input (for debugging)
+        if (showManualInput) {
+            Spacer(modifier = Modifier.height(16.dp))
+
+            OutlinedTextField(
+                value = magicLinkInput,
+                onValueChange = { magicLinkInput = it },
+                label = { Text("Magic Link URL", color = BossTheme.colors.textSecondary, fontSize = 12.sp) },
+                leadingIcon = {
+                    Icon(
+                        Icons.Default.Link,
+                        contentDescription = "Link",
+                        tint = BossTheme.colors.textSecondary,
+                        modifier = Modifier.size(20.dp),
                     )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Button(
-                        onClick = {
+                },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions =
+                    KeyboardOptions(
+                        keyboardType = KeyboardType.Uri,
+                        imeAction = ImeAction.Done,
+                    ),
+                keyboardActions =
+                    KeyboardActions(
+                        onDone = {
+                            keyboardController?.hide()
                             if (magicLinkInput.isNotBlank()) {
+                                // Process the manual magic link
                                 processMagicLink(magicLinkInput, onSuccess)
                             }
                         },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = magicLinkInput.isNotBlank() && !isLoading,
-                        shape = RoundedCornerShape(4.dp),
-                        colors =
-                            ButtonDefaults.buttonColors(
-                                backgroundColor = BossTheme.colors.signal,
-                                contentColor = Color.White,
-                            ),
-                    ) {
-                        Text(
-                            text = "Verify Magic Link",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                        )
+                    ),
+                colors =
+                    TextFieldDefaults.outlinedTextFieldColors(
+                        textColor = BossTheme.colors.textPrimary,
+                        // ink, matching EmailField: a field is an inset in the pane, not a raised card.
+                        backgroundColor = BossTheme.colors.ink,
+                        focusedBorderColor = BossTheme.colors.signal,
+                        unfocusedBorderColor = BossTheme.colors.line,
+                        cursorColor = BossTheme.colors.signal,
+                        focusedLabelColor = BossTheme.colors.signalText,
+                        unfocusedLabelColor = BossTheme.colors.textSecondary,
+                    ),
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Button(
+                onClick = {
+                    if (magicLinkInput.isNotBlank()) {
+                        processMagicLink(magicLinkInput, onSuccess)
                     }
-                }
-
-                Spacer(modifier = Modifier.height(20.dp))
-
-                // Back button
-                TextButton(
-                    onClick = onBack,
-                ) {
-                    Text(
-                        text = "Back to Sign In",
-                        fontSize = 14.sp,
-                        color = BossTheme.colors.signalText,
-                        textDecoration = TextDecoration.Underline,
-                    )
-                }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = magicLinkInput.isNotBlank() && !isLoading,
+                shape = BossTheme.radius.buttonShape,
+                colors =
+                    ButtonDefaults.buttonColors(
+                        backgroundColor = BossTheme.colors.signal,
+                        contentColor = BossTheme.colors.onSignal,
+                    ),
+            ) {
+                Text(
+                    text = "Verify Magic Link",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                )
             }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // Back button
+        TextButton(
+            onClick = onBack,
+        ) {
+            Text(
+                text = "Back to Sign In",
+                fontSize = 14.sp,
+                color = BossTheme.colors.signalText,
+                textDecoration = TextDecoration.Underline,
+            )
         }
     }
 }

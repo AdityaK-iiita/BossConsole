@@ -1,90 +1,52 @@
 package ai.rever.boss.components.auth.forms
 
 import ai.rever.boss.plugin.ui.BossTheme
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.*
+import androidx.compose.material.Button
+import androidx.compose.material.ButtonDefaults
+import androidx.compose.material.CircularProgressIndicator
+import androidx.compose.material.Icon
+import androidx.compose.material.OutlinedTextField
+import androidx.compose.material.Text
+import androidx.compose.material.TextFieldDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Email
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import boss_kotlin.composeapp.generated.resources.Res
-import boss_kotlin.composeapp.generated.resources.boss_icon
-import org.jetbrains.compose.resources.painterResource
 
 /**
- * Shared component for BOSS logo display
+ * Height of the auth family's full-width actions.
+ *
+ * Taller than Material's intrinsic 36dp and specific to these screens, where a single action is the
+ * whole point of the page. Named so the three buttons that share it cannot drift apart.
  */
-@Composable
-fun BossLogo(modifier: Modifier = Modifier) {
-    Image(
-        painter = painterResource(Res.drawable.boss_icon),
-        contentDescription = "BOSS Logo",
-        modifier = modifier.size(64.dp),
-    )
-}
+internal val AuthButtonHeight: Dp = 48.dp
 
 /**
- * Shared component for authentication cards
- */
-@Composable
-fun AuthCard(
-    modifier: Modifier = Modifier,
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    Card(
-        modifier =
-            modifier
-                .fillMaxWidth()
-                .widthIn(max = 400.dp),
-        shape = RoundedCornerShape(8.dp),
-        elevation = 2.dp,
-        backgroundColor = BossTheme.colors.raised,
-    ) {
-        Column(
-            modifier = Modifier.padding(32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            content = content,
-        )
-    }
-}
-
-/**
- * Shared component for card titles
- */
-@Composable
-fun AuthCardTitle(
-    title: String,
-    modifier: Modifier = Modifier,
-) {
-    Text(
-        text = title,
-        fontSize = 20.sp,
-        fontWeight = FontWeight.Bold,
-        color = BossTheme.colors.textPrimary,
-        modifier = modifier.padding(bottom = 24.dp),
-    )
-}
-
-/**
- * Shared email input field component
+ * Shared email input field component.
+ *
+ * The background is `ink`, not `panel`: this sits on the form pane, which IS `panel`, so a `panel`
+ * field was invisible against its own container - and in Blueprint Light and Daylight, where `panel`
+ * and `raised` are both pure white, no other surface token would separate either. `ink` reads as an
+ * inset in the dark themes and as a faint grey well in the light ones.
+ *
+ * `focusedLabelColor` is `signalText` rather than `signal` because a label is a glyph, and the
+ * design system splits those: `signal` for fills and borders, `signalText` for anything drawn as
+ * text (Blueprint's `signal` only reaches 3.5:1 as text).
  */
 @Composable
 fun EmailField(
@@ -92,21 +54,35 @@ fun EmailField(
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    autoFocus: Boolean = false,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
 ) {
+    val colors = BossTheme.colors
+    val focusRequester = remember { FocusRequester() }
+
+    if (autoFocus) {
+        // Guarded, because `requestFocus` throws if the node is not attached yet, and this composable is
+        // reachable from screens that may compose it before layout has placed it. A sign-in screen that
+        // crashed on the way to focusing a field would be a poor trade for saving one click.
+        LaunchedEffect(Unit) {
+            runCatching { focusRequester.requestFocus() }
+        }
+    }
+
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        label = { Text("Email", color = BossTheme.colors.textSecondary) },
+        label = { Text("Email", style = BossTheme.type.body) },
         leadingIcon = {
             Icon(
                 Icons.Default.Email,
                 contentDescription = "Email",
-                tint = BossTheme.colors.textSecondary,
+                tint = colors.textSecondary,
             )
         },
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().focusRequester(focusRequester),
         singleLine = true,
+        shape = BossTheme.radius.inputShape,
         keyboardOptions =
             KeyboardOptions(
                 keyboardType = KeyboardType.Email,
@@ -116,19 +92,23 @@ fun EmailField(
         enabled = enabled,
         colors =
             TextFieldDefaults.outlinedTextFieldColors(
-                textColor = BossTheme.colors.textPrimary,
-                backgroundColor = BossTheme.colors.panel,
-                focusedBorderColor = BossTheme.colors.signal,
-                unfocusedBorderColor = BossTheme.colors.line,
-                cursorColor = BossTheme.colors.signal,
-                focusedLabelColor = BossTheme.colors.signalText,
-                unfocusedLabelColor = BossTheme.colors.textSecondary,
+                textColor = colors.textPrimary,
+                backgroundColor = colors.ink,
+                focusedBorderColor = colors.signal,
+                unfocusedBorderColor = colors.line,
+                cursorColor = colors.signal,
+                focusedLabelColor = colors.signalText,
+                unfocusedLabelColor = colors.textSecondary,
             ),
     )
 }
 
 /**
- * Shared primary action button component
+ * Shared primary action button component.
+ *
+ * `contentColor` is `onSignal`, not white. `onSignal` is near-black in Daylight (`#2A1B05`) and
+ * Operator (`#1A1206`), so a hardcoded white label was illegible on the amber fill in two of the five
+ * themes - and it disagreed with the passkey button on the same screen, which already used the token.
  */
 @Composable
 fun PrimaryActionButton(
@@ -138,30 +118,33 @@ fun PrimaryActionButton(
     enabled: Boolean = true,
     isLoading: Boolean = false,
 ) {
+    val colors = BossTheme.colors
     Button(
         onClick = onClick,
         modifier =
             modifier
                 .fillMaxWidth()
-                .height(48.dp),
+                .height(AuthButtonHeight),
         enabled = enabled && !isLoading,
-        shape = RoundedCornerShape(4.dp),
+        shape = BossTheme.radius.buttonShape,
         colors =
             ButtonDefaults.buttonColors(
-                backgroundColor = BossTheme.colors.signal,
-                contentColor = Color.White,
+                backgroundColor = colors.signal,
+                contentColor = colors.onSignal,
+                disabledBackgroundColor = colors.raised,
+                disabledContentColor = colors.textMuted,
             ),
     ) {
         if (isLoading) {
             CircularProgressIndicator(
                 modifier = Modifier.size(16.dp),
-                color = Color.White,
+                color = colors.onSignal,
                 strokeWidth = 2.dp,
             )
         } else {
             Text(
                 text = text,
-                fontSize = 14.sp,
+                style = BossTheme.type.title,
                 fontWeight = FontWeight.Medium,
             )
         }
@@ -169,7 +152,7 @@ fun PrimaryActionButton(
 }
 
 /**
- * Shared error message display component
+ * Shared error message display component.
  */
 @Composable
 fun ErrorMessage(
@@ -180,7 +163,7 @@ fun ErrorMessage(
         Text(
             text = message,
             color = BossTheme.colors.alert,
-            fontSize = 12.sp,
+            style = BossTheme.type.body,
             modifier = modifier.fillMaxWidth(),
             textAlign = TextAlign.Start,
         )
@@ -188,7 +171,7 @@ fun ErrorMessage(
 }
 
 /**
- * Shared loading indicator component
+ * Shared loading indicator component.
  */
 @Composable
 fun LoadingIndicator(

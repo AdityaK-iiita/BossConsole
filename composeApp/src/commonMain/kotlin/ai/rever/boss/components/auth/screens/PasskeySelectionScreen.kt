@@ -8,11 +8,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
@@ -48,30 +44,17 @@ fun PasskeySelectionScreen(
         }
     }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier =
-                Modifier
-                    .heightIn(min = maxHeight)
-                    .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
-            BossLogo()
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            AuthCard {
-                PasskeySelectionCardContent(
-                    email = email,
-                    passkeys = passkeys,
-                    selectedCredentialId = selectedCredentialId,
-                    onSelect = { selectedCredentialId = it },
-                    onContinue = { selectedCredentialId?.let(onPasskeySelected) },
-                    onBack = onBack,
-                )
-            }
-        }
+    // The scaffold brings the verticalScroll this screen never had - and it is the screen that needed
+    // it most, since its content grows with the number of registered passkeys.
+    AuthScaffold(title = "Choose Your Passkey") {
+        PasskeySelectionCardContent(
+            email = email,
+            passkeys = passkeys,
+            selectedCredentialId = selectedCredentialId,
+            onSelect = { selectedCredentialId = it },
+            onContinue = { selectedCredentialId?.let(onPasskeySelected) },
+            onBack = onBack,
+        )
     }
 }
 
@@ -85,8 +68,6 @@ private fun PasskeySelectionCardContent(
     onBack: () -> Unit,
 ) {
     val colors = BossTheme.colors
-    AuthCardTitle("Choose Your Passkey")
-
     Text("Signing in as:", fontSize = 14.sp, color = colors.textSecondary, textAlign = TextAlign.Center)
     Spacer(modifier = Modifier.height(8.dp))
     Text(email, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = colors.signal, textAlign = TextAlign.Center)
@@ -99,8 +80,17 @@ private fun PasskeySelectionCardContent(
             color = colors.textSecondary,
             modifier = Modifier.padding(bottom = 12.dp),
         )
-        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 400.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(passkeys) { passkey ->
+        // A plain Column, not a LazyColumn, now that the scaffold scrolls this screen. The list was a
+        // LazyColumn capped at 400dp, which is a scrollable inside a scrollable on the same axis: legal,
+        // since the height bound satisfies Compose's constraint check, but a wheel gesture over the list
+        // scrolled the inner one and never chained out to the page - on the one screen the scaffold's own
+        // KDoc singles out as needing the outer scroll most. Laziness bought nothing here either; nobody
+        // has enough registered passkeys for it to matter.
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            passkeys.forEach { passkey ->
                 PasskeyCard(passkey, selectedCredentialId == passkey.credentialId) { onSelect(passkey.credentialId) }
             }
         }
