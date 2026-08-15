@@ -64,8 +64,26 @@ interface PluginSandbox : PluginSandboxRef {
      * Reset health metrics after a user-initiated reset.
      * Clears consecutive errors and marks the sandbox as healthy again.
      * Does NOT count as a crash or restart attempt.
+     *
+     * This clears the restart budget too. It is the user saying "this
+     * recovered", and while `restartAttempts` was zeroed by every restart that
+     * was moot; now that the counter survives, a plugin sitting at two attempts
+     * whose user was told it had been reset would still be one hiccup from
+     * being disabled outright.
      */
     fun resetHealth()
+
+    /**
+     * Clear the restart counter after the plugin has proven itself healthy
+     * again for a sustained period.
+     *
+     * This is deliberately separate from "the restart call returned": a
+     * restart that merely completes says nothing about whether the plugin
+     * recovered, and zeroing the counter there makes [SandboxConfig.maxRestartAttempts]
+     * unreachable. The watchdog calls this only after
+     * [SandboxConfig.healthyChecksToClearRestarts] consecutive healthy checks.
+     */
+    fun resetRestartAttempts()
 }
 
 /**
@@ -112,4 +130,30 @@ data class SandboxConfig(
      * Maximum delay in milliseconds for restart backoff.
      */
     val restartBackoffMaxMs: Long = 30000,
+    /**
+     * How far the watchdog's own check loop may overrun [heartbeatIntervalMs]
+     * before that tick is discarded as evidence about plugin health.
+     *
+     * Heartbeat age is wall-clock, so anything that freezes the whole process
+     * - the machine sleeping, a long GC pause, a debugger breakpoint - ages
+     * every plugin's heartbeat at once while the plugins themselves are doing
+     * nothing wrong. The watchdog's loop is frozen by the same thing, and that
+     * overrun is the signal used to tell the two apart.
+     */
+    val stallGraceMs: Long = 2000,
+    /**
+     * Consecutive healthy checks a plugin must pass before its restart counter
+     * is cleared. At the default interval this is a minute of good behaviour.
+     */
+    val healthyChecksToClearRestarts: Int = 12,
+    /**
+     * Ticks in a row that may skip the health check, before one runs anyway.
+     *
+     * Counted in ticks, so its wall-clock meaning is entirely
+     * [heartbeatIntervalMs] - which is why it belongs here rather than in a
+     * constant. A plugin declaring a 500ms interval would get a 3 second
+     * ceiling on suppression from a hardcoded 6; one declaring 60s would get
+     * six minutes of a watchdog that is not watching.
+     */
+    val maxSkippedChecks: Int = 6,
 )

@@ -1,15 +1,23 @@
 package ai.rever.boss.plugin.sandbox
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import java.util.concurrent.CountDownLatch
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
@@ -251,16 +259,158 @@ class InProcessPluginSandboxTest {
             }
 
         @Test
-        fun `restart creates new sandboxScope`() =
+        fun `restart keeps the same sandboxScope instance`() =
             runTest {
                 sandbox.start()
                 val originalScope = sandbox.sandboxScope
 
                 sandbox.restart()
 
-                // After restart, scope should be different (new instance)
-                // We can verify this by checking the scope is still active
+                // Plugins read pluginScope once, in register(), and hand it to
+                // components that outlive any restart. Handing out a fresh
+                // scope here left all of them holding a cancelled one, and a
+                // cancelled scope swallows launch() without running or
+                // throwing - so the plugin went quietly inert until the user
+                // reloaded it by hand.
+                assertSame(originalScope, sandbox.sandboxScope)
                 assertTrue(sandbox.sandboxScope.isActive)
+            }
+
+        @Test
+        fun `work launched after a restart still runs`() =
+            runTest {
+                sandbox.start()
+                val scopeCapturedAtRegisterTime = sandbox.sandboxScope
+
+                sandbox.restart()
+
+                val ran = CompletableDeferred<Boolean>()
+                scopeCapturedAtRegisterTime.launch { ran.complete(true) }
+
+                assertTrue(ran.await(), "the scope a plugin captured before the restart is dead")
+            }
+
+        @Test
+        fun `restart cancels work that was in flight`() =
+            runTest {
+                sandbox.start()
+                val started = CompletableDeferred<Unit>()
+                val job =
+                    sandbox.sandboxScope.launch {
+                        started.complete(Unit)
+                        awaitCancellation()
+                    }
+                started.await()
+
+                sandbox.restart()
+
+                job.join()
+                assertTrue(job.isCancelled)
+            }
+
+        @Test
+        fun `a stopped sandbox runs nothing`() =
+            runTest {
+                sandbox.start()
+                sandbox.stop()
+
+                var executed = false
+                sandbox.sandboxScope.launch { executed = true }.join()
+
+                assertFalse(executed, "a stopped sandbox must not keep running plugin code")
+            }
+
+        @Test
+        fun `starting again after a stop re-arms the same scope`() =
+            runTest {
+                sandbox.start()
+                val scopeCapturedAtRegisterTime = sandbox.sandboxScope
+                sandbox.stop()
+
+                // What a disable/enable cycle does. The plugin is never handed
+                // a new scope, so this one has to come back to life.
+                sandbox.start()
+
+                val ran = CompletableDeferred<Boolean>()
+                scopeCapturedAtRegisterTime.launch { ran.complete(true) }
+
+                assertSame(scopeCapturedAtRegisterTime, sandbox.sandboxScope)
+                assertTrue(ran.await(), "enable left the plugin with a dead scope")
+            }
+    }
+
+    @Nested
+    inner class CancelledRestartTests {
+        /**
+         * The Restart buttons run on a Compose `rememberCoroutineScope`, so
+         * closing the tab or switching side panels mid-restart cancels this.
+         *
+         * The window is widened deliberately: a thread blocked in a latch is
+         * not interruptible by coroutine cancellation, so the retiring pool
+         * cannot terminate and `awaitTermination` waits its full timeout.
+         */
+        @Test
+        fun `a cancelled restart does not strand the sandbox in RESTARTING`() =
+            runBlocking {
+                sandbox.start()
+                val holdThePool = CountDownLatch(1)
+                sandbox.sandboxScope.launch { holdThePool.await() }
+                // Let it actually occupy a pool thread before the swap.
+                withTimeoutOrNull(2_000) {
+                    while (sandbox.healthMetrics.value.lastHeartbeat == 0L) delay(10)
+                }
+
+                val restart = launch(Dispatchers.Default) { sandbox.restart() }
+                // Past the swap: the state has moved off STOPPED either way -
+                // to RUNNING with the fix, to RESTARTING without it.
+                withTimeoutOrNull(2_000) {
+                    while (sandbox.state.value == SandboxState.STOPPED) delay(5)
+                }
+                restart.cancel()
+                restart.join()
+                holdThePool.countDown()
+
+                // RESTARTING is the state PluginWatchdog skips outright, so a
+                // sandbox left there is never restarted, never marked
+                // unhealthy, and shows no fallback UI. It is invisible to every
+                // recovery path there is.
+                assertEquals(SandboxState.RUNNING, sandbox.state.value)
+
+                val ran = CompletableDeferred<Boolean>()
+                sandbox.sandboxScope.launch { ran.complete(true) }
+                assertTrue(
+                    withTimeoutOrNull(5_000) { ran.await() } == true,
+                    "the scope did not survive a cancelled restart",
+                )
+            }
+    }
+
+    @Nested
+    inner class RestartAccountingTests {
+        @Test
+        fun `restart attempts accumulate across restarts`() =
+            runTest {
+                sandbox.start()
+
+                sandbox.restart()
+                sandbox.restart()
+
+                // A restart that merely returned is not proof the plugin
+                // recovered. Zeroing the counter here made maxRestartAttempts
+                // unreachable, so a plugin could restart-loop forever with
+                // every attempt logged as "attempt 1".
+                assertEquals(2, sandbox.healthMetrics.value.restartAttempts)
+            }
+
+        @Test
+        fun `resetRestartAttempts clears the counter`() =
+            runTest {
+                sandbox.start()
+                sandbox.restart()
+
+                sandbox.resetRestartAttempts()
+
+                assertEquals(0, sandbox.healthMetrics.value.restartAttempts)
             }
     }
 

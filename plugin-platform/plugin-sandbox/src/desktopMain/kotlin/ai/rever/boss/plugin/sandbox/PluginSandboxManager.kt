@@ -185,6 +185,19 @@ class PluginSandboxManagerImpl(
     private val sandboxes = ConcurrentHashMap<String, InProcessPluginSandbox>()
     private val watchdogs = ConcurrentHashMap<String, PluginWatchdog>()
 
+    /**
+     * The config a plugin's sandbox was actually created with.
+     *
+     * Plugins can declare their own sandbox settings, so the restart budget and
+     * backoff have to be read per plugin. They used to be enforced by the
+     * watchdog, which is constructed with the plugin's own config; now that the
+     * decision lives here, reading [defaultConfig] would quietly apply the
+     * wrong thresholds to any plugin that asked for something else. Read off
+     * the sandbox rather than a parallel map, so there is nothing to keep in
+     * sync.
+     */
+    private fun configFor(pluginId: String): SandboxConfig = sandboxes[pluginId]?.config ?: defaultConfig
+
     // Weak references to prevent memory leaks from listeners that aren't removed
     private val listeners = CopyOnWriteArrayList<WeakReference<PluginSandboxListener>>()
 
@@ -223,12 +236,40 @@ class PluginSandboxManagerImpl(
 
     /**
      * Notify all active listeners and clean up dead references.
+     *
+     * A listener that throws is contained, matching the equivalent helper in
+     * `DynamicPluginManager`. The asymmetry mattered once `onPluginRestarted`
+     * started doing real work: it is dispatched from `restartPlugin`, which on
+     * the automatic path runs inside the watchdog's own coroutine
+     * (checkHealth -> triggerRestart -> onRestartRequested -> handleRestartRequest).
+     * An exception escaping a listener escapes `PluginWatchdog`'s
+     * `while (isActive)` loop and completes that job exceptionally, and
+     * `managerScope` carries a SupervisorJob with no CoroutineExceptionHandler -
+     * so the plugin would be left with no health monitoring at all for the rest
+     * of the session, with a default-handler stack trace as the only trace.
+     *
+     * Throwable rather than Exception: this calls out to listeners that reach
+     * plugin code and Compose dispatchers, where an Error is as plausible as an
+     * exception and just as fatal to the loop.
      */
+    @Suppress("TooGenericExceptionCaught")
     private fun notifyListeners(action: (PluginSandboxListener) -> Unit) {
         listeners.removeIf { ref ->
             val listener = ref.get()
             if (listener != null) {
-                action(listener)
+                try {
+                    action(listener)
+                } catch (e: Throwable) {
+                    logger.warn(
+                        LogCategory.SYSTEM,
+                        "Plugin sandbox listener threw, continuing",
+                        mapOf(
+                            "listener" to (listener::class.simpleName ?: "unknown"),
+                            "error" to (e.message ?: e::class.simpleName ?: "unknown"),
+                        ),
+                        e,
+                    )
+                }
                 false // Keep reference
             } else {
                 true // Remove dead reference
@@ -279,6 +320,14 @@ class PluginSandboxManagerImpl(
 
     override fun getSandbox(pluginId: String): PluginSandbox? = sandboxes[pluginId]
 
+    /**
+     * Note the watchdog-then-sandbox order here, in [disablePlugin] and in
+     * [fullyUnloadPlugin]. It is safe at these three sites only because none of
+     * them is reached from inside a watchdog coroutine. The same order in
+     * [handleRestartRequest] stopped the coroutine that was executing it and so
+     * skipped the suspending pool teardown entirely - see the comment there
+     * before reordering any of these to match.
+     */
     override suspend fun removeSandbox(pluginId: String) {
         logger.info(
             LogCategory.SYSTEM,
@@ -434,7 +483,7 @@ class PluginSandboxManagerImpl(
                 val watchdog =
                     PluginWatchdog(
                         sandbox = sandbox,
-                        config = defaultConfig,
+                        config = configFor(pluginId),
                         scope = managerScope,
                         onRestartRequested = { id -> handleRestartRequest(id) },
                     )
@@ -450,12 +499,25 @@ class PluginSandboxManagerImpl(
 
     override fun getDisabledPlugins(): Set<String> = disabledPlugins.toSet()
 
-    private suspend fun handleRestartRequest(pluginId: String) {
+    /**
+     * What the watchdog asks for when a plugin looks dead. Internal rather than
+     * private so the budget-exhaustion branch - the one path that disables a
+     * plugin outright - is reachable from a test.
+     */
+    internal suspend fun handleRestartRequest(pluginId: String) {
         val sandbox = sandboxes[pluginId] ?: return
         val metrics = sandbox.healthMetrics.value
+        val config = configFor(pluginId)
 
-        // Check if we've exceeded max restarts
-        if (metrics.restartAttempts >= defaultConfig.maxRestartAttempts) {
+        // Check if we've exceeded max restarts.
+        //
+        // This is the ONLY place the restart budget is enforced. PluginWatchdog
+        // used to hold a copy that ran first and so shadowed this one; it
+        // stopped the sandbox without calling setDisabled(), which meant no
+        // fallback UI, no notification and isPluginDisabled() still false. The
+        // branch was unreachable while every restart zeroed restartAttempts,
+        // and became reachable when the counter started surviving.
+        if (metrics.restartAttempts >= config.maxRestartAttempts) {
             logger.error(
                 LogCategory.SYSTEM,
                 "Plugin exceeded max restart attempts, disabling",
@@ -464,17 +526,27 @@ class PluginSandboxManagerImpl(
                     "attempts" to metrics.restartAttempts,
                 ),
             )
-            // Stop watchdog to prevent further restart attempts
-            watchdogs[pluginId]?.stop()
+            // Order matters, and it is the opposite of what reads naturally.
+            // This runs inside the watchdog's own coroutine (checkHealth ->
+            // triggerRestart -> onRestartRequested), so stopping the watchdog
+            // cancels the coroutine executing these very lines. Everything
+            // after it that suspends is then skipped - and sandbox.stop()
+            // suspends, in the withContext that retires the thread pool, with
+            // the CancellationException swallowed by its own runCatching. Every
+            // plugin disabled this way stranded a two-thread non-daemon pool
+            // for the life of the process. So: tear the sandbox down first,
+            // and stop the watchdog once nothing is left that needs to suspend.
             sandbox.stop()
             sandbox.setDisabled()
             disabledPlugins.add(pluginId)
             notifyListeners { it.onPluginDisabled(pluginId) }
+            // Last: prevents further restart attempts, and cancels us.
+            watchdogs[pluginId]?.stop()
             return
         }
 
         // Calculate backoff delay
-        val backoffDelay = calculateBackoff(metrics.restartAttempts)
+        val backoffDelay = calculateBackoff(metrics.restartAttempts, config)
         logger.info(
             LogCategory.SYSTEM,
             "Scheduling plugin restart with backoff",
@@ -488,13 +560,16 @@ class PluginSandboxManagerImpl(
         restartPlugin(pluginId)
     }
 
-    private fun calculateBackoff(attempt: Int): Long {
+    private fun calculateBackoff(
+        attempt: Int,
+        config: SandboxConfig,
+    ): Long {
         // Exponential backoff: baseMs * 2^attempt (e.g., 1s, 2s, 4s, 8s... max 30s)
         // Uses bit shift (1L shl n) as efficient equivalent of 2^n
         // coerceIn handles both negative values and overflow prevention
         val safeAttempt = attempt.coerceIn(0, 30)
-        val delay = defaultConfig.restartBackoffBaseMs * (1L shl safeAttempt)
-        return minOf(delay, defaultConfig.restartBackoffMaxMs)
+        val delay = config.restartBackoffBaseMs * (1L shl safeAttempt)
+        return minOf(delay, config.restartBackoffMaxMs)
     }
 
     override fun getAllSandboxes(): Map<String, PluginSandbox> = sandboxes.toMap()

@@ -4,12 +4,14 @@ import ai.rever.boss.plugin.logging.BossLogger
 import ai.rever.boss.plugin.logging.LogCategory
 import ai.rever.boss.plugin.sandbox.health.PluginHealthMetrics
 import ai.rever.boss.plugin.sandbox.ui.PluginCrashRegistry
+import kotlinx.coroutines.CompletableJob
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -17,9 +19,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.CoroutineContext
 
 /**
  * In-process sandbox implementation for UI plugins.
@@ -32,7 +37,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class InProcessPluginSandbox(
     override val pluginId: String,
-    private val config: SandboxConfig = SandboxConfig(),
+    /** Readable by the manager, which enforces this plugin's restart budget. */
+    internal val config: SandboxConfig = SandboxConfig(),
 ) : PluginSandbox {
     private val logger = BossLogger.forComponent("InProcessPluginSandbox")
 
@@ -43,15 +49,15 @@ class InProcessPluginSandbox(
     private val _healthMetrics = MutableStateFlow(PluginHealthMetrics.initial())
     override val healthMetrics: StateFlow<PluginHealthMetrics> = _healthMetrics.asStateFlow()
 
-    // Thread pool and coroutine scope - @Volatile for visibility across threads during restart
+    // Thread pool - @Volatile for visibility across threads during restart
     @Volatile
-    private var executor =
-        Executors.newFixedThreadPool(config.maxThreads) { runnable ->
-            Thread(runnable, "plugin-sandbox-$pluginId-${System.currentTimeMillis()}")
-        }
+    private var executor: ExecutorService = newExecutor()
 
-    @Volatile
-    private var dispatcher = executor.asCoroutineDispatcher()
+    /**
+     * Dispatcher indirection, so the backing thread pool can be replaced on
+     * restart without replacing the dispatcher the plugin scope was built from.
+     */
+    private val dispatcher = SwappableDispatcher(executor.asCoroutineDispatcher())
 
     private val exceptionHandler =
         CoroutineExceptionHandler { _, throwable ->
@@ -71,29 +77,182 @@ class InProcessPluginSandbox(
             recordError(throwable)
         }
 
-    @Volatile
-    private var _sandboxScope: CoroutineScope = createScope()
+    private val _sandboxScope = SandboxScope()
 
     /**
      * The coroutine scope for plugin operations.
      *
-     * **Thread Safety Note**: Access during [SandboxState.RESTARTING] may return a scope
-     * that is being cancelled. Callers should check [state] before launching long-running
-     * coroutines, or handle [CancellationException] gracefully.
+     * **This object is created once and never replaced.** Plugins read
+     * `PluginContext.pluginScope` in `register()` and hand it to components,
+     * view models and background jobs that outlive any single restart, so
+     * handing out a *new* scope on restart left every one of those holding a
+     * permanently cancelled one. `launch` on a cancelled scope neither runs nor
+     * throws, so the plugin went silently inert - a panel would sit on a
+     * spinner for ever with nothing in the logs - until the user reloaded it by
+     * hand. What a restart cancels now is the scope's children; the scope
+     * itself keeps working.
+     *
+     * **Thread Safety Note**: work launched during [SandboxState.RESTARTING]
+     * may be cancelled along with the rest of the pre-restart children.
+     * Callers should handle `CancellationException` gracefully.
      */
     override val sandboxScope: CoroutineScope
         get() = _sandboxScope
 
     private val isRunning = AtomicBoolean(false)
 
-    // Lock for synchronizing executor/scope recreation during restart
+    // Lock for synchronizing executor/job recreation during restart
     private val restartLock = Any()
 
     // Heartbeat job for automatic heartbeat recording
     @Volatile
     private var heartbeatJob: Job? = null
 
-    private fun createScope(): CoroutineScope = CoroutineScope(dispatcher + SupervisorJob() + exceptionHandler)
+    private fun newExecutor(): ExecutorService =
+        Executors.newFixedThreadPool(config.maxThreads) { runnable ->
+            Thread(runnable, "plugin-sandbox-$pluginId-${System.currentTimeMillis()}")
+        }
+
+    /**
+     * A dispatcher whose backing pool can be swapped underneath it.
+     *
+     * A dispatch that reads the delegate just before a swap can land on a pool
+     * that is shutting down. kotlinx's executor dispatcher already handles that
+     * - it cancels the job and re-dispatches - so the race needs no handling of
+     * its own here. Worth knowing what it re-dispatches *to*, though: kotlinx's
+     * own shared executor, so for that one block the thread isolation this
+     * sandbox exists to provide is not in force. The window predates this class
+     * and is not widened by it.
+     *
+     * [Delay] is deliberately not forwarded. The pools here are plain fixed
+     * thread pools, never scheduled ones, so the wrapped dispatcher had no
+     * `Delay` to offer either and `delay()` inside plugin coroutines has always
+     * used kotlinx's default. Swapping in a scheduled pool later would need
+     * this revisited.
+     */
+    private class SwappableDispatcher(
+        initial: CoroutineDispatcher,
+    ) : CoroutineDispatcher() {
+        @Volatile
+        private var delegate: CoroutineDispatcher = initial
+
+        fun swap(next: CoroutineDispatcher) {
+            delegate = next
+        }
+
+        override fun dispatch(
+            context: CoroutineContext,
+            block: Runnable,
+        ) = delegate.dispatch(context, block)
+    }
+
+    /**
+     * The plugin-facing scope. Its identity is fixed for the life of the
+     * sandbox; only the [Job] underneath it is replaced, so cancelling
+     * everything a plugin has in flight does not cost it the ability to start
+     * anything new.
+     */
+    private inner class SandboxScope : CoroutineScope {
+        @Volatile
+        private var job: CompletableJob = SupervisorJob()
+
+        /**
+         * Composed once per job generation rather than per read.
+         *
+         * Two reasons. Plugins launch a great deal of work on this scope and
+         * every `launch` reads this, so rebuilding the context each time is
+         * pure waste. More importantly a single volatile read cannot tear:
+         * composing `dispatcher + job + exceptionHandler` on the fly let a
+         * `launch` racing [resetJob] pick up the job that was about to be
+         * cancelled, and a coroutine attached to an already-cancelled job does
+         * not run and does not throw - the exact failure this class is being
+         * changed to stop. It cannot be eliminated (a caller can always read
+         * microseconds before the swap) but it is bounded to one restart rather
+         * than composed of two different generations.
+         */
+        @Volatile
+        private var context: CoroutineContext = dispatcher + job + exceptionHandler
+
+        override val coroutineContext: CoroutineContext
+            get() = context
+
+        /** Cancel everything in flight and re-arm for new work. */
+        fun resetJob() {
+            job.cancel()
+            install(SupervisorJob())
+        }
+
+        /** Cancel everything in flight, leaving the scope inert until re-armed. */
+        fun cancelJob() {
+            job.cancel()
+        }
+
+        /**
+         * Re-arm after a [cancelJob], for a disable/enable cycle.
+         *
+         * Deliberately NOT called `ensureActive`: `CoroutineScope.ensureActive()`
+         * is a kotlinx extension that *throws* when the job is cancelled, a
+         * member of that name would win over it inside this class, and the two
+         * meanings are opposites.
+         */
+        fun rearmIfCancelled() {
+            if (!job.isActive) install(SupervisorJob())
+        }
+
+        private fun install(fresh: CompletableJob) {
+            job = fresh
+            context = dispatcher + fresh + exceptionHandler
+        }
+    }
+
+    /**
+     * Re-arm the pool and the scope's job if a previous [stop] retired them.
+     *
+     * Without this, disable-then-enable handed the plugin a scope whose job was
+     * cancelled and whose executor was shut down, and the sandbox only ever
+     * recovered by way of a watchdog restart.
+     */
+    private fun ensureRunnable() {
+        synchronized(restartLock) {
+            // isShutdown is only ever produced by stop(); restart() replaces
+            // the reference before retiring the old pool, so a live sandbox
+            // never observes its own executor shut down.
+            if (executor.isShutdown) {
+                executor = newExecutor()
+                dispatcher.swap(executor.asCoroutineDispatcher())
+            }
+            _sandboxScope.rearmIfCancelled()
+        }
+    }
+
+    /**
+     * Retire a pool, off whatever coroutine worker asked for it.
+     *
+     * [ExecutorService.awaitTermination] blocks for up to two seconds and both
+     * callers are suspend functions reached from Dispatchers.Default, whose
+     * workers are a small shared pool.
+     */
+    private suspend fun shutdownExecutor(target: ExecutorService) {
+        withContext(Dispatchers.IO) {
+            // Idempotent; stop() has already called it under the lock.
+            target.shutdown()
+            try {
+                if (!target.awaitTermination(EXECUTOR_SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                    logger.warn(
+                        LogCategory.SYSTEM,
+                        "Executor didn't terminate gracefully, forcing shutdown",
+                        mapOf(
+                            "pluginId" to pluginId,
+                        ),
+                    )
+                    target.shutdownNow()
+                }
+            } catch (e: InterruptedException) {
+                target.shutdownNow()
+                Thread.currentThread().interrupt()
+            }
+        }
+    }
 
     override suspend fun start(): Result<Unit> {
         return runCatching {
@@ -116,6 +275,10 @@ class InProcessPluginSandbox(
                     "maxThreads" to config.maxThreads,
                 ),
             )
+
+            // A prior stop() retired the pool and the scope's job; bring both
+            // back before anything is launched into them.
+            ensureRunnable()
 
             _state.value = SandboxState.RUNNING
             _healthMetrics.value = PluginHealthMetrics.initial()
@@ -169,90 +332,151 @@ class InProcessPluginSandbox(
             heartbeatJob?.cancel()
             heartbeatJob = null
 
-            // Cancel the coroutine scope
-            _sandboxScope.cancel()
-
-            // Shutdown the executor and wait for termination
-            executor.shutdown()
-            try {
-                if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
-                    logger.warn(
-                        LogCategory.SYSTEM,
-                        "Executor didn't terminate gracefully, forcing shutdown",
-                        mapOf(
-                            "pluginId" to pluginId,
-                        ),
-                    )
-                    executor.shutdownNow()
-                }
-            } catch (e: InterruptedException) {
-                executor.shutdownNow()
-                Thread.currentThread().interrupt()
+            // Under the same lock restart() and ensureRunnable() use. Without
+            // it, a stop() racing a start() could cancel the job and kill the
+            // pool *after* ensureRunnable had inspected both and decided
+            // nothing needed re-arming, leaving the sandbox reporting RUNNING
+            // over a cancelled scope and a dead executor - the silent-inert
+            // state this class exists to prevent. A stop() racing a restart()
+            // could equally cancel the job restart() had just installed, or
+            // retire a pool it no longer owns.
+            val retiring: ExecutorService
+            synchronized(restartLock) {
+                // Cancel everything the plugin has in flight. The scope object
+                // stays, inert, so a later start() can re-arm it in place rather
+                // than handing the plugin a scope it will never read again.
+                _sandboxScope.cancelJob()
+                retiring = executor
+                // shutdown() itself does not block - only awaitTermination
+                // does - so marking the pool dead happens under the lock. Doing
+                // it outside left a window where a concurrent start() ran
+                // ensureRunnable, saw isShutdown still false, kept the pool and
+                // re-armed the job onto it, and only then did this shut it
+                // down: RUNNING state, live scope, dead executor, every
+                // dispatch silently cancelled.
+                retiring.shutdown()
             }
+
+            // Outside the lock, as restart() does: awaiting termination blocks.
+            shutdownExecutor(retiring)
         }
     }
 
-    override suspend fun restart(): Result<Unit> =
-        runCatching {
-            logger.info(
-                LogCategory.SYSTEM,
-                "Restarting plugin sandbox",
-                mapOf(
-                    "pluginId" to pluginId,
-                    "restartAttempt" to (_healthMetrics.value.restartAttempts + 1),
-                ),
-            )
+    /**
+     * Restart the sandbox: cancel everything the plugin has in flight, give it
+     * a fresh thread pool, and re-arm the scope it captured at register() time.
+     *
+     * Split in two on purpose. Everything that moves the sandbox out of
+     * [SandboxState.RESTARTING] happens in [swapInFreshRuntime], which does not
+     * suspend; only retiring the *old* pool does, and by then the sandbox is
+     * already RUNNING on the new one.
+     *
+     * The order used to be the other way round, and it left a hole: retiring
+     * the old pool suspends in `withContext(Dispatchers.IO)`, so cancelling
+     * there stopped the coroutine before it ever set RUNNING or re-armed the
+     * heartbeat. The sandbox stayed in RESTARTING, which [PluginWatchdog]
+     * skips outright - so nothing restarted it, nothing marked it unhealthy,
+     * and `PluginErrorBoundary` showed no fallback because the state was not
+     * DISABLED. The plugin was invisible to every recovery path there is.
+     *
+     * Reachable, too: both error-boundary Restart buttons run on a Compose
+     * `rememberCoroutineScope`, so closing the tab or switching side panels
+     * during the up-to-two-second `awaitTermination` cancelled exactly here.
+     */
+    override suspend fun restart(): Result<Unit> {
+        logger.info(
+            LogCategory.SYSTEM,
+            "Restarting plugin sandbox",
+            mapOf(
+                "pluginId" to pluginId,
+                "restartAttempt" to (_healthMetrics.value.restartAttempts + 1),
+            ),
+        )
 
-            _state.value = SandboxState.RESTARTING
-
-            // Record the crash
-            _healthMetrics.update { it.withCrash() }
-
-            // Cancel heartbeat job
-            heartbeatJob?.cancel()
-            heartbeatJob = null
-
-            // Synchronize executor/scope swap to prevent other threads from accessing stale references
-            synchronized(restartLock) {
-                // Cancel existing scope
-                _sandboxScope.cancel()
-
-                // Shutdown old executor and wait for termination (consistent with stop())
-                executor.shutdown()
-                try {
-                    if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
-                        executor.shutdownNow()
-                    }
-                } catch (e: InterruptedException) {
-                    executor.shutdownNow()
-                    Thread.currentThread().interrupt()
+        val retiredExecutor =
+            runCatching { swapInFreshRuntime() }
+                .getOrElse { error ->
+                    // Only reachable if the fresh pool cannot be created at all.
+                    // UNHEALTHY rather than RESTARTING because the watchdog
+                    // still looks at UNHEALTHY, so a sandbox this failed on can
+                    // still be seen and retried.
+                    _state.value = SandboxState.UNHEALTHY
+                    logger.error(
+                        LogCategory.SYSTEM,
+                        "Failed to restart plugin sandbox",
+                        mapOf(
+                            "pluginId" to pluginId,
+                        ),
+                        error,
+                    )
+                    return Result.failure(error)
                 }
 
-                // Create new executor and scope atomically
-                executor =
-                    Executors.newFixedThreadPool(config.maxThreads) { runnable ->
-                        Thread(runnable, "plugin-sandbox-$pluginId-${System.currentTimeMillis()}")
-                    }
-                dispatcher = executor.asCoroutineDispatcher()
-                _sandboxScope = createScope()
-            }
+        logger.info(
+            LogCategory.SYSTEM,
+            "Plugin sandbox restarted successfully",
+            mapOf(
+                "pluginId" to pluginId,
+            ),
+        )
 
-            // Mark as running with successful restart metrics
-            _healthMetrics.update { it.withSuccessfulRestart() }
-            _state.value = SandboxState.RUNNING
-            isRunning.set(true)
+        // Cleanup of the pool the plugin no longer runs on. It has already had
+        // shutdown() called under the lock, so it drains either way; this only
+        // waits for it and force-kills a pool that will not go. Cancellation
+        // here is allowed to propagate - the sandbox is already running, and
+        // swallowing a CancellationException into Result.failure would report a
+        // restart that did happen as one that did not.
+        shutdownExecutor(retiredExecutor)
+        return Result.success(Unit)
+    }
 
-            // Start automatic heartbeat recording
-            startHeartbeatJob()
+    /**
+     * Swap in a fresh pool and bring the sandbox back to [SandboxState.RUNNING].
+     *
+     * Every statement here is non-suspending, which is the point: the sandbox
+     * passes through RESTARTING - a state the watchdog ignores - and must not
+     * be able to stop inside it.
+     *
+     * @return the retired pool, for the caller to wait on.
+     */
+    private fun swapInFreshRuntime(): ExecutorService {
+        _state.value = SandboxState.RESTARTING
 
-            logger.info(
-                LogCategory.SYSTEM,
-                "Plugin sandbox restarted successfully",
-                mapOf(
-                    "pluginId" to pluginId,
-                ),
-            )
+        // Record the crash
+        _healthMetrics.update { it.withCrash() }
+
+        // Cancel heartbeat job
+        heartbeatJob?.cancel()
+        heartbeatJob = null
+
+        // Synchronize executor/job swap to prevent other threads from accessing stale references
+        val retiredExecutor: ExecutorService
+        synchronized(restartLock) {
+            // Cancel the plugin's in-flight coroutines and re-arm the scope
+            // for new work. The scope object itself is deliberately kept -
+            // see the note on [sandboxScope].
+            _sandboxScope.resetJob()
+
+            // Put the fresh pool in place before retiring the old one, so
+            // nothing dispatched during the swap meets a dead executor.
+            retiredExecutor = executor
+            executor = newExecutor()
+            dispatcher.swap(executor.asCoroutineDispatcher())
+            // Under the lock, so a concurrent stop() cannot capture the
+            // pool this restart just installed and retire it instead.
+            retiredExecutor.shutdown()
         }
+
+        // Mark as running with successful restart metrics
+        _healthMetrics.update { it.withSuccessfulRestart() }
+        _state.value = SandboxState.RUNNING
+        isRunning.set(true)
+
+        // Start automatic heartbeat recording
+        startHeartbeatJob()
+
+        return retiredExecutor
+    }
 
     override fun recordHeartbeat() {
         _healthMetrics.update { it.withHeartbeat() }
@@ -327,15 +551,32 @@ class InProcessPluginSandbox(
             ),
         )
         _healthMetrics.update {
-            it.copy(
-                consecutiveErrors = 0,
-                lastHeartbeat = System.currentTimeMillis(),
-            )
+            // Composed, so "clear the counter" has one definition shared
+            // with resetRestartAttempts rather than two to keep in sync.
+            it
+                .withRestartAttemptsCleared()
+                .copy(
+                    consecutiveErrors = 0,
+                    lastHeartbeat = System.currentTimeMillis(),
+                )
         }
         // If sandbox was unhealthy, mark it as running again
         if (_state.value == SandboxState.UNHEALTHY) {
             _state.value = SandboxState.RUNNING
         }
+    }
+
+    /**
+     * Whether the plugin's thread pool actually went away.
+     *
+     * Exposed for the teardown test: the pool is non-daemon and fixed-size, so
+     * a stop that silently skipped its shutdown strands two threads for the
+     * life of the process with nothing else to observe it by.
+     */
+    internal fun isExecutorTerminated(): Boolean = executor.isTerminated
+
+    override fun resetRestartAttempts() {
+        _healthMetrics.update { it.withRestartAttemptsCleared() }
     }
 
     /**
@@ -368,5 +609,9 @@ class InProcessPluginSandbox(
             ),
         )
         _state.value = newState
+    }
+
+    private companion object {
+        const val EXECUTOR_SHUTDOWN_TIMEOUT_SECONDS = 2L
     }
 }
