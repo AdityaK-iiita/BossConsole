@@ -13,6 +13,7 @@ import ai.rever.boss.components.events.URLEventBus
 import ai.rever.boss.components.events.WorkspaceEventBus
 import ai.rever.boss.components.plugin.PanelIds
 import ai.rever.boss.components.plugin.PluginDependencyEventBus
+import ai.rever.boss.components.plugin.resolveRegisteredPanelId
 import ai.rever.boss.components.window_panel.SplitOrientation
 import ai.rever.boss.components.workspaces.WorkspaceSerializer
 import ai.rever.boss.components.workspaces.applyWorkspace
@@ -393,6 +394,37 @@ internal fun BossAppEventBusEffects(state: BossAppState) {
                         error = e,
                     )
                 }
+            }.launchIn(this)
+    }
+
+    // Listen for "open this panel as a main-area tab" requests — SplitViewOperations.openPanelAsTab.
+    // Deliberately routed to requestOpenAsTab rather than doing the work here: that is the same
+    // entry point the header drag-out uses, so a plugin inherits the move semantics the host's own
+    // promote path has (the cached component and its state carry into the tab, the sidebar copy is
+    // collapsed without being destroyed) and the single-instance rule (already open => focus that
+    // tab, never a second copy). ProcessPendingPromoteToTab, which has SplitView access, performs it.
+    LaunchedEffect(state.draggablePanelComponent, state.panelRegistry, windowId) {
+        PanelEventBus.panelPromoteToTabEvents
+            .filter { event -> event.sourceWindowId == windowId }
+            .onEach { event ->
+                // Normalise the id against the registry first. A plugin knows the panel's id
+                // string but not its defaultOrder, and everything downstream — the component
+                // store, the hosted-as-tab counts — keys on the whole data class, so an id
+                // carrying a guessed order would promote nothing and say nothing. The panel-open
+                // handler above matches the same way; this shares the rule rather than copying it.
+                val resolved = state.panelRegistry.resolveRegisteredPanelId(event.panelId)
+                if (resolved == null) {
+                    logger.warn(
+                        LogCategory.UI,
+                        "Dropping panel promote-to-tab event - panel is not registered",
+                        mapOf(
+                            "panelId" to event.panelId.panelId,
+                            "pluginId" to event.panelId.pluginId,
+                        ),
+                    )
+                    return@onEach
+                }
+                state.draggablePanelComponent.requestOpenAsTab(resolved)
             }.launchIn(this)
     }
 
