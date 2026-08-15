@@ -217,6 +217,29 @@ internal fun BossAppScaffold(
     var contentInset by remember { mutableStateOf(DpSize.Zero) }
     val density = LocalDensity.current.density
 
+    // Where Settings / Search / Sign Out go while focus mode holds the top bar that owns them.
+    // One decision, two mutually exclusive renderings: the bottom of the right rail when that rail
+    // is on screen, a floating corner cluster when it is not. Read once here so the two call sites
+    // below cannot disagree about it and briefly show both.
+    val quickActionsPlacement = focusQuickActionsPlacement(focusModeSettings, reveal.showTopBar)
+
+    // Remembered, not rebuilt each pass, for the allocations and for a stable reserve - NOT to buy
+    // a skip. `kotlin.collections.List` is unstable to Compose's stability inference, so taking one
+    // as a parameter makes BossRightSideBar non-skippable whatever the argument identity: it was
+    // skippable before this feature (no parameters, @Stable receiver) and is not now, and
+    // computeSlotIconLimits re-runs with it. Making it skippable again would take an @Immutable
+    // holder around the two parameters, which is not worth it for a 40dp rail. The lambdas capture
+    // `state`, a single stable instance for the life of this window.
+    val quickActionsRail =
+        remember(quickActionsPlacement, state) {
+            focusQuickActionsRail(
+                placement = quickActionsPlacement,
+                onShowSettings = { state.settingsWindow.open() },
+                onShowSearch = { state.showGlobalSearchDialog = true },
+                onSignOut = { state.showLogoutDialog = true },
+            )
+        }
+
     with(state.draggablePanelComponent) {
         Box(
             modifier =
@@ -325,7 +348,7 @@ internal fun BossAppScaffold(
                                 state.showTopOfMindDialog = true
                             },
                             onShowSettings = {
-                                state.showSettingsDialog = true
+                                state.settingsWindow.open()
                             },
                             onShowSearch = {
                                 state.showGlobalSearchDialog = true
@@ -383,12 +406,14 @@ internal fun BossAppScaffold(
                             onTabDropResult = { result ->
                                 handleTabDropResult(result, splitViewState)
                             },
-                            onShowSettings = { state.showSettingsDialog = true },
+                            onShowSettings = { state.settingsWindow.open() },
                             onOpenProjectDialog = { state.showProjectDialog = true },
                             onNewProject = { state.showNewProjectDialog = true },
                         )
 
                         // Settings / Search / Sign Out, which the top bar otherwise owns outright.
+                        // The FLOATING half of the placement: reached only when focus mode has
+                        // cleared the right sidebar too, since with the rail up they go in it.
                         // Composed inside the content area so the lightweight path aligns where it
                         // draws; contentInset is what makes the heavyweight path agree.
                         //
@@ -413,9 +438,9 @@ internal fun BossAppScaffold(
                         // visible. Gating on the setting is also just the honest condition: the
                         // cluster exists because focus mode clears the top bar.
                         FocusModeQuickActions(
-                            visible = focusQuickActionsVisible(focusModeSettings, reveal.showTopBar),
+                            visible = quickActionsPlacement == FocusQuickActionsPlacement.FLOATING,
                             inset = { contentInset },
-                            onShowSettings = { state.showSettingsDialog = true },
+                            onShowSettings = { state.settingsWindow.open() },
                             onShowSearch = { state.showGlobalSearchDialog = true },
                             onSignOut = { state.showLogoutDialog = true },
                         )
@@ -438,7 +463,19 @@ internal fun BossAppScaffold(
                         Box(
                             modifier = Modifier.hoverable(interactionSource = reveal.rightSidebarInteractionSource),
                         ) {
-                            BossRightSideBar()
+                            // The RIGHT_RAIL half of the placement, and empty for the other two.
+                            // The rail is where these belong whenever there is a rail: three more
+                            // icons on a strip that is already icon chrome, instead of an overlay
+                            // over live content.
+                            //
+                            // The reserve is deliberately NOT the rendered count: it is held for
+                            // as long as focus mode owns the top bar, so hover-revealing that bar
+                            // takes the three icons away without also handing their rows back to
+                            // the plugin slots and reshuffling them. See focusQuickActionsRailRows.
+                            BossRightSideBar(
+                                bottomActions = quickActionsRail,
+                                bottomActionRows = focusQuickActionsRailRows(focusModeSettings),
+                            )
                         }
                     }
                 }
