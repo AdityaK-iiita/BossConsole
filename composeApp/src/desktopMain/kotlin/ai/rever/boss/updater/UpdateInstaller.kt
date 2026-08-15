@@ -4,6 +4,7 @@ import ai.rever.boss.utils.AppVersion
 import ai.rever.boss.utils.BOSS_MACOS_APP_BUNDLE_NAME
 import ai.rever.boss.utils.BOSS_MACOS_BUNDLE_ID
 import ai.rever.boss.utils.Version
+import ai.rever.boss.utils.WindowsProtocolCleanup
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import kotlinx.coroutines.Dispatchers
@@ -19,6 +20,33 @@ private const val APP_TRANSLOCATION_PATH_SEGMENT = "/AppTranslocation/"
 private const val MACOS_APP_BUNDLE_SUFFIX = ".app"
 private const val MACOS_APPLICATIONS_DIRECTORY = "/Applications"
 private const val SPOTLIGHT_LOOKUP_TIMEOUT_SECONDS = 5L
+
+/** jpackage sets this on every packaged launch, to the launcher executable itself. */
+private const val JPACKAGE_APP_PATH_PROPERTY = "jpackage.app-path"
+
+/** Filename of the Windows launcher jpackage emits, as `WindowsProtocolHandler` also assumes. */
+private const val WINDOWS_LAUNCHER_NAME = "BOSS.exe"
+
+/**
+ * How far up from the running code to look for the launcher. The jpackage layout puts
+ * it two levels up (`<install>\app\*.jar` -> `<install>\BOSS.exe`); the slack covers a
+ * jar nested deeper, and [WINDOWS_INSTALL_MARKER_DIRS] is what keeps it from wandering.
+ */
+private const val WINDOWS_LAUNCHER_SEARCH_DEPTH = 5
+
+/**
+ * Directories jpackage always puts beside the launcher, used to require that a candidate
+ * directory actually looks like a BOSS install.
+ *
+ * Without this the walk could accept any `BOSS.exe` sitting in an ancestor directory, and
+ * above `<install>` for a per-user install those ancestors are `%LOCALAPPDATA%`,
+ * `C:\Users\<account>\AppData` and `C:\Users\<account>` - all user-writable, and the
+ * result is handed straight to `start`. Reaching that needs `jpackage.app-path` absent or
+ * stale *and* the real launcher gone, so it was never likely; "we could not find the
+ * launcher" is still a much better outcome than launching whatever is named right three
+ * directories up.
+ */
+private val WINDOWS_INSTALL_MARKER_DIRS = listOf("app", "runtime")
 
 /** Staging directory (inside the platform temp directory) that downloads land in. */
 internal const val UPDATE_STAGING_DIR_NAME = "boss-updates"
@@ -68,6 +96,46 @@ internal fun realAppPathFor(
 
     return installedAppLookup()?.takeIf(appExists) ?: path
 }
+
+/**
+ * Resolve the installed Windows launcher to relaunch after the MSI runs, without
+ * touching the filesystem itself so the ordering stays unit-testable.
+ *
+ * Returns null when there is nothing to relaunch - a development run, or an install
+ * shape neither method recognises. Null is not an error: the caller installs anyway
+ * and only skips the relaunch, which is exactly the behaviour Windows had before.
+ *
+ * @param jpackageAppPath `jpackage.app-path`, the launcher path jpackage itself set.
+ * @param codeSourcePath Absolute path of the running jar or classes directory.
+ * @param exists Filesystem probe, injected. Answers for directories as well as files.
+ */
+internal fun windowsLauncherPathFor(
+    jpackageAppPath: String?,
+    codeSourcePath: String?,
+    exists: (String) -> Boolean,
+): String? {
+    // jpackage's own answer, and the same property WindowsProtocolHandler trusts
+    // first. It names the launcher directly, so nothing has to be inferred from the
+    // install layout.
+    jpackageAppPath?.takeIf { it.isNotBlank() && exists(it) }?.let { return it }
+
+    // Otherwise walk up from the running code looking for the launcher beside a
+    // directory we are inside: `<install>\app\composeApp.jar` -> `<install>\BOSS.exe`.
+    // Nearest match wins, and each candidate has to look like an install.
+    return codeSourcePath
+        ?.let(::File)
+        ?.let { code -> generateSequence(code.parentFile) { it.parentFile } }
+        ?.take(WINDOWS_LAUNCHER_SEARCH_DEPTH)
+        ?.filter { directory -> isWindowsInstallDir(directory, exists) }
+        ?.map { File(it, WINDOWS_LAUNCHER_NAME).path }
+        ?.firstOrNull(exists)
+}
+
+/** Whether [directory] carries one of the [WINDOWS_INSTALL_MARKER_DIRS] jpackage emits. */
+private fun isWindowsInstallDir(
+    directory: File,
+    exists: (String) -> Boolean,
+): Boolean = WINDOWS_INSTALL_MARKER_DIRS.any { exists(File(directory, it).path) }
 
 /**
  * Platform-specific update installation logic
@@ -530,6 +598,18 @@ object UpdateInstaller {
                 // Validate download file for security (early check)
                 validateDownloadFile(downloadFile, ".msi")
 
+                // Resolve the launcher while BOSS is still running - the script needs
+                // it to bring the app back, and after msiexec there is no process left
+                // to ask. Unlike the macOS path an unresolvable one is not fatal: the
+                // install still happens, the user just starts BOSS themselves.
+                val launcherPath = getWindowsLauncherPath()
+                if (launcherPath == null) {
+                    logger.warn(
+                        LogCategory.SYSTEM,
+                        "Could not determine the BOSS launcher path - the update will not relaunch",
+                    )
+                }
+
                 // Generate update script with current process PID
                 val currentPid = ProcessHandle.current().pid()
                 logger.debug(LogCategory.SYSTEM, "Generating update script", mapOf("pid" to currentPid))
@@ -538,6 +618,7 @@ object UpdateInstaller {
                     UpdateScriptGenerator.generateWindowsUpdateScript(
                         msiPath = downloadFile.absolutePath,
                         appPid = currentPid,
+                        targetExePath = launcherPath,
                     )
 
                 // Launch the script in the background
@@ -660,6 +741,72 @@ object UpdateInstaller {
                 logger.error(LogCategory.SYSTEM, "Error during RPM update preparation", error = e)
                 InstallResult.Error(e.message ?: "Unknown error")
             }
+        }
+
+    /**
+     * Path of the installed `BOSS.exe` for the update script to relaunch, or null when
+     * it cannot be resolved or would be refused by [UpdatePathValidator].
+     *
+     * The validation is swallowed here rather than left to the script generator on
+     * purpose. The generator throws, and a throw on this argument would abort an
+     * update that is otherwise fine - trading "installs but does not relaunch" for
+     * "does not install", which is strictly worse. In practice it cannot trigger: the
+     * MSI path passed alongside it lives under the same user profile and so carries
+     * the same account name, and the filename component is the constant `BOSS.exe`.
+     */
+    internal fun getWindowsLauncherPath(): String? {
+        val launcher =
+            try {
+                windowsLauncherPathFor(
+                    jpackageAppPath = System.getProperty(JPACKAGE_APP_PATH_PROPERTY),
+                    codeSourcePath = currentCodeSourceFile()?.path,
+                    exists = { File(it).exists() },
+                )
+            } catch (e: Exception) {
+                logger.warn(LogCategory.SYSTEM, "Error resolving the Windows launcher path", error = e)
+                null
+            } ?: return null
+
+        return try {
+            UpdatePathValidator.validatePathAndFileName(launcher, "Target exe path")
+            // Masked: a per-user install puts the Windows account name in this path, and
+            // `maskUserPath` is the sibling helper written for exactly that shape.
+            logger.debug(
+                LogCategory.SYSTEM,
+                "Resolved Windows launcher for relaunch",
+                mapOf("path" to WindowsProtocolCleanup.maskUserPath(launcher)),
+            )
+            launcher
+        } catch (e: SecurityException) {
+            logger.warn(
+                LogCategory.SYSTEM,
+                "Launcher path refused by validation - installing without a relaunch",
+                mapOf("reason" to (e.message ?: "unknown")),
+            )
+            null
+        }
+    }
+
+    /**
+     * The jar or classes directory this code is running from, or null if the location
+     * is unavailable. Goes through [java.net.URI] rather than `location.path`: that is
+     * URL-encoded, so a Windows install under a profile with a space in it yields a
+     * `%20` no filesystem call resolves.
+     */
+    private fun currentCodeSourceFile(): File? =
+        try {
+            UpdateInstaller::class.java.protectionDomain
+                ?.codeSource
+                ?.location
+                ?.toURI()
+                ?.let(::File)
+        } catch (e: Exception) {
+            logger.debug(
+                LogCategory.SYSTEM,
+                "Could not resolve the current code source",
+                mapOf("error" to (e.message ?: "unknown")),
+            )
+            null
         }
 
     /**

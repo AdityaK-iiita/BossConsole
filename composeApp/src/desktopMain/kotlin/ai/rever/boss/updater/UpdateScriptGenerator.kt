@@ -41,6 +41,171 @@ internal fun resolveUpdaterLogFile(
  */
 internal fun updaterTempDir(): File = createRestrictedDir(resolveUpdaterTempDir())
 
+/** Whether [updaterLaunchCommand] recognises [osName], i.e. is not falling back to bash. */
+internal fun isKnownUpdaterOs(osName: String): Boolean =
+    osName.contains("mac") || osName.contains("darwin") || osName.contains("linux") || osName.contains("win")
+
+/**
+ * The command that runs a generated helper script detached, for [osName].
+ *
+ * The Windows form carries an **empty title argument**, and it is load-bearing.
+ * ProcessBuilder quotes any argument containing a space, so for an account whose name
+ * has one - `C:\Users\Bob Smith\AppData\Local\Temp\boss-updater\...`, i.e. anyone whose
+ * Windows account is their real name - `cmd /c start /b "<script>"` reaches `start` with
+ * the script path as its first *quoted* token, which `start` takes as a window title.
+ * The helper then never ran at all: no install, no relaunch, nothing in the log, for
+ * exactly the users most likely to have an awkward path. Verified through ProcessBuilder
+ * on Windows 11: without the `""` the script does not execute, with it it does.
+ *
+ * @param osName A lowercased `os.name`.
+ * @param scriptPath Absolute path of the script to run.
+ */
+internal fun updaterLaunchCommand(
+    osName: String,
+    scriptPath: String,
+): List<String> =
+    when {
+        // macOS/Linux: Launch in background with nohup
+        osName.contains("mac") || osName.contains("darwin") || osName.contains("linux") -> {
+            listOf("nohup", "bash", scriptPath)
+        }
+
+        // Windows: launch detached, with the empty title `start` needs (see above)
+        osName.contains("win") -> {
+            listOf("cmd", "/c", "start", "", "/b", scriptPath)
+        }
+
+        else -> {
+            listOf("bash", scriptPath)
+        }
+    }
+
+/**
+ * The body of the Windows helper script: wait for BOSS to quit, install, relaunch.
+ *
+ * File-level rather than a member of [UpdateScriptGenerator] because it is pure text
+ * assembly with no escaping of its own - both paths arrive already escaped - and
+ * because the object is at detekt's function-count ceiling.
+ *
+ * Every wait is a `ping`, not the obvious `timeout`: [UpdateScriptGenerator.launchScript]
+ * starts this with ProcessBuilder, so stdin is a pipe, and `timeout` refuses to run at
+ * all under redirected input ("ERROR: Input redirection is not supported"). It failed
+ * instantly rather than waiting, which turned the quit poll into a hot loop hammering
+ * tasklist and wrote three errors into the one log anybody diagnosing a failed update
+ * would read.
+ *
+ * The blocks are joined rather than interpolated into one template because `trimIndent`
+ * runs *after* interpolation: a multi-line block spliced into an indented template keeps
+ * its own continuation lines at column 0, which makes the common indent 0 and emits every
+ * other line still indented - including the `:labels` `goto` depends on.
+ *
+ * @param escapedMsiPath The MSI path, already through the Windows batch escaper.
+ * @param escapedExePath The launcher to relaunch, already escaped, or null for none.
+ */
+internal fun windowsUpdateScript(
+    escapedMsiPath: String,
+    appPid: Long,
+    escapedExePath: String?,
+): String {
+    val cleanup =
+        """
+        :cleanup
+        REM Clean up
+        ping -n 3 127.0.0.1 >NUL
+        del "%~f0"
+        """.trimIndent()
+
+    return listOf(
+        windowsInstallBlock(escapedMsiPath, appPid),
+        windowsRelaunchBlock(escapedExePath),
+        cleanup,
+    ).joinToString("\n\n")
+}
+
+/**
+ * Wait for BOSS to quit, then run the MSI, ending on the success path.
+ *
+ * `MSI_RAW` is kept alongside `MSI_RESULT` so the reboot-pending outcome stays
+ * diagnosable. 3010 means the install completed but files were in use and the
+ * replacement is pending a reboot, so relaunching can bring back a partially-updated
+ * install: the user would see "Installation successful!", get an app still reporting the
+ * old version, and be offered the same update again on the next check, with nothing in
+ * the log to explain it. Relaunching is still better than not, so the branching is
+ * unchanged - only the report.
+ */
+private fun windowsInstallBlock(
+    escapedMsiPath: String,
+    appPid: Long,
+): String =
+    """
+    @echo off
+    REM BOSS Update Helper Script
+
+    echo BOSS Update Helper started
+    echo Waiting for BOSS to quit (PID: $appPid)...
+
+    REM Wait for process to terminate (ping, not timeout - see the KDoc)
+    :waitloop
+    tasklist /FI "PID eq $appPid" 2>NUL | find /I /N "$appPid">NUL
+    if "%ERRORLEVEL%"=="0" (
+        ping -n 2 127.0.0.1 >NUL
+        goto waitloop
+    )
+
+    echo BOSS has quit. Starting installation...
+    ping -n 3 127.0.0.1 >NUL
+
+    REM Launch MSI installer (using escaped path for security)
+    echo Installing update...
+    msiexec /i $escapedMsiPath /quiet /norestart
+
+    REM Capture the code before anything else overwrites ERRORLEVEL, and treat the two
+    REM "installed, wants a reboot" codes as success: /norestart makes msiexec report
+    REM 3010 rather than 0 whenever a file was in use, so branching on NEQ 0 would call
+    REM a completed install a failure and hand the user an installer they do not need.
+    set MSI_RESULT=%ERRORLEVEL%
+    set MSI_RAW=%MSI_RESULT%
+    if %MSI_RESULT% EQU 3010 set MSI_RESULT=0
+    if %MSI_RESULT% EQU 1641 set MSI_RESULT=0
+
+    REM No relaunch on this branch, deliberately: the interactive installer is now
+    REM driving, and a running BOSS holding its own files open is what it needs least.
+    if not %MSI_RESULT% EQU 0 (
+        echo Installation failed with exit code %MSI_RESULT%. Opening installer manually...
+        start "" $escapedMsiPath
+        goto cleanup
+    )
+
+    echo Installation successful!
+    if not %MSI_RAW% EQU %MSI_RESULT% echo Completed with code %MSI_RAW% - a reboot is pending, so BOSS may still report the old version until Windows restarts
+    """.trimIndent()
+
+/**
+ * The relaunch, the step macOS and Linux always had and Windows never did: the MSI leg
+ * installed and then simply ended, so clicking "Install update" quit BOSS and nothing
+ * came back.
+ *
+ * `if exist` because a major upgrade is only *usually* into the same INSTALLDIR - a
+ * per-user install replaced by a per-machine one lands elsewhere - and `start` on a
+ * missing path raises a Windows error dialog rather than failing quietly. When the
+ * launcher could not be resolved at all the block is a message instead, so the updater
+ * log says which of the two happened.
+ */
+private fun windowsRelaunchBlock(escapedExePath: String?): String {
+    if (escapedExePath == null) {
+        return "echo Could not determine the BOSS install path - please start BOSS manually"
+    }
+
+    return """
+        echo Relaunching BOSS...
+        if exist $escapedExePath (
+            start "" $escapedExePath
+        ) else (
+            echo BOSS was not found at $escapedExePath - please start BOSS manually
+        )
+        """.trimIndent()
+}
+
 /**
  * Generates platform-specific update helper scripts
  *
@@ -315,14 +480,19 @@ object UpdateScriptGenerator {
      *
      * @param msiPath Path to the downloaded MSI file
      * @param appPid Process ID of the running app to wait for
+     * @param targetExePath Path of the installed launcher to relaunch (e.g.
+     *   `%LOCALAPPDATA%\BOSS\BOSS.exe`), or null when it could not be resolved -
+     *   the update is still installed, just without the relaunch.
      * @return File object pointing to the generated script
      */
     fun generateWindowsUpdateScript(
         msiPath: String,
         appPid: Long,
+        targetExePath: String? = null,
     ): File {
         // Validate input for security
         validatePath(msiPath, "MSI path")
+        targetExePath?.let { validatePath(it, "Target exe path") }
 
         // Escape path for Windows batch file (handles quotes, percent signs, etc.)
         val escapedMsiPath = escapeWindowsArg(msiPath)
@@ -333,44 +503,26 @@ object UpdateScriptGenerator {
 
         val scriptFile = File(tempDir, "update_boss_${System.currentTimeMillis()}.bat")
 
+        // CRLF, not the LF `writeText` would otherwise leave: cmd.exe parses an
+        // LF-only batch file by seeking byte offsets that assume CRLF, so `goto` into
+        // a label - which the failure branch now needs - is the case that misbehaves,
+        // and it misbehaves by jumping to the wrong place rather than by failing.
         val script =
-            """
-            @echo off
-            REM BOSS Update Helper Script
-
-            echo BOSS Update Helper started
-            echo Waiting for BOSS to quit (PID: $appPid)...
-
-            REM Wait for process to terminate
-            :waitloop
-            tasklist /FI "PID eq $appPid" 2>NUL | find /I /N "$appPid">NUL
-            if "%ERRORLEVEL%"=="0" (
-                timeout /t 1 /nobreak >NUL
-                goto waitloop
+            windowsUpdateScript(
+                escapedMsiPath = escapedMsiPath,
+                appPid = appPid,
+                escapedExePath = targetExePath?.let(::escapeWindowsArg),
             )
+        scriptFile.writeText(script.replace("\n", "\r\n"))
 
-            echo BOSS has quit. Starting installation...
-            timeout /t 2 /nobreak >NUL
-
-            REM Launch MSI installer (using escaped path for security)
-            echo Installing update...
-            msiexec /i $escapedMsiPath /quiet /norestart
-
-            if %ERRORLEVEL% NEQ 0 (
-                echo Installation failed. Opening installer manually...
-                start "" $escapedMsiPath
-            ) else (
-                echo Installation successful!
-            )
-
-            REM Clean up
-            timeout /t 2 /nobreak >NUL
-            del "%~f0"
-            """.trimIndent()
-
-        scriptFile.writeText(script)
-
-        logger.debug(LogCategory.SYSTEM, "Generated Windows update script", mapOf("path" to scriptFile.absolutePath))
+        logger.debug(
+            LogCategory.SYSTEM,
+            "Generated Windows update script",
+            mapOf(
+                "path" to scriptFile.absolutePath,
+                "relaunches" to (targetExePath != null).toString(),
+            ),
+        )
         return scriptFile
     }
 
@@ -812,23 +964,10 @@ ASKPASS_EOF
             val logFile = resolveUpdaterLogFile(timestamp)
 
             val os = System.getProperty("os.name").lowercase()
-            val command =
-                when {
-                    os.contains("mac") || os.contains("darwin") || os.contains("linux") -> {
-                        // macOS/Linux: Launch in background with nohup
-                        listOf("nohup", "bash", scriptFile.absolutePath)
-                    }
-
-                    os.contains("win") -> {
-                        // Windows: Launch detached
-                        listOf("cmd", "/c", "start", "/b", scriptFile.absolutePath)
-                    }
-
-                    else -> {
-                        logger.warn(LogCategory.SYSTEM, "Unknown OS, attempting direct execution")
-                        listOf("bash", scriptFile.absolutePath)
-                    }
-                }
+            if (!isKnownUpdaterOs(os)) {
+                logger.warn(LogCategory.SYSTEM, "Unknown OS, attempting direct execution")
+            }
+            val command = updaterLaunchCommand(os, scriptFile.absolutePath)
 
             logger.info(
                 LogCategory.SYSTEM,
