@@ -64,6 +64,7 @@ class BossPanelTopBarMenuTest {
     private fun show(
         buildInfo: PluginBuildInfo? = null,
         uninstallEnabled: Boolean = true,
+        withTagAction: Boolean = true,
     ) {
         compose.setContent {
             BossPanelTopBar(
@@ -74,7 +75,7 @@ class BossPanelTopBarMenuTest {
                 uninstallEnabled = uninstallEnabled,
                 onMinimize = {},
                 buildInfo = buildInfo,
-                onBuildTagClick = { tagClicked++ },
+                onBuildTagClick = if (withTagAction) ({ tagClicked++ }) else null,
             )
         }
     }
@@ -147,6 +148,62 @@ class BossPanelTopBarMenuTest {
 
         openMenu()
         compose.onNodeWithText("Version 1.0.3-debug").performClick()
+
+        assertEquals(1, tagClicked)
+    }
+
+    @Test
+    fun `a local build offers Install Store Version, on the same action as the tag`() {
+        // The point of the row is discoverability, so what matters is that it is named as an action
+        // and reaches the same place the tag does - not that some clickable thing exists.
+        show(buildInfo = localBuild())
+        openMenu()
+
+        compose.onNodeWithText("Install Store Version").performClick()
+
+        assertEquals(1, tagClicked)
+    }
+
+    @Test
+    fun `neither build row is offered when there is no action behind it`() {
+        // onBuildTagClick is null when the panel has no resolvable window. Offering a row named as
+        // an imperative that silently does nothing is worse than offering no row, so both go - the
+        // factual version row with the action row, since they are the same click.
+        show(buildInfo = localBuild(), withTagAction = false)
+        openMenu()
+
+        compose.onNodeWithText("Install Store Version").assertDoesNotExist()
+        compose.onNodeWithText("Version 1.0.3-debug").assertDoesNotExist()
+        // The rest of the menu is unaffected.
+        compose.onNodeWithText("Reload Panel").assertExists()
+    }
+
+    @Test
+    fun `a released build is not offered Install Store Version`() {
+        show(
+            buildInfo =
+                PluginBuildInfo(
+                    pluginId = "p",
+                    displayName = "Probe",
+                    version = "1.0.3",
+                    signedBytes = true,
+                    storeSourced = true,
+                    reloadStamp = null,
+                ),
+        )
+        openMenu()
+
+        compose.onNodeWithText("Install Store Version").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a hot reloaded build is offered Install Store Version too`() {
+        // HOT is a local build that was overwritten in place, so the way back to the released jar
+        // matters at least as much as it does for DEBUG.
+        show(buildInfo = localBuild(reloadStamp = 1_754_890_231_447L))
+        openMenu()
+
+        compose.onNodeWithText("Install Store Version").performClick()
 
         assertEquals(1, tagClicked)
     }

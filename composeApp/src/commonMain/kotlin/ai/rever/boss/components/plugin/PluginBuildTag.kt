@@ -37,6 +37,13 @@ fun PluginBuildTag(
         color = BossTheme.colors.signalText,
         fontSize = 9.sp,
         fontWeight = FontWeight.Bold,
+        // Clip rather than wrap when starved. The tag is laid out inside the title group, so at a
+        // narrow panel width it can be offered less room than the four characters need - and a
+        // panel can get very narrow indeed (BossResizablePanel floors it at 2% of the parent, or
+        // 20.dp). Left to wrap, "DEBUG" breaks onto a second line inside a row with a hard
+        // height(28.dp), which reads as a rendering fault rather than as a tag running out of space.
+        maxLines = 1,
+        softWrap = false,
         modifier =
             modifier
                 .clip(RoundedCornerShape(3.dp))
