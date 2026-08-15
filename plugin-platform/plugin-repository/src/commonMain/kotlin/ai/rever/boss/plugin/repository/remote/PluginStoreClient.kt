@@ -19,7 +19,10 @@ import kotlinx.serialization.json.Json
  * Handles all communication with the /plugin-store endpoints.
  */
 object PluginStoreClient {
-    private val json =
+    // Internal, not private, so a test can decode a real store payload through the SAME instance
+    // the client uses. An equivalent Json rebuilt in the test would be free to drift from this one,
+    // and the bug this guards against was precisely "the real client cannot decode a real response".
+    internal val json =
         Json {
             ignoreUnknownKeys = true
             encodeDefaults = true
@@ -701,10 +704,34 @@ data class VersionInfo(
     val downloadCount: Int = 0,
 )
 
+/**
+ * One entry of a version's `dependencies` column.
+ *
+ * **[versionRange] must keep a default, and nothing may make it required again.** The store's
+ * contract calls the field `versionRange` (see `plugin-store/types/schemas.ts` and the
+ * `plugin_versions.dependencies` column comment), but the column is free-form JSONB and rows exist
+ * that were written in the *manifest's* shape instead - `PluginDependency` names the same idea
+ * `version` and adds `optional`. Flow 1.0.11 onwards is stored as
+ * `{pluginId, version, optional}`, with no `versionRange` at all.
+ *
+ * `ignoreUnknownKeys` does not cover that: it forgives the extra `version` and `optional`, but a
+ * *missing* required field is still a hard error, and it is thrown while decoding the whole detail
+ * response. So one legacy-shaped dependency made `getPlugin` fail outright, the wizard reported
+ * "Tool not found in repository" for a plugin whose row was fine, and Flow could not be installed
+ * on any shipped build.
+ *
+ * The value is never read - `RemotePluginRepository` maps these to `pluginId` only, and version
+ * constraints are ignored by design (see the plugin-dependency notes in AGENTS.md) - so a field
+ * nobody consumes was able to fail an install.
+ *
+ * Empty rather than nullable on purpose: this same type is the *request* body of
+ * `PublishVersionRequest`, the client encodes with `encodeDefaults = true`, and the server declares
+ * `versionRange: z.string()`. A default of `""` publishes as a string it accepts; `null` would not.
+ */
 @Serializable
 data class DependencyInfo(
     val pluginId: String,
-    val versionRange: String,
+    val versionRange: String = "",
 )
 
 @Serializable

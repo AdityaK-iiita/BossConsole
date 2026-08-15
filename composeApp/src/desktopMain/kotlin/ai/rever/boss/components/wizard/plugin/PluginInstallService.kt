@@ -138,14 +138,31 @@ class PluginInstallService(
                     val pluginWithSource: PluginWithSource? = pluginResult.getOrNull()
 
                     if (pluginWithSource == null) {
-                        logger.warn(
-                            LogCategory.SYSTEM,
-                            "Plugin not found in repository",
-                            mapOf(
-                                "pluginId" to plugin.id,
-                            ),
+                        // A failed lookup is not an absent plugin, and saying "not found" for both is
+                        // what made a decode bug in one store row look like a missing plugin. The
+                        // manager now distinguishes them; report the cause when there is one.
+                        val lookupFailure = pluginResult.exceptionOrNull()
+                        if (lookupFailure != null) {
+                            logger.error(
+                                LogCategory.SYSTEM,
+                                "Plugin repository lookup failed",
+                                mapOf("pluginId" to plugin.id),
+                                error = lookupFailure,
+                            )
+                        } else {
+                            logger.warn(
+                                LogCategory.SYSTEM,
+                                "Plugin not found in repository",
+                                mapOf(
+                                    "pluginId" to plugin.id,
+                                ),
+                            )
+                        }
+                        // The message reaches the wizard's failure list, so it is the exception's
+                        // short message and never its cause - see PluginLookupException.
+                        failedIds.add(
+                            plugin.id to (lookupFailure?.message ?: "Tool not found in repository"),
                         )
-                        failedIds.add(plugin.id to "Tool not found in repository")
                         continue
                     }
 

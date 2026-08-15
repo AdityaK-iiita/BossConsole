@@ -119,3 +119,46 @@ class DownloadException(
     val repositoryId: String,
     cause: Throwable? = null,
 ) : Exception(message, cause)
+
+/**
+ * No repository could be *asked* about a plugin, as distinct from every repository answering "no".
+ *
+ * `PluginRepositoryManager.getPlugin` used to collapse both into `success(null)`, so a repository
+ * that threw was indistinguishable from a plugin that is genuinely unpublished. The first-run wizard
+ * then told the user "Tool not found in repository" about a plugin whose store row was present and
+ * valid - the actual cause was a decode failure on one dependency entry, and it took reading a stack
+ * trace in the log to find that out.
+ *
+ * The [message] is deliberately SHORT and the real error is kept only as `cause`. This message
+ * reaches the wizard's failure list, and the underlying errors are not fit for that: kotlinx appends
+ * the entire offending document to a malformed-input error, which would put a whole plugin payload in
+ * a UI row. Callers log the cause and show the message.
+ */
+class PluginLookupException(
+    val pluginId: String,
+    cause: Throwable,
+) : Exception("Could not query the plugin repository for $pluginId: ${shortFailureReason(cause)}", cause)
+
+/**
+ * A one-line description of [cause] fit for a UI row.
+ *
+ * Takes the first line and clips it, because the messages behind a failed lookup are unbounded - a
+ * kotlinx serialization error carries the whole JSON document it choked on.
+ *
+ * Public because more than one caller puts a repository failure in front of a user, and each one
+ * inventing its own clipping is how one of them ends up without any. `PluginStoreVersionBridge` builds
+ * its own `Unavailable` message rather than surfacing an exception, so it shares this instead.
+ */
+fun shortFailureReason(cause: Throwable): String {
+    val firstLine =
+        cause.message
+            ?.lineSequence()
+            ?.firstOrNull()
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: cause::class.simpleName
+            ?: "unknown error"
+    return if (firstLine.length <= MAX_REASON_LENGTH) firstLine else firstLine.take(MAX_REASON_LENGTH) + "…"
+}
+
+private const val MAX_REASON_LENGTH = 160

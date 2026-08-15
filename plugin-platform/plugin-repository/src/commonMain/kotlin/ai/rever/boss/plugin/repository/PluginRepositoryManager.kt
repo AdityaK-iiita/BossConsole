@@ -170,46 +170,66 @@ class PluginRepositoryManager {
      *
      * Searches local repositories first, then remote repositories.
      *
+     * A repository that FAILS to answer is not the same as one that does not have the plugin, and the
+     * two are no longer reported alike. `success(null)` now means every repository was asked and none
+     * had it - the ordinary case for a plugin built locally and never published. A repository that
+     * threw yields `failure(PluginLookupException)` **only when nothing was found**, so one broken
+     * repository still cannot hide a hit from another.
+     *
+     * This mattered: swallowing the failure here is what made the first-run wizard report "Tool not
+     * found in repository" for a plugin whose store row was present and valid, sending anyone
+     * diagnosing it after the wrong thing entirely.
+     *
+     * **A failure is ALWAYS a [PluginLookupException], never a repository's own throwable.** That is
+     * what bounds the message: `PluginLookupException` clips it and keeps the detail as `cause`, and
+     * callers put the message in front of a user. A raw kotlinx malformed-input error appends the
+     * entire offending document, which is not something to render in a wizard row.
+     *
      * @param pluginId The plugin ID
-     * @return Plugin with source information, or null if not found
+     * @return Plugin with source information, `null` if no repository has it, or a failure if some
+     *   repository could not be queried and no other repository had it
      */
     suspend fun getPlugin(pluginId: String): Result<PluginWithSource?> =
         coroutineScope {
-            runCatching {
-                // Check local repositories first
-                for (repo in repositories.values.filter { it.isLocal }) {
-                    val plugin = repo.getPlugin(pluginId).getOrNull()
-                    if (plugin != null) {
-                        return@runCatching PluginWithSource(
-                            plugin = plugin,
-                            source =
-                                PluginSource(
-                                    repositoryId = repo.id,
-                                    repositoryName = repo.name,
-                                    isLocal = true,
-                                ),
-                        )
-                    }
-                }
+            // Every repository that could not be asked, kept rather than discarded. Not reported on the
+            // spot: a failing local repository must not stop the remote one from answering.
+            val failures = mutableListOf<Throwable>()
 
-                // Check remote repositories
-                for (repo in repositories.values.filter { !it.isLocal }) {
-                    val plugin = repo.getPlugin(pluginId).getOrNull()
-                    if (plugin != null) {
-                        return@runCatching PluginWithSource(
-                            plugin = plugin,
-                            source =
-                                PluginSource(
-                                    repositoryId = repo.id,
-                                    repositoryName = repo.name,
-                                    isLocal = false,
-                                ),
-                        )
-                    }
-                }
-
-                null
+            // A repository may THROW rather than return Result.failure - PluginRepository permits
+            // either, and RemotePluginRepository happens to return while a third-party one need not -
+            // so both are funnelled into one shape here instead of only one of them being handled.
+            suspend fun ask(repo: PluginRepository): PluginInfo? {
+                val result = runCatching { repo.getPlugin(pluginId) }.getOrElse { Result.failure(it) }
+                result.exceptionOrNull()?.let { failures.add(it) }
+                return result.getOrNull()
             }
+
+            // Local repositories first, then remote.
+            val ordered =
+                repositories.values.filter { it.isLocal } + repositories.values.filter { !it.isLocal }
+            for (repo in ordered) {
+                val plugin = ask(repo) ?: continue
+                return@coroutineScope Result.success(
+                    PluginWithSource(
+                        plugin = plugin,
+                        source =
+                            PluginSource(
+                                repositoryId = repo.id,
+                                repositoryName = repo.name,
+                                isLocal = repo.isLocal,
+                            ),
+                    ),
+                )
+            }
+
+            // Nothing had it. Report WHY if any repository could not be asked, since "absent" and
+            // "unanswerable" call for different reactions from the user.
+            val first = failures.firstOrNull() ?: return@coroutineScope Result.success(null)
+            // Identity filter, not just drop(1): addSuppressed(itself) throws "Self-suppression not
+            // permitted", and that IllegalArgumentException would then replace the diagnosis it was
+            // meant to carry. Two repositories sharing one Throwable instance is all it takes.
+            failures.drop(1).filter { it !== first }.forEach { first.addSuppressed(it) }
+            Result.failure(PluginLookupException(pluginId, first))
         }
 
     /**
@@ -252,11 +272,14 @@ class PluginRepositoryManager {
         version: String? = null,
         targetPath: String,
     ): Result<String> {
-        // Find the plugin and its source
+        // Find the plugin and its source. A lookup that FAILED is propagated as itself: reporting
+        // "not found" here would re-create, one method along, exactly the wrong diagnosis that
+        // getPlugin was changed to stop giving.
+        val lookup = getPlugin(pluginId)
         val pluginWithSource =
-            getPlugin(pluginId).getOrNull()
+            lookup.getOrNull()
                 ?: return Result.failure(
-                    PluginNotFoundException(pluginId, "any"),
+                    lookup.exceptionOrNull() ?: PluginNotFoundException(pluginId, "any"),
                 )
 
         val repository =
@@ -317,7 +340,21 @@ class PluginRepositoryManager {
                 val updates = mutableListOf<PluginWithSource>()
 
                 for ((pluginId, installedVersion) in installedPlugins) {
-                    val latestPlugin = getPlugin(pluginId).getOrNull()
+                    val lookup = getPlugin(pluginId)
+                    val latestPlugin = lookup.getOrNull()
+                    // Deliberately NOT propagated, unlike downloadPlugin: this is a batch over every
+                    // installed plugin, and failing all of it because one lookup broke would hide
+                    // updates that are perfectly available. It is logged instead of silently skipped,
+                    // because "no update offered" and "we could not ask" are indistinguishable to a
+                    // user staring at a Toolbox that shows nothing.
+                    lookup.exceptionOrNull()?.let { failure ->
+                        logger.warn(
+                            LogCategory.SYSTEM,
+                            "Skipping update check for a plugin whose repository could not be queried",
+                            mapOf("pluginId" to pluginId),
+                            error = failure,
+                        )
+                    }
                     if (latestPlugin != null && isNewerVersion(latestPlugin.plugin.version, installedVersion)) {
                         updates.add(latestPlugin)
                     }

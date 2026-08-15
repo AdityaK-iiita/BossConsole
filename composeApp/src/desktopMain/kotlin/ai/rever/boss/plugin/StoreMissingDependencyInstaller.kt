@@ -7,6 +7,7 @@ import ai.rever.boss.plugin.loader.PluginManifestReader
 import ai.rever.boss.plugin.loader.PluginSignatureSidecar
 import ai.rever.boss.plugin.repository.PluginInfo
 import ai.rever.boss.plugin.repository.PluginRepository
+import ai.rever.boss.plugin.repository.shortFailureReason
 import ai.rever.boss.utils.atomicMoveFrom
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
@@ -45,10 +46,27 @@ class StoreMissingDependencyInstaller(
 
     override fun isInstalled(pluginId: String): Boolean = hooks.installedNow(pluginId)
 
-    override suspend fun displayNameFor(pluginId: String): String? =
-        runCatching { repository()?.getPlugin(pluginId)?.getOrNull()?.displayName }
-            .getOrNull()
-            ?.takeIf { it.isNotBlank() }
+    /**
+     * The store's display name for a plugin, or null if it cannot be had.
+     *
+     * This one SHOULD degrade to null rather than report the failure: the name only decorates the
+     * prompt, which falls back to the id, so a store that cannot answer must not stop the user being
+     * offered the install. It is logged so the swallow is not invisible - the same silence one method
+     * below is what made a decode failure look like a missing plugin.
+     */
+    override suspend fun displayNameFor(pluginId: String): String? {
+        val lookup = runCatching { repository()?.getPlugin(pluginId) }.getOrElse { Result.failure(it) }
+        lookup?.exceptionOrNull()?.let { error ->
+            logger.warn(
+                LogCategory.SYSTEM,
+                "Could not read a dependency's display name from the store; falling back to its id",
+                mapOf("pluginId" to pluginId),
+                error = error,
+            )
+        }
+        // No early return needed for the failure: getOrNull() is null in that case anyway.
+        return lookup?.getOrNull()?.displayName?.takeIf { it.isNotBlank() }
+    }
 
     override suspend fun install(pluginId: String): Result<Unit> =
         DETACHED_INSTALLS.run(
@@ -79,9 +97,28 @@ class StoreMissingDependencyInstaller(
         store: PluginRepository,
         pluginId: String,
     ): Result<Unit> {
+        // "Could not ask the store" is not "the store does not have it", and telling the user the
+        // second when the first happened is what sent the Flow diagnosis after a missing row that was
+        // never missing. `getPlugin` RETURNS Result.failure rather than throwing, so the inner
+        // getOrNull() was where that distinction used to be lost.
+        val lookup = runCatching { store.getPlugin(pluginId) }.getOrElse { Result.failure(it) }
+        val lookupError = lookup.exceptionOrNull()
+        if (lookupError != null) {
+            logger.error(
+                LogCategory.SYSTEM,
+                "Store lookup failed for a missing dependency",
+                mapOf("pluginId" to pluginId),
+                error = lookupError,
+            )
+        }
         val info =
-            runCatching { store.getPlugin(pluginId).getOrNull() }.getOrNull()
-                ?: return failure("$pluginId was not found in the plugin store.")
+            lookup.getOrNull() ?: return failure(
+                // shortFailureReason, not the raw message: this string goes in the prompt, and a
+                // kotlinx decode error carries the whole offending document.
+                lookupError
+                    ?.let { "Could not look up $pluginId in the plugin store: ${shortFailureReason(it)}" }
+                    ?: "$pluginId was not found in the plugin store.",
+            )
 
         // `<id_with_underscores>_<version>.jar` in the plugins directory, so a later directory
         // scan picks it up like any other install. Both parts are sanitised because both come

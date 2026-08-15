@@ -3,6 +3,7 @@ package ai.rever.boss.components.plugin
 import ai.rever.boss.plugin.KeyedDetachedJobs
 import ai.rever.boss.plugin.PluginStoreSetup
 import ai.rever.boss.plugin.api.PluginState
+import ai.rever.boss.plugin.repository.shortFailureReason
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import kotlinx.coroutines.CoroutineScope
@@ -40,18 +41,24 @@ actual object PluginStoreVersionBridge {
                 ?: return StoreVersionLookup.Unavailable(
                     "The plugin store is not available. Check your connection and try again.",
                 )
-        val result = runCatching { store.getPlugin(pluginId) }
+        // Both failure shapes, flattened. This used to be `runCatching { … }` around the call with
+        // `result.getOrNull()?.getOrNull()` inside, which looked like it distinguished a broken lookup
+        // from an unpublished plugin and did not: `RemotePluginRepository.getPlugin` RETURNS
+        // `Result.failure` instead of throwing, so the inner `getOrNull()` swallowed the error, the
+        // outer `isFailure` was always false, and every failure fell through to NotPublished. A single
+        // undecodable dependency entry in a store row was reported to the user as "not published".
+        val lookup = runCatching { store.getPlugin(pluginId) }.getOrElse { Result.failure(it) }
+        // The repository logs the detail; this only needs a line short enough to render.
+        lookup.exceptionOrNull()?.let { failure ->
+            return StoreVersionLookup.Unavailable(
+                "Could not reach the plugin store: ${shortFailureReason(failure)}",
+            )
+        }
         val info =
-            result.getOrNull()?.getOrNull()
-                ?: return if (result.isFailure) {
-                    StoreVersionLookup.Unavailable(
-                        "Could not reach the plugin store: ${result.exceptionOrNull()?.message ?: "unknown error"}",
-                    )
-                } else {
-                    // A successful lookup that found nothing is the ordinary case for a plugin that
-                    // was built locally and never published, so it is reported as absence, not error.
-                    StoreVersionLookup.NotPublished
-                }
+            lookup.getOrNull()
+                // A successful lookup that found nothing is the ordinary case for a plugin that was
+                // built locally and never published, so it is reported as absence, not error.
+                ?: return StoreVersionLookup.NotPublished
         val version = info.version.takeIf { it.isNotBlank() } ?: return StoreVersionLookup.NotPublished
         return StoreVersionLookup.Available(
             displayName = info.displayName,

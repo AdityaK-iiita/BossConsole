@@ -65,6 +65,10 @@ fun BookmarkDialog(
             DialogProperties(
                 dismissOnClickOutside = true,
                 dismissOnBackPress = true,
+                // The card asks for 700.dp; Compose's platform default caps dialog content at
+                // 580.dp on the lightweight path, which silently squeezed it there while the
+                // heavyweight path (which ignores this flag) showed the full width.
+                usePlatformDefaultWidth = false,
             ),
     ) {
         Surface(

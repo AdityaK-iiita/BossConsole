@@ -112,7 +112,11 @@ fun CrossDeviceAuthenticationDialog(
         Card(
             modifier =
                 Modifier
-                    .fillMaxWidth()
+                    // Fixed, not fillMaxWidth: BossDialog measures its content inside a full-window
+                    // scrim on the heavyweight path, so a filling card spans the entire window. Wider
+                    // than the 400.dp house confirmation because this holds two-line instruction copy
+                    // under a 64.dp status icon.
+                    .width(480.dp)
                     .wrapContentHeight(),
             shape = RoundedCornerShape(12.dp),
             backgroundColor = BossTheme.colors.raised,

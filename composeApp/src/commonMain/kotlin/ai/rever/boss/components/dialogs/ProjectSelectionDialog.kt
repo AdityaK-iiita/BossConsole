@@ -59,99 +59,94 @@ fun ProjectSelectionDialog(
                 usePlatformDefaultWidth = false,
             ),
     ) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center,
-        ) {
-            Card(
-                modifier =
-                    Modifier
-                        .width(500.dp)
-                        .heightIn(min = 200.dp, max = 450.dp)
-                        .onKeyEvent { event ->
-                            if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
-                                onDismiss()
-                                true
-                            } else {
-                                false
-                            }
-                        },
-                shape = RoundedCornerShape(8.dp),
-                backgroundColor = BossTheme.colors.panel,
-                elevation = 8.dp,
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                ) {
-                    // Title
-                    Text(
-                        text = "Open Project",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = BossTheme.colors.textPrimary,
-                        modifier = Modifier.padding(bottom = 16.dp),
-                    )
-
-                    // Recent projects list
-                    Text(
-                        text = "Recent Projects",
-                        fontSize = 12.sp,
-                        color = BossTheme.colors.textSecondary,
-                        modifier = Modifier.padding(bottom = 8.dp),
-                    )
-
-                    LazyColumn(
-                        modifier =
-                            Modifier
-                                .weight(1f, fill = false)
-                                .fillMaxWidth(),
-                    ) {
-                        items(recentProjects) { project ->
-                            ProjectListItem(
-                                project = project,
-                                onClick = {
-                                    selectProjectInWindow(windowProjectState, project)
-                                    onDismiss()
-                                },
-                            )
+        Card(
+            modifier =
+                Modifier
+                    .width(500.dp)
+                    .heightIn(min = 200.dp, max = 450.dp)
+                    .onKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                            onDismiss()
+                            true
+                        } else {
+                            false
                         }
+                    },
+            shape = RoundedCornerShape(8.dp),
+            backgroundColor = BossTheme.colors.panel,
+            elevation = 8.dp,
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+            ) {
+                // Title
+                Text(
+                    text = "Open Project",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = BossTheme.colors.textPrimary,
+                    modifier = Modifier.padding(bottom = 16.dp),
+                )
+
+                // Recent projects list
+                Text(
+                    text = "Recent Projects",
+                    fontSize = 12.sp,
+                    color = BossTheme.colors.textSecondary,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+
+                LazyColumn(
+                    modifier =
+                        Modifier
+                            .weight(1f, fill = false)
+                            .fillMaxWidth(),
+                ) {
+                    items(recentProjects) { project ->
+                        ProjectListItem(
+                            project = project,
+                            onClick = {
+                                selectProjectInWindow(windowProjectState, project)
+                                onDismiss()
+                            },
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Browse button and Close button
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Button(
+                        onClick = { onOpenDirectoryPicker() },
+                        colors =
+                            ButtonDefaults.buttonColors(
+                                backgroundColor = BossTheme.colors.signal,
+                                contentColor = Color.White,
+                            ),
+                        shape = RoundedCornerShape(4.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.FolderOpen,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Browse...")
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Browse button and Close button
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
+                    TextButton(
+                        onClick = onDismiss,
+                        colors =
+                            ButtonDefaults.textButtonColors(
+                                contentColor = BossTheme.colors.textSecondary,
+                            ),
                     ) {
-                        Button(
-                            onClick = { onOpenDirectoryPicker() },
-                            colors =
-                                ButtonDefaults.buttonColors(
-                                    backgroundColor = BossTheme.colors.signal,
-                                    contentColor = Color.White,
-                                ),
-                            shape = RoundedCornerShape(4.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.FolderOpen,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Browse...")
-                        }
-
-                        TextButton(
-                            onClick = onDismiss,
-                            colors =
-                                ButtonDefaults.textButtonColors(
-                                    contentColor = BossTheme.colors.textSecondary,
-                                ),
-                        ) {
-                            Text("Cancel")
-                        }
+                        Text("Cancel")
                     }
                 }
             }

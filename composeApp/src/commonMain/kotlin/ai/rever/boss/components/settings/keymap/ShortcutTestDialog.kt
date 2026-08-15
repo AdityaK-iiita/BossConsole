@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.launch
 
 /**
@@ -59,7 +60,13 @@ fun ShortcutTestDialog(
             )
         }
 
-    BossDialog(onDismissRequest = onDismiss) {
+    BossDialog(
+        onDismissRequest = onDismiss,
+        // The card asks for 900.dp, and Compose's platform default caps dialog content at 580.dp.
+        // This dialog lives in the Settings window, which always takes the lightweight path, so it
+        // was squeezed to 580.dp every time it opened.
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
         Surface(
             modifier =
                 Modifier

@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.launch
 
 /**
@@ -158,7 +159,12 @@ private fun ExportDialog(onDismiss: () -> Unit) {
     val exportedJson = KeymapSettingsManager.exportToJson()
     var copied by remember { mutableStateOf(false) }
 
-    BossDialog(onDismissRequest = onDismiss) {
+    BossDialog(
+        onDismissRequest = onDismiss,
+        // Honour the declared 600.dp: the platform default width caps content at 580.dp on the
+        // lightweight path, which is the only path this Settings dialog ever takes.
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
         Surface(
             modifier =
                 Modifier
@@ -253,7 +259,12 @@ private fun ImportDialog(
     var jsonInput by remember { mutableStateOf("") }
     var showError by remember { mutableStateOf(false) }
 
-    BossDialog(onDismissRequest = onDismiss) {
+    BossDialog(
+        onDismissRequest = onDismiss,
+        // Honour the declared 600.dp: the platform default width caps content at 580.dp on the
+        // lightweight path, which is the only path this Settings dialog ever takes.
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
         Surface(
             modifier =
                 Modifier

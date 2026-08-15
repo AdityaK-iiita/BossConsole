@@ -28,6 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.launch
 import ai.rever.boss.plugin.git.GitOperationResult.Error as GitError
 import ai.rever.boss.plugin.git.GitOperationResult.Success as GitSuccess
@@ -88,7 +89,12 @@ fun CommitDialog(
     val unstagedFiles = fileStatus.filter { it.isUnstaged || it.indexStatus == GitFileStatusType.UNTRACKED }
     val hasChangesToCommit = stagedFiles.isNotEmpty()
 
-    BossDialog(onDismissRequest = onDismiss) {
+    BossDialog(
+        onDismissRequest = onDismiss,
+        // Honour the declared 600.dp: the platform default width caps content at 580.dp on the
+        // lightweight path only, so the two paths disagreed about the card's width.
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
         Surface(
             modifier =
                 Modifier

@@ -109,6 +109,9 @@ fun TopOfMindDialog(
             DialogProperties(
                 dismissOnBackPress = true,
                 dismissOnClickOutside = true,
+                // Honour the declared 600.dp: the platform default width caps content at 580.dp on
+                // the lightweight path only, so the two paths disagreed about the card's width.
+                usePlatformDefaultWidth = false,
             ),
     ) {
         Surface(
