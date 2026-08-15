@@ -8,6 +8,8 @@ import ai.rever.boss.components.settings.shared.SettingsTheme.TextMuted
 import ai.rever.boss.components.settings.shared.SettingsTheme.TextPrimary
 import ai.rever.boss.components.settings.shared.SettingsTheme.TextSecondary
 import ai.rever.boss.plugin.ui.BossTheme
+import ai.rever.boss.window.ApplyBossWindowIcon
+import ai.rever.boss.window.BossWindowIcon
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -1019,7 +1021,12 @@ fun ColorPickerDialog(
         title = "Select Color",
         resizable = false,
         state = rememberDialogState(size = DpSize(340.dp, 520.dp)),
+        // Redundant on paper - this composes inside the Settings window, and a dialog inherits its
+        // owner frame's icon - but set anyway so no window in this repo is a special case, and so
+        // it survives being lifted out to application scope.
+        icon = BossWindowIcon.painter,
     ) {
+        ApplyBossWindowIcon(window)
         Surface(
             modifier = Modifier.fillMaxSize(),
             color = BackgroundColor,

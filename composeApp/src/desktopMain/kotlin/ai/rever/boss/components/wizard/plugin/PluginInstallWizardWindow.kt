@@ -2,6 +2,8 @@ package ai.rever.boss.components.wizard.plugin
 
 import ai.rever.boss.components.wizard.WizardStepIndicator
 import ai.rever.boss.plugin.ui.BossTheme
+import ai.rever.boss.window.ApplyBossWindowIcon
+import ai.rever.boss.window.BossWindowIcon
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -74,7 +76,9 @@ fun PluginInstallWizardWindow(
         title = "BOSS Plugin Setup",
         resizable = false,
         state = rememberDialogState(size = DpSize(700.dp, 600.dp)),
+        icon = BossWindowIcon.painter,
     ) {
+        ApplyBossWindowIcon(window)
         Surface(
             modifier = Modifier.fillMaxSize(),
             color = BossTheme.colors.panel,

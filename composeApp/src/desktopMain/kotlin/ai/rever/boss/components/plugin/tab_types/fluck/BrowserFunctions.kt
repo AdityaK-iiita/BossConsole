@@ -7,6 +7,7 @@ import ai.rever.boss.plugin.browser.LocalAwtWindow
 import ai.rever.boss.plugin.browser.installPopupWindowChrome
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
+import ai.rever.boss.window.BossWindowIcon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -263,6 +264,7 @@ private fun configureBrowserPopupHandler(
 
                         frame.title = "Popup"
                         frame.defaultCloseOperation = JFrame.DISPOSE_ON_CLOSE
+                        frame.iconImages = BossWindowIcon.images
                         frame.setLocation(initialBounds.origin().x(), initialBounds.origin().y())
                         frame.setSize(initialBounds.size().width(), initialBounds.size().height())
 

@@ -1,6 +1,7 @@
 package ai.rever.boss.components.overlays
 
-import java.io.File
+import ai.rever.boss.testsupport.kotlinSourcesUnder
+import ai.rever.boss.testsupport.repoRoot
 import kotlin.test.Test
 import kotlin.test.fail
 
@@ -31,14 +32,8 @@ class NoRawDialogConventionTest {
     @Test
     fun `no host source imports the raw Compose Dialog`() {
         val root = repoRoot()
-        val roots =
-            listOf(File(root, "composeApp/src"), File(root, "plugin-platform"))
-                .filter { it.isDirectory }
-        check(roots.isNotEmpty()) { "no source roots found under $root" }
-
         val offenders =
-            roots
-                .flatMap { it.walkTopDown().filter { f -> f.isFile && f.extension == "kt" } }
+            kotlinSourcesUnder(root, "composeApp/src", "plugin-platform")
                 .filter { it.name !in allowed }
                 .filter { file ->
                     file.readLines().any { it.trim() == "import androidx.compose.ui.window.Dialog" }
@@ -52,15 +47,5 @@ class NoRawDialogConventionTest {
                     "(ai.rever.boss.plugin.ui.BossDialog) instead:\n  " + offenders.joinToString("\n  "),
             )
         }
-    }
-
-    /** Walks up from the test's working directory to the checkout root. */
-    private fun repoRoot(): File {
-        var dir: File? = File(".").absoluteFile
-        while (dir != null) {
-            if (File(dir, "composeApp").isDirectory && File(dir, "version.properties").isFile) return dir
-            dir = dir.parentFile
-        }
-        fail("could not locate the repository root from ${File(".").absolutePath}")
     }
 }

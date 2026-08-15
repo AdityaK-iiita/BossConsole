@@ -25,6 +25,8 @@ import ai.rever.boss.startup.StartupSettingsManager
 import ai.rever.boss.terminal.TerminalLinkSettingsManager
 import ai.rever.boss.updater.UpdateSettingsSection
 import ai.rever.boss.utils.DisplayUtils
+import ai.rever.boss.window.ApplyBossWindowIcon
+import ai.rever.boss.window.BossWindowIcon
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -66,7 +68,10 @@ actual fun SettingsWindow(
         onCloseRequest = onClose,
         title = "BOSS Settings",
         state = windowState,
+        icon = BossWindowIcon.painter,
     ) {
+        ApplyBossWindowIcon(window)
+
         // Raise this window whenever Settings is asked for again. Keyed on the counter, so it
         // runs once per request and once on the first composition - which is harmless, the
         // window is brand new and coming to the front is what it should be doing anyway.

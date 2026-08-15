@@ -1,6 +1,8 @@
 package ai.rever.boss.components.overlays
 
 import ai.rever.boss.plugin.browser.LocalAwtWindow
+import ai.rever.boss.window.ApplyBossWindowIcon
+import ai.rever.boss.window.BossWindowIcon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
@@ -57,6 +59,7 @@ fun HeavyweightModal(
         alwaysOnTop = true,
         focusable = true,
         resizable = false,
+        icon = BossWindowIcon.painter,
         onKeyEvent = { event ->
             // dismissOnBackPress is what Compose maps Escape to, and only this window can honour it:
             // Escape is handled here, not by anything inside the content. A caller that passed
@@ -71,6 +74,7 @@ fun HeavyweightModal(
         },
     ) {
         EnsureOverlayWindowTransparent(window)
+        ApplyBossWindowIcon(window)
 
         // Dismiss when the modal loses focus (clicked elsewhere), matching modal expectations —
         // but NOT when one of our own heavyweight popups took the focus.

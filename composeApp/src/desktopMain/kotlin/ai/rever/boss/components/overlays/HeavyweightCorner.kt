@@ -3,6 +3,8 @@ package ai.rever.boss.components.overlays
 import ai.rever.boss.plugin.browser.LocalAwtWindow
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
+import ai.rever.boss.window.ApplyBossWindowIcon
+import ai.rever.boss.window.BossWindowIcon
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -135,8 +137,10 @@ fun HeavyweightCorner(
         alwaysOnTop = true,
         focusable = false,
         resizable = false,
+        icon = BossWindowIcon.painter,
     ) {
         EnsureOverlayWindowTransparent(window)
+        ApplyBossWindowIcon(window)
         Box(
             modifier =
                 Modifier

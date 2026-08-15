@@ -6,6 +6,7 @@ import ai.rever.boss.utils.hasFullscreenSignal
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.ComponentLogger
 import ai.rever.boss.utils.logging.LogCategory
+import ai.rever.boss.window.BossWindowIcon
 import com.teamdev.jxbrowser.browser.Browser
 import com.teamdev.jxbrowser.view.swing.BrowserView
 import java.awt.BorderLayout
@@ -383,6 +384,7 @@ private fun prepareBorderlessOverlayFrame(
 
     val overlayFrame = graphicsConfiguration?.let(::JFrame) ?: JFrame()
     overlayFrame.defaultCloseOperation = JFrame.DO_NOTHING_ON_CLOSE
+    overlayFrame.iconImages = BossWindowIcon.images
     overlayFrame.background = Color.BLACK
     overlayFrame.contentPane.background = Color.BLACK
     overlayFrame.contentPane.layout = BorderLayout()
@@ -768,6 +770,7 @@ object FullscreenBrowserWindow {
             val frame = ownerWindow?.graphicsConfiguration?.let(::JFrame) ?: JFrame()
             createdFrame = frame
             frame.defaultCloseOperation = JFrame.DO_NOTHING_ON_CLOSE
+            frame.iconImages = BossWindowIcon.images
             frame.background = Color.BLACK
             frame.contentPane.background = Color.BLACK
             frame.contentPane.layout = BorderLayout()

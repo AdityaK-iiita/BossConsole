@@ -28,7 +28,10 @@ import ai.rever.boss.utils.WindowsProtocolHandler
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import ai.rever.boss.window.AWTKeyboardInterceptor
+import ai.rever.boss.window.ApplyBossWindowIcon
 import ai.rever.boss.window.BossWindow
+import ai.rever.boss.window.BossWindowIcon
+import ai.rever.boss.window.DefaultWindowIcon
 import ai.rever.boss.window.WindowManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -370,6 +373,20 @@ fun main(args: Array<String>) {
             exitProcess(0)
         }
     }
+
+    // Brand any window BOSS does not compose itself - JxBrowser's own Swing dialogs, JFileChooser,
+    // a frame opened by a plugin - so none of them shows the JDK's default Java icon on Windows.
+    // Every window this app opens sets its own icon; this is only the net under them.
+    //
+    // Position is fenced on both sides. Registering an AWT event listener initialises the toolkit,
+    // so this cannot go up beside setLinuxWMClass: the ChromiumFlagsSettingsManager and
+    // BOSS_SKIKO_RENDER_API blocks up there have to publish their system properties before AWT/Skiko
+    // reads them, and skiko.renderApi in particular is read at init and never again. It also has to
+    // stay below the two paths that exit without ever showing a window - `--unregister-protocol`
+    // (an installer action) and the single-instance deep-link forward - which is why it is here
+    // rather than beside JPopupMenu.setDefaultLightWeightPopupEnabled: neither should be made to
+    // start a window system to do its job. Everything from here on is a session that gets a window.
+    DefaultWindowIcon.install()
 
     // Register shutdown hook to release the single-instance lock AND close browser engine
     Runtime.getRuntime().addShutdownHook(
@@ -836,7 +853,12 @@ fun main(args: Array<String>) {
                     state = downloadWindowState,
                     title = "BOSS - Setup",
                     resizable = false,
+                    // This is the one window that opens before any main window exists, so it can
+                    // inherit an icon from nothing - and it is the first thing a new user sees.
+                    icon = BossWindowIcon.painter,
                 ) {
+                    ApplyBossWindowIcon(window)
+
                     // Start download when dialog opens
                     LaunchedEffect(Unit) {
                         ChromiumAutoDownloader.downloadChromium { progress ->

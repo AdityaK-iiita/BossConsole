@@ -10,6 +10,7 @@ import ai.rever.boss.utils.MacOSGestureHandler
 import ai.rever.boss.utils.WindowFocusManager
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
+import ai.rever.boss.window.BossWindowIcon
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.Composable
@@ -1723,6 +1724,7 @@ internal class BrowserHandleImpl(
 
                             frame.title = "Popup" // Will be updated by page title
                             frame.defaultCloseOperation = JFrame.DISPOSE_ON_CLOSE
+                            frame.iconImages = BossWindowIcon.images
 
                             // Set position and size from bounds
                             frame.setLocation(initialBounds.origin().x(), initialBounds.origin().y())

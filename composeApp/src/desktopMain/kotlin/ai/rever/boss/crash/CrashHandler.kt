@@ -8,6 +8,7 @@ import ai.rever.boss.utils.AppVersion
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import ai.rever.boss.utils.logging.LogSanitizer
+import ai.rever.boss.window.BossWindowIcon
 import androidx.compose.ui.awt.ComposePanel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -757,6 +758,11 @@ object CrashHandler {
             // recovered nothing, which is how the three exits came to disagree.
             frame.defaultCloseOperation = WindowConstants.DO_NOTHING_ON_CLOSE
             frame.addWindowListener(controller.windowClosingAdapter())
+
+            // Inside the try, and reading a list that is empty rather than throwing when the icon
+            // resource cannot be read: a missing icon must never be the reason a crash report goes
+            // unshown. Empty is what every window here did before, so the fallback is status quo.
+            frame.iconImages = BossWindowIcon.images
 
             val composePanel = ComposePanel()
             // Sized here rather than on the frame so the dialog gets these dimensions exactly;
