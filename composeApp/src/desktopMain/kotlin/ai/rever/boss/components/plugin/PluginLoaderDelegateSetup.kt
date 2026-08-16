@@ -1,15 +1,19 @@
 package ai.rever.boss.components.plugin
 
 import ai.rever.boss.components.bars.horizontal.StatusMessageManager
+import ai.rever.boss.components.home.HomeCatalogAccess
 import ai.rever.boss.crash.PluginCrashRecovery
 import ai.rever.boss.crash.PluginCrashRecoveryCoordinator
 import ai.rever.boss.crash.PluginRecoverySteps
 import ai.rever.boss.crash.displayPluginId
+import ai.rever.boss.plugin.MissingDependencyReporter
 import ai.rever.boss.plugin.PluginBuildProbe
 import ai.rever.boss.plugin.PluginLoaderDelegateImpl
 import ai.rever.boss.plugin.PluginPersistence
 import ai.rever.boss.plugin.PluginRemoval
+import ai.rever.boss.plugin.PluginStoreSetup
 import ai.rever.boss.plugin.ProbedPlugin
+import ai.rever.boss.plugin.StoreHomeCatalogProvider
 import ai.rever.boss.plugin.api.PluginContext
 import ai.rever.boss.plugin.sandbox.ui.PluginCrashRegistry
 import ai.rever.boss.utils.logging.BossLogger
@@ -41,6 +45,17 @@ actual object PluginLoaderDelegateSetup {
 
         val delegate = PluginLoaderDelegateImpl(dynamicPluginManager)
         context.registerPluginAPI(delegate)
+
+        // The home screen's store access: what can be installed, and how. Registered here with
+        // the other process-wide wiring rather than from `PluginLoaderDelegateImpl`'s constructor,
+        // where a process-global set up as a side effect of constructing an object was easy to
+        // miss. First-wins is enforced inside `initialize`, matching the `== null` guards below.
+        HomeCatalogAccess.initialize(
+            StoreHomeCatalogProvider(
+                repository = { PluginStoreSetup.remoteRepository },
+                installer = MissingDependencyReporter.installerFor(dynamicPluginManager),
+            ),
+        )
 
         // Give the API-layer hot swap a way to tear down plugin-hosting UI
         // before it closes any classloader (avoids NoClassDefFoundError from

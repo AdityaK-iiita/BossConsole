@@ -125,7 +125,23 @@ class MissingDependencyReporter(
          * the store lazily because `PluginStoreSetup` initialises during startup while a
          * reporter can outlive a store that never came up at all.
          */
-        fun forManager(manager: DynamicPluginManager): MissingDependencyReporter {
+        fun forManager(manager: DynamicPluginManager): MissingDependencyReporter =
+            MissingDependencyReporter(
+                states = { manager.pluginStates.value },
+                installer = installerFor(manager),
+            )
+
+        /**
+         * The store installer bound to one manager.
+         *
+         * Extracted from [forManager] because the home screen's tool grid installs from the
+         * store too, and it must use *this* installer rather than its own download path - see
+         * [StoreMissingDependencyInstaller] for the five defects a second path would have to
+         * re-solve. One construction site also keeps both callers on one definition of
+         * "installed", which AGENTS.md records as having broken the dependency prompt once
+         * already when two halves disagreed.
+         */
+        fun installerFor(manager: DynamicPluginManager): MissingDependencyInstaller {
             val installedNow: (String) -> Boolean = { pluginId ->
                 pluginId in
                     PluginDependencyResolution.installedAndOnDisk(
@@ -134,17 +150,13 @@ class MissingDependencyReporter(
                         isIncompatible = { PluginCrashRegistry.isIncompatible(it) },
                     )
             }
-            return MissingDependencyReporter(
-                states = { manager.pluginStates.value },
-                installer =
-                    StoreMissingDependencyInstaller(
-                        repository = { PluginStoreSetup.remoteRepository },
-                        pluginDir = { PluginStoreSetup.getPluginDir() },
-                        hooks =
-                            InstallerHooks(
-                                installedNow = installedNow,
-                                load = { jarPath -> manager.installPlugin(jarPath) },
-                            ),
+            return StoreMissingDependencyInstaller(
+                repository = { PluginStoreSetup.remoteRepository },
+                pluginDir = { PluginStoreSetup.getPluginDir() },
+                hooks =
+                    InstallerHooks(
+                        installedNow = installedNow,
+                        load = { jarPath -> manager.installPlugin(jarPath) },
                     ),
             )
         }

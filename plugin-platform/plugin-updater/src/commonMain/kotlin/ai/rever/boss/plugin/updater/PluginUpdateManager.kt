@@ -564,25 +564,16 @@ class PluginUpdateManager(
         satisfiesFloor(required = minApiVersion, installed = hostApiVersion())
 
     /**
-     * True when [installed] satisfies the [required] floor. Fails OPEN on
-     * missing/unparseable versions (dev builds, pre-field candidates) — the
-     * loader's own gate is the backstop. Compares the release core only,
-     * ignoring prerelease: a host at 9.2.27-alpha.1 is built from the same
-     * source as 9.2.27 and carries the same API, but semver precedence would
-     * rank it below the requirement and spuriously gate every exact-version
-     * update on prerelease hosts.
+     * True when [installed] satisfies the [required] floor.
+     *
+     * Delegates to the top-level [satisfiesVersionFloor], which the home screen's tool grid
+     * also calls to decide whether a store row is worth offering as an install. See its KDoc
+     * for the fail-open and prerelease rules.
      */
     private fun satisfiesFloor(
         required: String,
         installed: String,
-    ): Boolean {
-        if (required.isBlank() || installed.isBlank()) return true
-        val req = SemanticVersion.parse(required) ?: return true
-        val cur = SemanticVersion.parse(installed) ?: return true
-        if (cur.major != req.major) return cur.major > req.major
-        if (cur.minor != req.minor) return cur.minor > req.minor
-        return cur.patch >= req.patch
-    }
+    ): Boolean = satisfiesVersionFloor(required = required, installed = installed)
 
     /**
      * Create an UpdateInfo from a PluginInfo.

@@ -37,9 +37,6 @@ fun BossDraggableComponent.BossWindow(
     splitViewState: SplitViewState? = null,
     tabDragComponent: TabDraggableComponent? = null,
     onTabDropResult: (TabDropResult) -> Unit = {},
-    onShowSettings: (() -> Unit)? = null,
-    onOpenProjectDialog: (() -> Unit)? = null,
-    onNewProject: (() -> Unit)? = null,
 ) {
     // Process any pending panel opens (for two-phase transitions)
     // This is critical for JxBrowser-based plugins to avoid BrowserViewState conflicts
@@ -122,9 +119,6 @@ fun BossDraggableComponent.BossWindow(
                         splitViewState = actualSplitViewState,
                         tabDragComponent = tabDragComponent,
                         onTabDropResult = onTabDropResult,
-                        onShowSettings = onShowSettings,
-                        onOpenProjectDialog = onOpenProjectDialog,
-                        onNewProject = onNewProject,
                     )
                     // While a header is dragged over the central area, highlight the
                     // resolved target region (a whole panel for center-drop, or the half

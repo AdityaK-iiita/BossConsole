@@ -9,12 +9,12 @@ import ai.rever.boss.components.bookmarks.Bookmark
 import ai.rever.boss.components.bookmarks.WorkspacePanelTarget
 import ai.rever.boss.components.buttons.BossTabButton
 import ai.rever.boss.components.common.rememberFaviconLoader
-import ai.rever.boss.components.dashboard.Dashboard
 import ai.rever.boss.components.dialogs.BookmarkDialog
 import ai.rever.boss.components.dialogs.NewTabDialog
 import ai.rever.boss.components.dialogs.RemoveBookmarkConfirmationDialog
 import ai.rever.boss.components.dialogs.TabType
 import ai.rever.boss.components.dividers.VDivider
+import ai.rever.boss.components.home.HomeScreen
 import ai.rever.boss.components.model.ScrollDirection
 import ai.rever.boss.components.model.TabDraggableComponent
 import ai.rever.boss.components.model.TabDropResult
@@ -870,9 +870,6 @@ fun BossTabsComponent.BossMainPanel(
     currentPanelId: String? = null,
     tabDragComponent: TabDraggableComponent? = null,
     onTabDropResult: (TabDropResult) -> Unit = {},
-    onShowSettings: (() -> Unit)? = null,
-    onOpenProjectDialog: (() -> Unit)? = null,
-    onNewProject: (() -> Unit)? = null,
 ) {
     val focusRequester = remember { FocusRequester() }
     val isFocused = remember { mutableStateOf(false) }
@@ -954,14 +951,7 @@ fun BossTabsComponent.BossMainPanel(
         // widget can re-issue its internal focus requester when the
         // surrounding panel regains user attention.
         CompositionLocalProvider(LocalIsPanelActive provides isActivePanel) {
-            BossMainPanelContent(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                splitViewState = splitViewState,
-                currentPanelId = currentPanelId,
-                onShowSettings = onShowSettings,
-                onOpenProjectDialog = onOpenProjectDialog,
-                onNewProject = onNewProject,
-            )
+            BossMainPanelContent(modifier = Modifier.weight(1f).fillMaxWidth())
         }
     }
 }
@@ -970,14 +960,7 @@ fun BossTabsComponent.BossMainPanel(
  * Main UI composable that displays the root component
  */
 @Composable
-fun BossTabsComponent.BossMainPanelContent(
-    modifier: Modifier,
-    splitViewState: ai.rever.boss.components.window_panel.SplitViewState? = null,
-    currentPanelId: String? = null,
-    onShowSettings: (() -> Unit)? = null,
-    onOpenProjectDialog: (() -> Unit)? = null,
-    onNewProject: (() -> Unit)? = null,
-) {
+fun BossTabsComponent.BossMainPanelContent(modifier: Modifier) {
     // Subscribe to tab state changes to trigger recomposition
     val tabsState = tabsState.subscribeAsState()
 
@@ -1060,80 +1043,15 @@ fun BossTabsComponent.BossMainPanelContent(
                 }
             }
         } else {
-            // Show Dashboard when no tabs are open
-            Dashboard(
-                onOpenFile = { filePath ->
-                    splitViewState?.openFileInActivePanel(
-                        filePath,
-                        filePath.extractFileName().ifEmpty { "untitled" },
-                    )
-                },
-                onOpenUrl = { url ->
-                    splitViewState?.openUrlInActivePanel(url, "Loading...")
-                },
-                onOpenProject = { project ->
-                    selectProjectInWindow(windowProjectState, project)
-                },
-                selectedProject = selectedProject,
-                onNewTab = {
-                    selectedTabType = null
-                    showNewTabDialog = true
-                },
-                onNewTerminal = {
-                    // Create a new terminal tab
-                    val timestamp = Clock.System.now().toEpochMilliseconds()
-                    // Use per-window project state for terminal working directory
-                    val projectPath = selectedProject.path
-                    val terminalTab =
-                        TerminalTabInfo(
-                            id = "terminal-$timestamp",
-                            typeId = ai.rever.boss.plugin.tab.terminal.TerminalTabType.typeId,
-                            title = "Terminal",
-                            icon = ai.rever.boss.plugin.tab.terminal.TerminalTabType.icon,
-                            workingDirectory = DefaultWorkingDirectory.resolve(projectPath),
-                        )
-                    val tabIndex = addTab(terminalTab)
-                    if (tabIndex >= 0) {
-                        selectTab(tabIndex)
-                    }
-                },
-                onNewWindow = {
-                    WindowOperations.createNewWindow()
-                },
-                onOpenProjectDialog = {
-                    // Use the callback passed from BossApp which has access to windowId
-                    onOpenProjectDialog?.invoke()
-                },
-                onOpenFileDialog = {
-                    selectedTabType = TabType.FILE
-                    showNewTabDialog = true
-                },
-                onApplySplitTemplate = { template ->
-                    // Find matching predefined workspace by template ID
-                    val workspaceId = "workspace-${template.id}"
-                    val matchingWorkspace =
-                        PredefinedWorkspaces.allWorkspaces.find { it.id == workspaceId }
-                            ?: PredefinedWorkspaces.allWorkspaces.find { it.name == template.name }
-
-                    // Always apply the workspace first (Issue #445)
-                    // This ensures terminal + browser both open in split view
-                    if (matchingWorkspace != null && splitViewState != null) {
-                        workspaceManager.loadWorkspace(matchingWorkspace)
-                        scope.launch {
-                            applyWorkspace(matchingWorkspace, splitViewState)
-                        }
-                    } else {
-                        applySplitTemplate(template, splitViewState, currentPanelId, selectedProject.path)
-                    }
-                },
-                onActivatePlugin = { pluginId ->
-                    // Plugin activation is handled via sidebar panels
-                    // Dashboard displays available plugins but activation uses existing sidebar UI
-                    bossMainWindowPanelLogger.debug(LogCategory.UI, "Plugin activation requested", mapOf("pluginId" to pluginId))
-                },
-                onShowSettings = onShowSettings,
-                onNewProject = { onNewProject?.invoke() },
-            )
+            // Show the home screen when this panel has no tabs.
+            //
+            // No callbacks: HomeScreen emits on DashboardEventBus, whose handlers live in
+            // BossAppEventBusEffects. The block that used to be here passed twelve lambdas,
+            // which is what let the other mount point (DashboardContentProviderImpl, for a
+            // browser showing about:blank) supply eleven empty ones and leave most of the
+            // screen inert. Two of the twelve - onActivatePlugin and onNewTerminal - were
+            // never invoked by the screen at all.
+            HomeScreen()
         }
     }
 
@@ -1221,129 +1139,6 @@ fun BossTabsComponent.BossMainPanelContent(
             },
             projectPath = selectedProject.path.ifEmpty { null },
         )
-    }
-}
-
-/**
- * Apply a split template to create a split view with pre-configured tabs.
- *
- * @param template The split template to apply
- * @param splitViewState The split view state (if available)
- * @param currentPanelId The current panel ID
- * @param projectPath The current project path for template placeholders
- */
-private fun BossTabsComponent.applySplitTemplate(
-    template: SplitTemplate,
-    splitViewState: ai.rever.boss.components.window_panel.SplitViewState?,
-    currentPanelId: String?,
-    projectPath: String,
-) {
-    if (splitViewState == null || currentPanelId == null) return
-
-    val resolvedProjectPath = DefaultWorkingDirectory.resolve(projectPath)
-
-    // Process the template panels
-    val panels = template.panels
-    if (panels.isEmpty()) return
-
-    // Get left and right panel configs
-    val leftPanelConfig = panels.find { it.position == "left" }
-    val rightPanelConfig = panels.find { it.position == "right" }
-
-    // Create left panel tab first (in current panel)
-    val leftTab = leftPanelConfig?.let { createTabFromConfig(it, resolvedProjectPath) }
-    val rightTab = rightPanelConfig?.let { createTabFromConfig(it, resolvedProjectPath) }
-
-    if (leftTab != null) {
-        // Add left tab to current panel
-        val leftIndex = addTab(leftTab)
-        if (leftIndex >= 0) {
-            selectTab(leftIndex)
-        }
-
-        // If there's a right panel, create a split
-        if (rightTab != null) {
-            splitViewState.splitPanel(
-                panelId = currentPanelId,
-                orientation = SplitOrientation.VERTICAL,
-                tabToMove = rightTab,
-            )
-        }
-    } else if (rightTab != null) {
-        // Only right panel specified, just add it
-        val rightIndex = addTab(rightTab)
-        if (rightIndex >= 0) {
-            selectTab(rightIndex)
-        }
-    }
-}
-
-/**
- * Create a tab from template panel configuration.
- */
-private fun createTabFromConfig(
-    panelConfig: ai.rever.boss.dashboard.TemplatePanelConfig,
-    projectPath: String,
-): ai.rever.boss.components.registery.TabInfo? {
-    val timestamp = Clock.System.now().toEpochMilliseconds()
-
-    return when (panelConfig.type) {
-        "terminal" -> {
-            val command =
-                panelConfig.content.command?.let {
-                    // shell command → quote {projectPath} so paths with spaces/quotes survive
-                    SplitTemplatesManager.processPlaceholders(it, projectPath, null, quoteProjectPath = true)
-                }
-            TerminalTabInfo(
-                id = "terminal-$timestamp",
-                typeId = ai.rever.boss.plugin.tab.terminal.TerminalTabType.typeId,
-                title = "Terminal",
-                icon = ai.rever.boss.plugin.tab.terminal.TerminalTabType.icon,
-                initialCommand = command,
-                // Already resolved by every caller; see the same call in TabFactories.
-                workingDirectory = DefaultWorkingDirectory.resolve(projectPath),
-            )
-        }
-
-        "browser" -> {
-            val url =
-                panelConfig.content.url?.let {
-                    SplitTemplatesManager.processPlaceholders(it, projectPath, null)
-                } ?: "https://google.com"
-            FluckTabInfo(
-                id = "fluck-$timestamp",
-                typeId = FluckTabType.typeId,
-                _title = "Loading...",
-                url = url,
-            )
-        }
-
-        "editor" -> {
-            val filePath =
-                panelConfig.content.filePath?.let {
-                    SplitTemplatesManager.processPlaceholders(it, projectPath, null)
-                }
-            if (filePath != null) {
-                val fileName = filePath.extractFileName().ifEmpty { "untitled" }
-                val fileIconInfo = FileIcons.forFile(fileName)
-                EditorTabInfo(
-                    id = "editor-$timestamp",
-                    title = fileName,
-                    typeId = CodeEditorTabType.typeId,
-                    icon = fileIconInfo.icon,
-                    tabIcon =
-                        ai.rever.boss.plugin.api.TabIcon
-                            .Vector(fileIconInfo.icon, fileIconInfo.color),
-                    filePath = filePath,
-                )
-            } else {
-                null
-            }
-        }
-
-        else -> {
-            null
-        }
     }
 }
 

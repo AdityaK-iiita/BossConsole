@@ -23,6 +23,7 @@ interface AccessGatedRegistry {
                 PanelMenuRegistryImpl,
                 SettingsPageRegistryImpl,
                 StatusBarRegistryImpl,
+                HomeToolAccess,
             )
     }
 }

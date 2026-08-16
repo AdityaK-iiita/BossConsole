@@ -2,11 +2,11 @@ package ai.rever.boss.search
 
 import ai.rever.boss.keymap.KeymapSettingsManager
 import ai.rever.boss.keymap.model.KeymapActions
+import ai.rever.boss.keymap.model.formatShortcutLabel
 import ai.rever.boss.plugin.api.PluginSearchResult
 import ai.rever.boss.plugin.api.SearchResultAction
 import ai.rever.boss.run.RunConfigurationManager
 import ai.rever.boss.topofmind.TopOfMindStateHolder
-import ai.rever.boss.utils.SystemUtils
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import kotlinx.coroutines.Dispatchers
@@ -456,20 +456,7 @@ object GlobalSearchService {
     private fun formatShortcut(
         modifiers: List<String>,
         key: String,
-    ): String {
-        val isMacOS = SystemUtils.isMacOS
-        val modifierSymbols =
-            modifiers.map { modifier ->
-                when (modifier.lowercase()) {
-                    "cmd", "meta" -> if (isMacOS) "⌘" else "Ctrl"
-                    "ctrl", "control" -> if (isMacOS) "⌃" else "Ctrl"
-                    "shift" -> if (isMacOS) "⇧" else "Shift"
-                    "alt", "option" -> if (isMacOS) "⌥" else "Alt"
-                    else -> modifier
-                }
-            }
-        return (modifierSymbols + key).joinToString(if (isMacOS) "" else "+")
-    }
+    ): String = formatShortcutLabel(modifiers, key)
 
     /**
      * Clear search results.

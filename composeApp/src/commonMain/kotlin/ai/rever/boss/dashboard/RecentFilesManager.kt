@@ -80,8 +80,23 @@ object RecentFilesManager {
                 if (settingsFile.exists()) {
                     val content = settingsFile.readText()
                     val data = json.decodeFromString<RecentFilesData>(content)
-                    _recentFiles.value = data.files
-                    recentFilesLogger.debug(LogCategory.FILE, "Loaded recent files", mapOf("count" to data.files.size))
+                    // Hide files that are no longer on disk, so a deleted or moved one stops
+                    // opening as an empty editor - fileExists existed for exactly this and had
+                    // no callers. Already on Dispatchers.IO, so the stat calls belong here.
+                    //
+                    // **Filtered in memory, deliberately not persisted.** `File.exists()` is also
+                    // false for an unmounted volume, a disconnected share, or a container mount
+                    // that has not come up yet - all normal at login, which is exactly when this
+                    // runs. Writing the pruned list back would turn "not here right now" into
+                    // permanent loss. The entry stays in the file and reappears when the mount
+                    // does; the only cost is re-checking on the next launch.
+                    val present = data.files.filter { fileExists(it.path) }
+                    _recentFiles.value = present
+                    recentFilesLogger.debug(
+                        LogCategory.FILE,
+                        "Loaded recent files",
+                        mapOf("count" to present.size, "hidden" to (data.files.size - present.size)),
+                    )
                 }
             } catch (e: Exception) {
                 recentFilesLogger.warn(LogCategory.FILE, "Error loading recent files", error = e)

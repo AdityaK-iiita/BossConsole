@@ -5,6 +5,10 @@ import ai.rever.boss.components.bars.horizontal.BossTitleBar
 import ai.rever.boss.components.bars.horizontal.BossTopBar
 import ai.rever.boss.components.bars.vertical.BossLeftSideBar
 import ai.rever.boss.components.bars.vertical.BossRightSideBar
+import ai.rever.boss.components.home.LocalPanelRegistry
+import ai.rever.boss.components.home.LocalPluginStates
+import ai.rever.boss.components.home.LocalRegistryAccess
+import ai.rever.boss.components.home.LocalTabRegistry
 import ai.rever.boss.components.overlays.DraggingItemOverlay
 import ai.rever.boss.components.overlays.OverlayCorner
 import ai.rever.boss.components.overlays.TabDraggingOverlay
@@ -15,6 +19,7 @@ import ai.rever.boss.components.plugin.panels.left_bottom.TopOfMind.LocalWorkspa
 import ai.rever.boss.components.plugin.providers.TopOfMindDataProvider
 import ai.rever.boss.components.plugin.providers.WindowIdProviderImpl
 import ai.rever.boss.components.plugin.providers.WindowProjectStateProviderImpl
+import ai.rever.boss.components.plugin.registries.HomeToolAccess
 import ai.rever.boss.components.window_panel.BossWindow
 import ai.rever.boss.components.window_panel.components.main_window_panels.TabCycleOverlayHost
 import ai.rever.boss.components.workspaces.applyWorkspace
@@ -151,6 +156,13 @@ internal fun BossAppCompositionLocals(
     val windowIdProvider = WindowIdProviderImpl(state.windowId)
     val windowProjectStateProvider = WindowProjectStateProviderImpl(state.windowProjectState)
 
+    // For the home screen's tool grid. Both are read reactively so a plugin loading, unloading,
+    // or the user's role changing re-derives the grid without a relaunch.
+    // The flow, not a collected value: collecting here would invalidate this scaffold on every
+    // plugin state transition. `rememberHomeTools` collects it, so only the home screen recomposes.
+    val pluginStates = state.currentDefaultPlugin?.dynamicPluginManager?.pluginStates
+    val registryAccess by HomeToolAccess.access.collectAsState()
+
     CompositionLocalProvider(
         LocalWindowId provides state.windowId,
         LocalPanelPluginIdResolver provides { panelId ->
@@ -177,6 +189,14 @@ internal fun BossAppCompositionLocals(
         LocalWindowGitState provides state.windowGitState,
         LocalWindowIdProvider provides windowIdProvider,
         LocalWindowProjectStateProvider provides windowProjectStateProvider,
+        // For the home screen's tool grid, which derives itself from what plugins registered.
+        // Locals rather than parameters because it also renders inside a browser tab showing
+        // about:blank, where the caller is a plugin with no access to host state - see
+        // HomeRegistryLocals.
+        LocalTabRegistry provides state.tabRegistry,
+        LocalPanelRegistry provides state.panelRegistry,
+        LocalPluginStates provides pluginStates,
+        LocalRegistryAccess provides registryAccess,
     ) {
         // Initialize TopOfMind data provider for this window
         DisposableEffect(state.splitViewState, workspaceManager, state.windowId) {
@@ -414,9 +434,6 @@ internal fun BossAppScaffold(
                             onTabDropResult = { result ->
                                 handleTabDropResult(result, splitViewState)
                             },
-                            onShowSettings = { state.settingsWindow.open() },
-                            onOpenProjectDialog = { state.showProjectDialog = true },
-                            onNewProject = { state.showNewProjectDialog = true },
                         )
 
                         // Settings / Search / Sign Out, which the top bar otherwise owns outright.
