@@ -730,13 +730,6 @@ internal fun BossAppEventBusEffects(state: BossAppState) {
                 }
             }.launchIn(this)
 
-        // Handle plugin activation events
-        DashboardEventBus.activatePluginEvents
-            .filter { event -> event.sourceWindowId == windowId }
-            .onEach { event ->
-                state.draggablePanelComponent.activatePlugin(event.pluginId)
-            }.launchIn(this)
-
         // Handle settings window events from the home screen.
         DashboardEventBus.showSettingsEvents
             .filter { event -> event.sourceWindowId == windowId }

@@ -50,10 +50,17 @@ actual object PluginLoaderDelegateSetup {
         // the other process-wide wiring rather than from `PluginLoaderDelegateImpl`'s constructor,
         // where a process-global set up as a side effect of constructing an object was easy to
         // miss. First-wins is enforced inside `initialize`, matching the `== null` guards below.
+        //
+        // The installer resolves a manager per install rather than capturing this window's.
+        // `register` runs per window, so capturing would mean closing that one window left every
+        // other window's Install tile loading into a disposed manager - reporting success having
+        // put the plugin somewhere nothing renders.
         HomeCatalogAccess.initialize(
             StoreHomeCatalogProvider(
                 repository = { PluginStoreSetup.remoteRepository },
-                installer = MissingDependencyReporter.installerFor(dynamicPluginManager),
+                installer = {
+                    DynamicPluginManager.anyActiveManager()?.let { MissingDependencyReporter.installerFor(it) }
+                },
             ),
         )
 

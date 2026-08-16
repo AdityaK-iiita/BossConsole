@@ -10,6 +10,7 @@ import ai.rever.boss.plugin.updater.satisfiesVersionFloor
 import ai.rever.boss.utils.AppVersion
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
+import kotlinx.coroutines.CancellationException
 
 /**
  * Answers the home screen's two store questions: what could be installed, and install it.
@@ -26,12 +27,16 @@ import ai.rever.boss.utils.logging.LogCategory
  *
  * @param repository the remote store, null when it never initialised (offline first run, or
  *   absent store credentials) - discovery is then simply empty
- * @param installer the shared store installer, reached through its interface so this class does
- *   not also own how a jar lands on disk
+ * @param installer resolves the shared store installer **per call**, not once at construction.
+ *   Late-bound because the installer loads a jar into a `DynamicPluginManager`, there is one per
+ *   window, and this provider is registered once for the process: capturing the first window's
+ *   meant that closing that window left every Install tile targeting a disposed manager, where the
+ *   install reports success having loaded into something nothing renders. Null when no manager is
+ *   live, which is the honest answer in a torn-down process.
  */
 class StoreHomeCatalogProvider(
     private val repository: () -> PluginRepository?,
-    private val installer: MissingDependencyInstaller,
+    private val installer: () -> MissingDependencyInstaller?,
     private val hostBossVersion: () -> String = { AppVersion.currentVersionString() },
     private val hostApiVersion: () -> String = { System.getProperty("boss.api.version") ?: "" },
     private val isIpcInstallable: (String) -> Boolean = { IpcCompatibility.isInstallable(it) },
@@ -72,6 +77,12 @@ class StoreHomeCatalogProvider(
 
         val store = repository() ?: return emptyList()
         val listing = runCatching { store.listPlugins().getOrThrow() }
+        // Cancellation is not a store failure. This runs in a LaunchedEffect that is cancelled
+        // whenever the screen leaves composition, and `runCatching` around a suspending call also
+        // catches CancellationException - so without this a routine cancellation is logged as the
+        // store having failed, which is misleading in a support log, and swallowing it breaks
+        // structured concurrency.
+        listing.exceptionOrNull()?.let { if (it is CancellationException) throw it }
         listing.exceptionOrNull()?.let { error ->
             logger.warn(
                 LogCategory.SYSTEM,
@@ -90,13 +101,18 @@ class StoreHomeCatalogProvider(
             .also { cached = it }
     }
 
-    override suspend fun install(pluginId: String): Result<Unit> = installer.install(pluginId)
+    override suspend fun install(pluginId: String): Result<Unit> {
+        val target =
+            installer() ?: return Result.failure(
+                IllegalStateException("No window is available to install into. Try again in a moment."),
+            )
+        return target.install(pluginId)
+    }
 
     private fun toInput(row: PluginInfo): HomeStorePluginInput =
         HomeStorePluginInput(
             pluginId = row.pluginId,
             displayName = row.displayName,
-            version = row.version,
             // Straight through from `plugins.icon_url`. The host holds no icon table for
             // not-yet-installed plugins: this column is the source, and a blank one renders as the
             // plugin's initials. Populating the column is all it takes for real icons to appear -

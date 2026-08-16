@@ -321,6 +321,20 @@ class DynamicPluginManager(
         /** Whether any live manager has [pluginId] loaded. */
         fun isPluginKnown(pluginId: String): Boolean = activeManagers().any { it.getPluginInfo(pluginId) != null }
 
+        /**
+         * Any manager that is still live, for a **process-wide** caller that must not capture one
+         * window's.
+         *
+         * Exists for `HomeCatalogAccess`: its store installer is registered once for the process
+         * but loads a jar into a manager, and capturing the first window's meant that closing that
+         * window left every other window's Install tile targeting a disposed manager - the install
+         * would report success having loaded into something nothing renders. Resolving here at
+         * install time keeps it pointed at something alive.
+         *
+         * Null in a headless or fully torn-down process, where there is nothing to install into.
+         */
+        fun anyActiveManager(): DynamicPluginManager? = activeManagers().firstOrNull()
+
         /** Where [pluginId] was loaded from, per the first live manager that knows it. */
         fun jarPathOf(pluginId: String): String? =
             activeManagers()
@@ -2146,6 +2160,14 @@ class DynamicPluginManager(
                 closeTabsAcrossWindows = closeTabsAcrossWindows,
             )
         }
+
+        // Deregister before cancelling, so nothing can pick this manager as a live one after it
+        // has unloaded everything. Previously this relied on the WeakReference being collected,
+        // which leaves a disposed manager in `activeManagers()` for an unbounded time - and its
+        // callers all assume "live": `isPluginKnown` and `jarPathOf` would answer from it, the api
+        // hot swap would try to reload into it, and a process-wide holder that resolves a manager
+        // lazily (HomeCatalogAccess's installer) would hand it an install that lands nowhere.
+        liveManagers.removeIf { it.get() === this || it.get() == null }
 
         // Cancel scope
         managerScope.cancel()

@@ -442,7 +442,10 @@ object RecentBrowserPagesManager {
         if (key in promoKeys) {
             _dismissedSuggestions.update { it + key }
         }
-        scheduleSave()
+        // Immediately, not debounced: this is a user-initiated dismissal, and losing it to a quit
+        // within the 5s window means the card returns and they dismiss it again. `removeMatchingPages`
+        // already reasons about exactly this.
+        scope.launch { saveImmediately() }
     }
 
     /**
@@ -500,6 +503,16 @@ object RecentBrowserPagesManager {
     /**
      * Clear all recent pages.
      */
+
+    /**
+     * Empty the strip: forget the recorded pages and dismiss every suggested site.
+     *
+     * **Permanent, and worth knowing.** The dismissals persist, so after one Clear the Recent pages
+     * section stays empty until a real page is recorded, and there is no UI to bring the suggestions
+     * back short of editing `~/.boss/recent-browser-pages.json`. That is the reading of "Clear" this
+     * chooses deliberately - the alternative left seventeen undismissable promo cards behind - but it
+     * is a property, not an accident.
+     */
     fun clearAll() {
         _recentPages.value = emptyList()
         // Dismiss the padding suggestions too, so "Clear" clears the strip the user is looking
@@ -509,7 +522,7 @@ object RecentBrowserPagesManager {
         // Unioned, not replaced: `removePage` also records real pages it dismissed, and
         // overwriting the set would discard those and let them return as padding later.
         _dismissedSuggestions.update { it + promoKeys }
-        scheduleSave()
+        scope.launch { saveImmediately() }
     }
 
     /**

@@ -60,8 +60,32 @@ object RecentFilesManager {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var saveJob: Job? = null
 
+    /**
+     * Every recorded file, including ones not currently on disk. **This is what is persisted.**
+     *
+     * Split from [recentFiles] because the displayed list is filtered by `File.exists()`, and that
+     * is false for an unmounted volume or a disconnected share - normal at login, which is when
+     * the prune runs. Persisting the filtered list would turn "not here right now" into permanent
+     * loss: the first `recordFileOpen` after launch calls `scheduleSave()`, which serialises
+     * whatever this manager holds, so hiding and saving cannot be the same list.
+     */
+    private val _allFiles = MutableStateFlow<List<RecentFile>>(emptyList())
+
     private val _recentFiles = MutableStateFlow<List<RecentFile>>(emptyList())
+
+    /** The displayed list: [_allFiles] minus anything not on disk right now. */
     val recentFiles: StateFlow<List<RecentFile>> = _recentFiles.asStateFlow()
+
+    /**
+     * Replace the recorded list and re-derive the displayed one.
+     *
+     * Every mutation goes through here so the two can never drift - the defect being avoided is a
+     * caller updating the display and the save then writing the display back.
+     */
+    private fun setFiles(files: List<RecentFile>) {
+        _allFiles.value = files
+        _recentFiles.value = visibleFiles(files) { fileExists(it) }
+    }
 
     init {
         scope.launch {
@@ -80,18 +104,12 @@ object RecentFilesManager {
                 if (settingsFile.exists()) {
                     val content = settingsFile.readText()
                     val data = json.decodeFromString<RecentFilesData>(content)
-                    // Hide files that are no longer on disk, so a deleted or moved one stops
-                    // opening as an empty editor - fileExists existed for exactly this and had
-                    // no callers. Already on Dispatchers.IO, so the stat calls belong here.
-                    //
-                    // **Filtered in memory, deliberately not persisted.** `File.exists()` is also
-                    // false for an unmounted volume, a disconnected share, or a container mount
-                    // that has not come up yet - all normal at login, which is exactly when this
-                    // runs. Writing the pruned list back would turn "not here right now" into
-                    // permanent loss. The entry stays in the file and reappears when the mount
-                    // does; the only cost is re-checking on the next launch.
-                    val present = data.files.filter { fileExists(it.path) }
-                    _recentFiles.value = present
+                    // Hidden, not pruned: a file that is not on disk stops being offered (it
+                    // would open an empty editor - fileExists existed for exactly this and had no
+                    // callers) but stays in the recorded list, so an unmounted volume coming back
+                    // brings its entries with it. See _allFiles.
+                    setFiles(data.files)
+                    val present = _recentFiles.value
                     recentFilesLogger.debug(
                         LogCategory.FILE,
                         "Loaded recent files",
@@ -123,7 +141,8 @@ object RecentFilesManager {
         withContext(Dispatchers.IO) {
             try {
                 settingsFile.parentFile?.mkdirs()
-                val data = RecentFilesData(files = _recentFiles.value)
+                // The recorded list, never the filtered view; see _allFiles.
+                val data = RecentFilesData(files = _allFiles.value)
                 val content = json.encodeToString(RecentFilesData.serializer(), data)
                 settingsFile.writeText(content)
             } catch (e: Exception) {
@@ -154,12 +173,14 @@ object RecentFilesManager {
                 )
 
             // Remove existing entry for this path and add to front
-            val currentFiles = _recentFiles.value.toMutableList()
+            // Over the recorded list, not the displayed one, so opening a file does not drop
+            // entries that are merely on an absent volume.
+            val currentFiles = _allFiles.value.toMutableList()
             currentFiles.removeAll { it.path == filePath }
             currentFiles.add(0, newFile)
 
             // Trim to max size
-            _recentFiles.value = currentFiles.take(MAX_FILES)
+            setFiles(currentFiles.take(MAX_FILES))
             scheduleSave()
         }
     }
@@ -169,7 +190,7 @@ object RecentFilesManager {
      */
     fun removeFile(filePath: String) {
         scope.launch {
-            _recentFiles.value = _recentFiles.value.filter { it.path != filePath }
+            setFiles(_allFiles.value.filter { it.path != filePath })
             scheduleSave()
         }
     }
@@ -179,7 +200,7 @@ object RecentFilesManager {
      */
     fun clearAll() {
         scope.launch {
-            _recentFiles.value = emptyList()
+            setFiles(emptyList())
             scheduleSave()
         }
     }
@@ -189,3 +210,17 @@ object RecentFilesManager {
      */
     fun fileExists(filePath: String): Boolean = File(filePath).exists()
 }
+
+/**
+ * The displayed subset of [all]: entries whose file is present according to [exists].
+ *
+ * Pure and separate so the hide-versus-prune rule is testable without driving the singleton's file
+ * I/O. The other half of that rule - that the **recorded** list is what gets persisted - is
+ * structural rather than tested: `saveImmediately` serialises `_allFiles`, and `setFiles` is the
+ * only writer of either flow. If a future change makes `saveImmediately` read `_recentFiles`, an
+ * absent volume becomes permanent deletion again and nothing here will catch it.
+ */
+internal fun visibleFiles(
+    all: List<RecentFile>,
+    exists: (path: String) -> Boolean,
+): List<RecentFile> = all.filter { exists(it.path) }

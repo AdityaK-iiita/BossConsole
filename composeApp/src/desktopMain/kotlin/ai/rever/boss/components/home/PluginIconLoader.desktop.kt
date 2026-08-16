@@ -12,6 +12,7 @@ import io.ktor.client.request.get
 import io.ktor.client.statement.readRawBytes
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -21,6 +22,11 @@ import java.util.concurrent.ConcurrentHashMap
 import javax.imageio.ImageIO
 
 private val logger = BossLogger.forComponent("PluginIconLoader")
+
+/** A cache entry, so a *resolved absence* can be stored - ConcurrentHashMap rejects null values. */
+private class CachedIcon(
+    val painter: Painter?,
+)
 
 /**
  * Fetches and decodes plugin store icons. Shape follows `HighQualityFaviconService`.
@@ -57,10 +63,12 @@ private object PluginIcons {
      * eviction and invalidation for an icon that can change server-side at any time. A miss costs
      * one small request.
      *
-     * The value is nullable-wrapped so a *failure* is cached too - otherwise every recomposition
-     * would retry an unreachable host.
+     * Keyed on the URL with a **nullable** painter as the value, so a failure caches too -
+     * otherwise every recomposition would retry an unreachable host. `ConcurrentHashMap` cannot
+     * store a null value, hence `Optional`-style wrapping via a one-element holder rather than a
+     * `Result`, which only ever held `success` and read as though failures were `failure`.
      */
-    private val cache = ConcurrentHashMap<String, Result<Painter?>>()
+    private val cache = ConcurrentHashMap<String, CachedIcon>()
 
     private val fetchSemaphore = Semaphore(MAX_CONCURRENT_FETCHES)
 
@@ -82,10 +90,20 @@ private object PluginIcons {
         // The common case: `icon_url` is blank for every row in the store today, so this returns
         // before touching the network and the tile renders the plugin's initials.
         if (iconUrl.isBlank()) return null
-        cache[iconUrl]?.let { return it.getOrNull() }
+        cache[iconUrl]?.let { return it.painter }
+
+        val attempt = runCatching { fetch(iconUrl) }
+
+        // Cancellation is not a fetch failure, and must not be cached as one. `fetch` suspends, so
+        // runCatching also catches CancellationException - and the LaunchedEffect that calls this
+        // is cancelled routinely, whenever a tile leaves composition on a filter change or a
+        // reflow. Absorbing it here would write a permanent "no icon" for a perfectly reachable
+        // URL, so a scroll could lose an icon for the rest of the session. It also breaks
+        // structured concurrency: the cancellation has to reach the caller.
+        attempt.exceptionOrNull()?.let { if (it is CancellationException) throw it }
 
         val painter =
-            runCatching { fetch(iconUrl) }
+            attempt
                 .onFailure { error ->
                     logger.debug(
                         LogCategory.NETWORK,
@@ -96,7 +114,7 @@ private object PluginIcons {
 
         // Cached either way, including null: a plugin whose icon 404s must not be re-requested on
         // every recomposition of the grid.
-        cache[iconUrl] = Result.success(painter)
+        cache[iconUrl] = CachedIcon(painter)
         return painter
     }
 

@@ -42,11 +42,6 @@ data class DashboardApplySplitTemplateEvent(
     val sourceWindowId: String,
 )
 
-data class DashboardActivatePluginEvent(
-    val pluginId: String,
-    val sourceWindowId: String,
-)
-
 /**
  * Open a tab by the [ai.rever.boss.plugin.api.TabTypeId] a plugin registered it under.
  *
@@ -141,10 +136,6 @@ object DashboardEventBus {
     private val _applySplitTemplateEvents = MutableSharedFlow<DashboardApplySplitTemplateEvent>(extraBufferCapacity = 10)
     val applySplitTemplateEvents: SharedFlow<DashboardApplySplitTemplateEvent> = _applySplitTemplateEvents.asSharedFlow()
 
-    // Plugin activation
-    private val _activatePluginEvents = MutableSharedFlow<DashboardActivatePluginEvent>(extraBufferCapacity = 10)
-    val activatePluginEvents: SharedFlow<DashboardActivatePluginEvent> = _activatePluginEvents.asSharedFlow()
-
     // Open a plugin-registered tab type by id
     private val _openTabTypeEvents = MutableSharedFlow<DashboardOpenTabTypeEvent>(extraBufferCapacity = 10)
     val openTabTypeEvents: SharedFlow<DashboardOpenTabTypeEvent> = _openTabTypeEvents.asSharedFlow()
@@ -213,15 +204,6 @@ object DashboardEventBus {
         val event = DashboardApplySplitTemplateEvent(template, sourceWindowId)
         _applySplitTemplateEvents.emit(event)
         ipcBridge?.forward("DashboardApplySplitTemplateEvent", event, sourceWindowId)
-    }
-
-    suspend fun activatePlugin(
-        pluginId: String,
-        sourceWindowId: String,
-    ) {
-        val event = DashboardActivatePluginEvent(pluginId, sourceWindowId)
-        _activatePluginEvents.emit(event)
-        ipcBridge?.forward("DashboardActivatePluginEvent", event, sourceWindowId)
     }
 
     suspend fun openTabType(

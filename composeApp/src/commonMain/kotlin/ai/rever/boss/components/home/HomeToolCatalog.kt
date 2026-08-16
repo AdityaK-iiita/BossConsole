@@ -50,7 +50,6 @@ data class HomePanelInput(
 data class HomeStorePluginInput(
     val pluginId: String,
     val displayName: String,
-    val version: String,
     /**
      * `plugins.icon_url`, passed through verbatim.
      *

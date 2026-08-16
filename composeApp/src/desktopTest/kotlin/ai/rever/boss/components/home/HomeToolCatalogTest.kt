@@ -48,7 +48,6 @@ class HomeToolCatalogTest {
     ) = HomeStorePluginInput(
         pluginId = pluginId,
         displayName = displayName,
-        version = "1.0.0",
         iconUrl = iconUrl,
         requiresAdmin = requiresAdmin,
         isCompatible = compatible,
