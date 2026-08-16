@@ -164,6 +164,78 @@ class FrameStallPolicyTest {
     }
 
     @Test
+    fun `remaining cooldown counts down and reaches zero on the boundary`() {
+        // Drives the deferred retry: a stall found inside the cooldown waits exactly this long
+        // rather than being dropped, so the number has to be the real remainder - too short and
+        // the re-claim is refused again, too long and the page stays blank past the rate limit.
+        val p = policy()
+        assertEquals(0L, p.remainingCooldownMs(0L), "nothing claimed yet, so nothing to wait for")
+        p.claim(1_000L)
+        assertEquals(10_000L, p.remainingCooldownMs(1_000L))
+        assertEquals(1L, p.remainingCooldownMs(10_999L))
+        assertEquals(0L, p.remainingCooldownMs(11_000L))
+    }
+
+    @Test
+    fun `remaining cooldown never goes negative`() {
+        // The caller delays by this value; a negative would throw rather than proceed.
+        val p = policy()
+        p.claim(0L)
+        assertEquals(0L, p.remainingCooldownMs(60_000L))
+    }
+
+    @Test
+    fun `waiting out the remaining cooldown makes the next claim succeed`() {
+        // The deferred-retry contract, end to end on the policy: refused now, granted after
+        // exactly remainingCooldownMs has passed.
+        val p = policy()
+        assertEquals(FrameStallPolicy.Decision.REATTACH, p.claim(0L))
+        val now = 3_000L
+        assertEquals(FrameStallPolicy.Decision.COOLING_DOWN, p.claim(now))
+        val wait = p.remainingCooldownMs(now)
+        assertEquals(7_000L, wait)
+        assertEquals(FrameStallPolicy.Decision.REATTACH, p.claim(now + wait))
+    }
+
+    @Test
+    fun `claimOrDefer grants, defers a cooldown, and refuses a give-up`() {
+        val p = policy()
+        assertEquals(FrameStallPolicy.Claim.Now, p.claimOrDefer(0L))
+        assertEquals(FrameStallPolicy.Claim.After(7_000L), p.claimOrDefer(3_000L))
+        assertEquals(FrameStallPolicy.Claim.Now, p.claimOrDefer(10_000L))
+    }
+
+    @Test
+    fun `a tab that has given up is refused outright, never deferred`() {
+        // The bug this exists for: claim() tests the cap BEFORE the cooldown, so a retired tab
+        // refuses while lastReattachAt is still recent. A caller that asked for the decision and
+        // the leftover cooldown separately would wait out a tab it had just abandoned - logging
+        // "leaving this tab alone" and "deferred until the cooldown expires" about the same
+        // decision, and then possibly un-retiring it when the re-judge found it painting.
+        val p = policy()
+        var now = 0L
+        repeat(3) {
+            assertEquals(FrameStallPolicy.Claim.Now, p.claimOrDefer(now))
+            p.recordAttemptPending()
+            now += 10_000L
+        }
+        // Retired, and only 2.5s since the last re-attach - so there IS cooldown left to read.
+        val soonAfter = now - 7_500L
+        assertTrue(p.remainingCooldownMs(soonAfter) > 0, "precondition: cooldown time remains")
+        assertEquals(FrameStallPolicy.Claim.Refused(firstRefusal = true), p.claimOrDefer(soonAfter))
+        assertEquals(FrameStallPolicy.Claim.Refused(firstRefusal = false), p.claimOrDefer(soonAfter + 1))
+    }
+
+    @Test
+    fun `the deferred wait is exactly what makes the next claim succeed`() {
+        val p = policy()
+        assertEquals(FrameStallPolicy.Claim.Now, p.claimOrDefer(0L))
+        val deferred = p.claimOrDefer(4_000L)
+        assertTrue(deferred is FrameStallPolicy.Claim.After)
+        assertEquals(FrameStallPolicy.Claim.Now, p.claimOrDefer(4_000L + deferred.waitMs))
+    }
+
+    @Test
     fun `attempts counts only granted claims`() {
         val p = policy()
         p.claim(0L)

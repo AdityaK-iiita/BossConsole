@@ -31,6 +31,17 @@ import com.teamdev.jxbrowser.engine.RenderingMode
  * deliberately a recovery and not a cure: it detects a document that committed but never drew, and
  * performs the tab-switch repair on the user's behalf.
  *
+ * **Known limit: only a new document is covered.** The beacon is armed once per document and
+ * latches at [BEACON_PAINTED] for that document's life, so it answers "has this document ever
+ * painted", not "is it painting now". Two consequences, both deliberate. Same-document
+ * navigations (pushState, fragment) are skipped entirely at the call site, because probing one
+ * would read the flag the original load left behind and clear a legitimate ineffective run on
+ * stale evidence. And a stall that *begins* after a document has already painted is invisible -
+ * if Google ever serves the AI Mode transition client-side rather than as a fresh commit, this
+ * stops firing, silently. Catching that would need a liveness beacon (a rolling rAF timestamp
+ * compared against wall time) rather than a latch, which is a different and more expensive
+ * design than the one the measured failure called for.
+ *
  * **Known and accepted: the page can influence the verdict.** The flag lives on `window`, so a
  * page could pin it to `"0"` (forcing a re-attach per navigation, costing flicker) or to `"1"`
  * (suppressing the repair, leaving itself blank). This is the same exposure AGENTS.md already
@@ -106,8 +117,12 @@ internal object BrowserFrameStall {
     fun isStalled(beaconReading: String?): Boolean = beaconReading == BEACON_UNPAINTED
 
     /**
-     * What a post-repair reading says about the re-attach: true painting, false still blank, null
-     * unknown.
+     * What a beacon reading says: true painting, false still blank, null unknown.
+     *
+     * Used for **every** read whose answer feeds the ineffective run - the post-repair
+     * confirmation and the "did it paint unaided" reads - because all of them can be wrong in the
+     * same way. [isStalled] stays the right predicate for the narrower question of whether to
+     * touch the view at all, where an unknown must read as "leave it alone".
      *
      * **Three states, not two, and [isStalled] must not be reused here.** For the *decision* to
      * re-attach, null correctly means "leave it alone". For the *outcome*, `!isStalled(null)`
@@ -244,6 +259,61 @@ internal class FrameStallPolicy(
                 Decision.REATTACH
             }
         }
+    }
+
+    /** What the caller should do about a stall it has just confirmed. */
+    sealed interface Claim {
+        /** Granted; the attempt is already recorded. */
+        object Now : Claim
+
+        /** Refused for now, but [waitMs] from now it would be granted. */
+        data class After(
+            val waitMs: Long,
+        ) : Claim
+
+        /** Refused for good. [firstRefusal] is true exactly once, for the log. */
+        data class Refused(
+            val firstRefusal: Boolean,
+        ) : Claim
+    }
+
+    /**
+     * [claim], answered in the form the caller actually needs.
+     *
+     * **One synchronized call, deliberately.** Asking `claim` and then `remainingCooldownMs`
+     * separately is two decisions about a clock that moved in between, and it conflates two
+     * different refusals: [claim] tests the give-up cap *before* the cooldown, so a retired tab
+     * refuses while `lastReattachAt` is still recent, and a caller reading the leftover cooldown
+     * would deferentially wait out a tab it has already abandoned - logging "leaving this tab
+     * alone" and "deferred until the cooldown expires" about the same decision, then possibly
+     * un-retiring it. Returning the reason with the wait makes that unrepresentable, and it
+     * removes the boundary race where the remainder reaches 0 between the two reads and a
+     * grantable repair is dropped.
+     */
+    @Synchronized
+    fun claimOrDefer(nowMs: Long): Claim =
+        when (claim(nowMs)) {
+            Decision.REATTACH -> Claim.Now
+            Decision.COOLING_DOWN -> Claim.After(remainingCooldownMs(nowMs))
+            Decision.GIVE_UP_NOW -> Claim.Refused(firstRefusal = true)
+            Decision.GIVEN_UP -> Claim.Refused(firstRefusal = false)
+        }
+
+    /**
+     * How much of the cooldown is left at [nowMs], or 0 when a claim would be granted now.
+     *
+     * Exists so a stall arriving inside the cooldown can be **deferred rather than dropped**. The
+     * cooldown bounds how often the view is rebuilt; it is not a decision that a blank page stays
+     * blank. The decision point is `ARM_DELAY_MS + 2 * READ_GAP_MS` after a commit and the
+     * cooldown is four times that, so two stalling commits close together used to leave the second
+     * one blank with nothing logged - the same "no signal at all" this whole feature exists to
+     * remove, and on the page it targets, which is one people iterate on. Waiting out the
+     * remainder and claiming once respects the rate limit and still repairs the page.
+     */
+    @Synchronized
+    fun remainingCooldownMs(nowMs: Long): Long {
+        val last = lastReattachAt ?: return 0L
+        return (cooldownMs - (nowMs - last)).coerceAtLeast(0L)
     }
 
     /**
