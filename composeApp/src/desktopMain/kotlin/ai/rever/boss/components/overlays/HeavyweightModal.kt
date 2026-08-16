@@ -73,7 +73,7 @@ fun HeavyweightModal(
             }
         },
     ) {
-        EnsureOverlayWindowTransparent(window)
+        EnsureOverlayWindowTransparent(window, kind = "modal")
         ApplyBossWindowIcon(window)
 
         // Dismiss when the modal loses focus (clicked elsewhere), matching modal expectations —

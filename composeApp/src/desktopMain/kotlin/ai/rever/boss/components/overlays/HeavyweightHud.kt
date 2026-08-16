@@ -49,7 +49,7 @@ fun HeavyweightHud(
         resizable = false,
         icon = BossWindowIcon.painter,
     ) {
-        EnsureOverlayWindowTransparent(window)
+        EnsureOverlayWindowTransparent(window, kind = "hud")
         ApplyBossWindowIcon(window)
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = alignment) {
             content()

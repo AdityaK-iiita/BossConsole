@@ -331,4 +331,80 @@ class HeavyweightOverlayTest {
         // is the case the focus-loss dismissal actually exists for.
         assertTrue(shouldDismissOnFocusLoss(openHeavyweightPopups = 0, oppositeWindow = null))
     }
+
+    // --- overlay transparency diagnosis ---
+
+    // A false verdict from overlayWillPaintOpaque does NOT mean the overlay looked right. It was
+    // measured false on a window that was visibly grey, and that disagreement is what proved the
+    // opacity lives below Java. These tests pin what the predicate claims about skiko's clear rule,
+    // and nothing about what reached the screen.
+
+    @Test
+    fun `an overlay paints transparent only when the flag is on and the clear colour has no alpha`() {
+        // Mirrors skiko's own rule, which is the whole reason this predicate exists rather than a
+        // bare `!transparency`: SkiaLayer clears with `bg` when transparency is on, and with
+        // `bg or 0xFF000000` otherwise. So the flag being on is necessary and NOT sufficient - a
+        // layer whose background is opaque clears opaque either way, and that pair
+        // (transparency on, background inherited opaque) is what a null layer background
+        // degenerates into.
+        assertFalse(overlayWillPaintOpaque(transparency = true, backgroundAlpha = 0))
+        assertTrue(overlayWillPaintOpaque(transparency = false, backgroundAlpha = 0))
+        assertTrue(overlayWillPaintOpaque(transparency = true, backgroundAlpha = 255))
+        assertTrue(overlayWillPaintOpaque(transparency = false, backgroundAlpha = 255))
+    }
+
+    @Test
+    fun `a layer this could not inspect is reported as opaque, never as healthy`() {
+        // Both inputs are null when reflection could not reach the Skia layer at all. Reporting
+        // "healthy" there is the one answer indistinguishable from a genuine pass, which would make
+        // the entire diagnostic unfalsifiable - the same trap the AWT-background check it replaces
+        // fell into, where a condition that could never be true read as evidence that nothing was
+        // wrong.
+        assertTrue(overlayWillPaintOpaque(transparency = null, backgroundAlpha = null))
+        assertTrue(overlayWillPaintOpaque(transparency = true, backgroundAlpha = null))
+        assertTrue(overlayWillPaintOpaque(transparency = null, backgroundAlpha = 0))
+    }
+
+    @Test
+    fun `the native re-assert runs only on macOS, on a transparent window, where it can complete`() {
+        // The happy path, and the only combination that should act.
+        assertTrue(shouldReassertTransparency(backgroundAlpha = 0, isMacOs = true, translucencyCapable = true))
+
+        // Not macOS. The bug and its mechanism are macOS-only, and this gate is the whole basis of
+        // the claim that Windows and Linux cannot regress - which was previously argued in prose
+        // from skiko internals, and was wrong: resolveRenderingMode returns HARDWARE_ACCELERATED on
+        // every platform, so every platform reaches this code.
+        assertFalse(shouldReassertTransparency(backgroundAlpha = 0, isMacOs = false, translucencyCapable = true))
+
+        // Not a transparent overlay. null is what skiko leaves on Windows without Direct3D; forcing
+        // translucency onto either would be inventing a change rather than repairing one.
+        assertFalse(shouldReassertTransparency(backgroundAlpha = null, isMacOs = true, translucencyCapable = true))
+        assertFalse(shouldReassertTransparency(backgroundAlpha = 255, isMacOs = true, translucencyCapable = true))
+    }
+
+    @Test
+    fun `an incapable or unknown graphics configuration refuses, because a half-done cycle is the bug`() {
+        // Window.setBackground applies super.setBackground first and only then throws for a
+        // configuration that cannot do per-pixel translucency - after the opaque leg has already set
+        // the layered, root and content panes opaque, and before the leg that would reverse them. An
+        // opaque content pane filling before Skia draws IS the grey backdrop, so attempting the cycle
+        // here would manufacture the very fault being repaired.
+        assertFalse(shouldReassertTransparency(backgroundAlpha = 0, isMacOs = true, translucencyCapable = false))
+        // Unknown is refused, not attempted. Everywhere else in this file an unreadable value is
+        // treated as the pessimistic answer; here the pessimistic answer is "do not touch it".
+        assertFalse(shouldReassertTransparency(backgroundAlpha = 0, isMacOs = true, translucencyCapable = null))
+    }
+
+    @Test
+    fun `the skia layer is matched by its fully qualified skiko class name`() {
+        // A headless test cannot construct a real SkiaLayer - it needs a display and a render
+        // device - so this predicate is the only part of the tree walk a unit test can reach, and
+        // it is the part that silently stops matching if skiko ever moves the class. A near miss
+        // must not match: the walk would then read getTransparency() off the wrong component and
+        // report a confident, wrong answer.
+        assertTrue(isSkiaLayerClassName("org.jetbrains.skiko.SkiaLayer"))
+        assertFalse(isSkiaLayerClassName("SkiaLayer"))
+        assertFalse(isSkiaLayerClassName("org.jetbrains.skiko.SkiaLayerKt"))
+        assertFalse(isSkiaLayerClassName("androidx.compose.ui.awt.ComposeWindowPanel"))
+    }
 }

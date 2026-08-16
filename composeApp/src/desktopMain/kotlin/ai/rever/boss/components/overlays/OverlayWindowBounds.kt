@@ -3,7 +3,6 @@ package ai.rever.boss.components.overlays
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
@@ -120,53 +119,3 @@ internal fun overlayRectOrScreen(
     bounds: IntArray?,
     screen: IntArray,
 ): IntArray = bounds ?: screen
-
-/**
- * Re-assert that an overlay window is actually translucent, because `transparent = true`
- * intermittently does not take on macOS.
- *
- * Observed on a live macOS HARDWARE build: opening the New Tab dialog produced a flat mid-grey
- * over the whole window instead of the app dimmed behind the dialog. The dialog itself drew
- * correctly, which is what identifies the layer at fault — the backdrop, not the content.
- *
- * The colour is the evidence. The dialog scrim is `Color.Black.copy(alpha = 0.4f)`. Over the
- * app's own dark chrome that composites to nearly black; the observed backdrop was a uniform
- * mid-grey, which is what 40% black over an opaque LIGHT background gives (0.6 x 255 = #999,
- * or #8E over AWT's default #ECECEC). So the scrim was compositing over the overlay window's
- * own opaque background rather than over the app beneath it.
- *
- * Compose's `transparent = true` reaches AWT as a fully transparent window background, and on
- * macOS that has to be applied before the native window is ordered on screen. When it loses
- * that race the window stays opaque for its whole life — it is created once and never resized,
- * so nothing later triggers a correction. Hence: check after realization, and set it again.
- *
- * Deliberately a CHECK-then-set with a warning rather than an unconditional assignment. If the
- * race is not the cause, this stays silent and changes nothing, and the absence of the warning
- * is itself the signal that the diagnosis was wrong — which is the same reason the bounds
- * fallback above logs. Assigning unconditionally would hide that.
- */
-@Composable
-internal fun EnsureOverlayWindowTransparent(window: Window) {
-    // SideEffect, not DisposableEffect with an empty onDispose: there is nothing to undo when the
-    // window goes away, and an empty onDispose invites a reader to wonder what is missing.
-    SideEffect {
-        runCatching {
-            if (window.background?.alpha != 0) {
-                logger.warn(
-                    LogCategory.UI,
-                    "Overlay window came up opaque - re-asserting transparency",
-                    mapOf("background" to window.background.toString()),
-                )
-                window.background = java.awt.Color(0, 0, 0, 0)
-            }
-        }.onFailure {
-            // Never fatal: an opaque overlay is ugly, an exception here would take the dialog
-            // down with it.
-            logger.warn(
-                LogCategory.UI,
-                "Could not re-assert overlay window transparency",
-                mapOf("error" to it.toString()),
-            )
-        }
-    }
-}

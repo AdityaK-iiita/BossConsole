@@ -139,7 +139,7 @@ fun HeavyweightCorner(
         resizable = false,
         icon = BossWindowIcon.painter,
     ) {
-        EnsureOverlayWindowTransparent(window)
+        EnsureOverlayWindowTransparent(window, kind = "corner")
         ApplyBossWindowIcon(window)
         Box(
             modifier =

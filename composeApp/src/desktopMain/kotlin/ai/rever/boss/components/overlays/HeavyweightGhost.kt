@@ -105,7 +105,7 @@ fun HeavyweightGhost(
         resizable = false,
         icon = BossWindowIcon.painter,
     ) {
-        EnsureOverlayWindowTransparent(window)
+        EnsureOverlayWindowTransparent(window, kind = "ghost")
         ApplyBossWindowIcon(window)
         Box(modifier = Modifier.fillMaxSize()) {
             content()

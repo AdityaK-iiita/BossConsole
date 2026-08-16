@@ -126,7 +126,7 @@ fun HeavyweightPopup(
             }
         },
     ) {
-        EnsureOverlayWindowTransparent(window)
+        EnsureOverlayWindowTransparent(window, kind = "popup")
         ApplyBossWindowIcon(window)
         RegisterOpenPopup()
 
