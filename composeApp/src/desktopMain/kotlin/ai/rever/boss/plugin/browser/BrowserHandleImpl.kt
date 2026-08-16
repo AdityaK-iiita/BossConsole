@@ -10,12 +10,14 @@ import ai.rever.boss.utils.MacOSGestureHandler
 import ai.rever.boss.utils.WindowFocusManager
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
+import ai.rever.boss.utils.logging.LogSanitizer
 import ai.rever.boss.window.BossWindowIcon
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -98,6 +100,8 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import javax.swing.JFrame
 import javax.swing.SwingUtilities
@@ -408,6 +412,104 @@ internal class BrowserHandleImpl(
     // Main-thread scope for injection/teardown (rrweb inject + executeJavaScript run on Main).
     private val coBrowseScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+    /**
+     * Bumped to re-attach the browser view after a committed document never drew. Read in
+     * [Content], so it has to be Compose state rather than a plain field.
+     *
+     * See [BrowserFrameStall] for the measurements behind this.
+     */
+    private var viewGeneration by mutableStateOf(0)
+
+    /**
+     * How many compositions currently show this handle's view.
+     *
+     * **Ref-counted, not a boolean, for the reason [BrowserVisitTracker.setVisible] spells out**:
+     * the caller is a `DisposableEffect` per composition, and a tab moving between windows tears
+     * down one composition while building another in an order the effect does not control. As a
+     * plain boolean the compose-then-dispose order lands on false while the tab is on screen, and
+     * here that would silently disable the watchdog for exactly the tab the user just dragged,
+     * until they hid and re-showed it. Failing safe is not enough when the failure is invisible.
+     *
+     * The gate itself is needed because Chromium serves no frames to a view that is not on screen:
+     * a commit in a background tab, or in a handle a plugin created and never rendered, reads "no
+     * frame" perfectly correctly, and re-attaching it repairs nothing while logging a warning that
+     * is false. Session restore with N background tabs would be N false warnings per launch.
+     */
+    private val composedSurfaces = AtomicInteger(0)
+
+    /**
+     * The AWT window this handle's view is bound to, for the on-screen half of [viewComposed].
+     * Null until [Content] resolves one, and treated as "assume showing" while it is.
+     */
+    @Volatile private var frameStallHostWindow: Window? = null
+
+    /**
+     * Whether this view is genuinely on screen: composed **and** in a window that is showing and
+     * not minimized.
+     *
+     * Composition alone is not the same thing. A minimized window keeps its composition alive, so
+     * its foreground tab would pass a composed-only gate while Chromium is legitimately not
+     * painting it - and the cost of that false positive is not merely a wasted WARN but a view
+     * rebuild, which drops keyboard focus and IME state in that tab.
+     */
+    private val viewComposed: Boolean
+        get() {
+            if (composedSurfaces.get() <= 0) return false
+            val window = frameStallHostWindow ?: return true
+            // Fully qualified: this file already imports JxBrowser's Frame, and an unqualified
+            // one here resolves to that rather than the AWT window type.
+            return runCatching {
+                val minimized =
+                    (window as? java.awt.Frame)
+                        ?.let { it.extendedState and java.awt.Frame.ICONIFIED != 0 }
+                        ?: false
+                window.isShowing && !minimized
+            }.getOrDefault(true)
+        }
+
+    /** Cooldown, give-up counting and the log-once flag, extracted so they are unit-testable. */
+    private val frameStallPolicy = FrameStallPolicy()
+
+    /**
+     * Waits on the frame-stall probe. Separate from [coBrowseScope] so a co-browse teardown cannot
+     * cancel a pending check, and on Default so [withTimeoutOrNull] can actually fire - the
+     * blocking round-trip itself runs on [frameProbeDispatcher], never here and never on the EDT.
+     *
+     * Carries a handler for the same reason [contextMenuScope] does: the body hops to Main during
+     * what may be window teardown, and an escaping failure would otherwise reach the default
+     * handler and print to stderr, bypassing BossLogger.
+     */
+    private val frameStallScope =
+        CoroutineScope(
+            SupervisorJob() +
+                Dispatchers.Default +
+                CoroutineExceptionHandler { _, error ->
+                    logger.warn(LogCategory.BROWSER, "Frame-stall check failed", error = error)
+                },
+        )
+
+    /**
+     * Off-thread executor for the beacon round-trip, mirroring [contextMenuLookupDispatcher] and
+     * for the same reason spelled out there: `executeJavaScript` blocks and nothing can interrupt
+     * it, so against a wedged renderer this costs one parked daemon thread rather than a frozen
+     * UI. That matters more here than for the context menu - this probe exists to interrogate a
+     * page already suspected of misbehaving, and it runs on every http(s) commit.
+     */
+    private val frameProbeExecutor =
+        Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "boss-frame-probe-$id").apply { isDaemon = true }
+        }
+    private val frameProbeDispatcher = frameProbeExecutor.asCoroutineDispatcher()
+
+    /**
+     * The in-flight check, swapped atomically.
+     *
+     * A redirect chain fires NavigationFinished repeatedly and only the document that finally
+     * sticks is worth judging. `getAndSet` rather than read-cancel-assign so that does not rest on
+     * an assumption about JxBrowser delivering navigation events on one thread.
+     */
+    private val frameStallJob = AtomicReference<Job?>(null)
+
     // Off-thread executor for context-menu detail lookups. The form-field inspection is a
     // blocking JS round-trip, and it must not run on the JxBrowser callback thread (which
     // is answering the menu request) nor on the UI thread.
@@ -492,6 +594,162 @@ internal class BrowserHandleImpl(
         }
     }
 
+    /**
+     * Read the frame beacon, or null if the round-trip could not be made in time.
+     *
+     * The blocking call is confined to [frameProbeDispatcher] and only the *wait* is bounded, so a
+     * renderer that never answers parks that one daemon thread instead of anything shared. Null
+     * and "0" are kept apart on purpose: see [BrowserFrameStall.isStalled].
+     */
+    private suspend fun readFrameBeacon(): String? {
+        if (!isValid) return null
+        // Raced rather than wrapped, exactly as the context-menu lookup is: executeJavaScript has
+        // no suspension point, so a cancelled withTimeoutOrNull could not interrupt it.
+        val probe =
+            frameStallScope.async(frameProbeDispatcher) {
+                runCatching {
+                    browser.mainFrame().orElse(null)?.executeJavaScript<String?>(BrowserFrameStall.BEACON_SCRIPT)
+                }.getOrNull()
+            }
+        val reading = withTimeoutOrNull(BrowserFrameStall.PROBE_TIMEOUT_MS) { probe.await() }
+        // The probe is a child of the scope, not of this coroutine, so neither the timeout above
+        // nor a supersede cancels it. Left alone, one still queued behind a blocked probe on the
+        // single-thread executor would run later against whatever document is current by then.
+        // A queued coroutine honours this immediately; one already inside executeJavaScript is
+        // unaffected either way, which is the parked-thread cost frameProbeExecutor documents.
+        if (reading == null) probe.cancel()
+        return reading
+    }
+
+    /**
+     * Whether a re-attach is allowed right now, and record it if so.
+     *
+     * Bounded like `EngineWedgeDetector`'s recycle: past the cap the handle degrades to the
+     * pre-existing behaviour (the user switches tabs themselves) rather than flickering forever.
+     */
+
+    /**
+     * Note that a handle which has given up still probes on every commit. That reads like waste and
+     * is not: [FrameStallPolicy.recordHealthyNavigation] is only reachable from a reading, so
+     * probing is the only way a retired tab can ever come back. Giving up means "stop re-attaching",
+     * not "stop looking".
+     */
+    private fun claimReattachSlot(): Boolean {
+        // Monotonic, not wall clock: an NTP step must not stretch or shorten the cooldown.
+        val decision = frameStallPolicy.claim(System.nanoTime() / 1_000_000L)
+        if (decision == FrameStallPolicy.Decision.GIVE_UP_NOW) {
+            logger.warn(
+                LogCategory.BROWSER,
+                "Re-attaching stopped helping - leaving this tab alone",
+                mapOf(
+                    "ineffectiveInARow" to frameStallPolicy.ineffectiveInARow.toString(),
+                    "attemptsTotal" to frameStallPolicy.attempts.toString(),
+                ),
+            )
+        }
+        return decision == FrameStallPolicy.Decision.REATTACH
+    }
+
+    /**
+     * Watch a freshly committed document and re-attach the view if it never draws.
+     *
+     * The repair is the same one a user performs by switching tabs: bumping [viewGeneration]
+     * takes the browser view out of composition and puts it back, which re-attaches the native
+     * view and restarts frame production. Verified end to end - a blanked AI Mode page goes from
+     * 0 rAF callbacks to painting normally. See [BrowserFrameStall].
+     */
+    private fun scheduleFrameStallCheck(url: String?) {
+        if (!BrowserFrameStall.shouldWatch(url, JxBrowserConfig.renderingMode)) return
+        val started =
+            frameStallScope.launch {
+                // The first call arms the beacon and always answers "not painted", so it is not a
+                // reading and is not treated as one. See BrowserFrameStall.ARM_DELAY_MS.
+                delay(BrowserFrameStall.ARM_DELAY_MS)
+                if (!viewComposed) return@launch
+                // A null here means the arm never landed - the probe timed out, the main frame was
+                // gone mid-commit. Carrying on would silently spend the first loop iteration
+                // arming, leaving one real reading where the design promises two, and it would do
+                // so against exactly the slow renderers most likely to be honestly mid-paint. A
+                // commit that could not be probed at all is not evidence of a stall.
+                if (readFrameBeacon() == null) return@launch
+
+                // Two real readings. A page still blocked on a render-blocking resource can
+                // honestly have drawn nothing at the first one.
+                repeat(2) {
+                    delay(BrowserFrameStall.READ_GAP_MS)
+                    if (!viewComposed) return@launch
+                    if (!BrowserFrameStall.isStalled(readFrameBeacon())) {
+                        // Painted unaided, so this tab is evidently fine - let that decay any
+                        // earlier ineffective attempts rather than holding them against it.
+                        // Read before the reset, since the reset is what clears it.
+                        val wasRetired = frameStallPolicy.hasGivenUp
+                        frameStallPolicy.recordHealthyNavigation()
+                        if (wasRetired) {
+                            // The counterpart to the give-up line, so a log that says a tab was
+                            // abandoned also says when it came back.
+                            logger.info(
+                                LogCategory.BROWSER,
+                                "Tab painted unaided - frame-stall watchdog active again",
+                                mapOf("attemptsTotal" to frameStallPolicy.attempts.toString()),
+                            )
+                        }
+                        return@launch
+                    }
+                }
+
+                if (!claimReattachSlot()) return@launch
+                // Booked as ineffective before the repair, upgraded only by an observed recovery.
+                // Everything that can end this job before the confirmation - a fresh commit
+                // superseding it, the view leaving composition, a probe that never answers - would
+                // otherwise leave the attempt uncounted, and a tab that keeps reading unpainted
+                // would re-attach every cooldown forever without ever reaching the cap.
+                frameStallPolicy.recordAttemptPending()
+                logger.warn(
+                    LogCategory.BROWSER,
+                    "Committed page served no frame - re-attaching the browser view",
+                    mapOf(
+                        "url" to LogSanitizer.maskUriParams(url.orEmpty()),
+                        "attempt" to frameStallPolicy.attempts.toString(),
+                    ),
+                )
+                withContext(Dispatchers.Main) { viewGeneration += 1 }
+
+                // Did the repair take? This both feeds the give-up counter and is the one datum
+                // worth having if this ever needs escalating to TeamDev, since it is a recovery
+                // for a fault we do not own.
+                //
+                // The beacon is per-document and already armed, so it keeps reporting the same
+                // document across the re-attach - which is exactly what makes this readable as
+                // "did re-attaching start frames for THIS page".
+                delay(BrowserFrameStall.READ_GAP_MS)
+                // Gated like the decision reads, and for the same reason: a tab hidden inside this
+                // window reads "0" because Chromium does not paint hidden pages, and recording that
+                // as an ineffective repair would retire the watchdog on a false reading.
+                if (!viewComposed) return@launch
+                // Three outcomes, not two. isStalled(null) is false, so reusing it here would read
+                // a probe that never answered as a success - and credit the repair in exactly the
+                // wedged-renderer case the cap exists to stop. See BrowserFrameStall.repairOutcome.
+                val outcome = BrowserFrameStall.repairOutcome(readFrameBeacon())
+                if (outcome == true) frameStallPolicy.recordRecovered()
+                val detail =
+                    mapOf(
+                        "attempt" to frameStallPolicy.attempts.toString(),
+                        "ineffectiveInARow" to frameStallPolicy.ineffectiveInARow.toString(),
+                    )
+                when (outcome) {
+                    true -> logger.info(LogCategory.BROWSER, "Browser view re-attached and painting", detail)
+
+                    false -> logger.info(LogCategory.BROWSER, "Browser view re-attached and still not painting", detail)
+
+                    // Counted against the tab by recordAttemptPending, deliberately: an
+                    // unanswerable probe is evidence of a renderer this cannot repair.
+                    null -> logger.info(LogCategory.BROWSER, "Browser view re-attached, outcome unknown", detail)
+                }
+            }
+        // Supersede rather than stack: only the document that finally sticks is worth judging.
+        frameStallJob.getAndSet(started)?.cancel()
+    }
+
     private fun setupEventListeners() {
         // Navigation started - track loading state
         subscriptions +=
@@ -530,6 +788,7 @@ internal class BrowserHandleImpl(
                 // incorrectly updating the URL bar in plugins
                 if (event.isInMainFrame) {
                     val url = event.url()
+                    scheduleFrameStallCheck(url)
                     navigationListeners.forEach { listener ->
                         try {
                             listener(url)
@@ -2031,7 +2290,14 @@ internal class BrowserHandleImpl(
         // so a consumer that cares can intersect the two.
         DisposableEffect(Unit) {
             visitTracker.setVisible(true)
-            onDispose { visitTracker.setVisible(false) }
+            // Same signal, second consumer, and ref-counted for the same ordering reason: the
+            // frame-stall probe must not judge a view that is not on screen, because Chromium
+            // serves no frames to one. See composedSurfaces.
+            composedSurfaces.incrementAndGet()
+            onDispose {
+                visitTracker.setVisible(false)
+                composedSurfaces.decrementAndGet()
+            }
         }
 
         // Which window telemetry is attributed to, kept current across a tab move. Its own
@@ -2062,6 +2328,10 @@ internal class BrowserHandleImpl(
                             false
                         }
                     }
+
+            // Published for the frame-stall gate, which needs to know whether the window this view
+            // lives in is actually showing - composition alone stays alive while it is minimized.
+            frameStallHostWindow = awtWindow
 
             // Reuse a retained surface ONLY while it still belongs to this window. This effect is
             // keyed on hostWindowId precisely so a tab moved to another window rebinds (see the
@@ -2206,59 +2476,67 @@ internal class BrowserHandleImpl(
         // pinch gate compares AWT logical units against pixel bounds using it.
         val viewDensity = LocalDensity.current.density
 
-        // Render the browser view if available with mouse button handling
+        // Render the browser view if available with mouse button handling.
+        //
+        // Keyed on viewGeneration so the stall watchdog can force the view out of composition and
+        // back, which is what re-attaches the native view when a committed page never drew. The
+        // BrowserViewState is deliberately NOT rebuilt with it: the manual repair this imitates (a
+        // tab switch) reuses the retained surface too, so re-attaching is what matters and
+        // rebuilding the surface would cost far more than it fixes.
         viewState?.let { state ->
-            BrowserView(
-                state = state,
-                modifier =
-                    Modifier
-                        .fillMaxSize()
-                        .offset(y = hardwareTopInsetDp.dp)
-                        // Where this view is, for the pinch gate under HARDWARE_ACCELERATED —
-                        // the only signal available there, since a foreign native surface means
-                        // Compose never reports the pointer entering. Clipped bounds, so a view
-                        // scrolled half out of the window does not claim the hidden half.
-                        .onGloballyPositioned { coords ->
-                            browserViewBoundsInWindow = coords.boundsInWindow()
-                            // Captured with the bounds, from the same layout pass, so the two can
-                            // never describe different displays after a window is dragged between
-                            // monitors. See pointerInsideBounds for why the pairing is required.
-                            browserViewDensity = viewDensity
-                        }
-                        // Hover tracking that gates the window-wide pinch gesture listener to
-                        // this view under OFF_SCREEN (see the DisposableEffect above). Never
-                        // fires under HARDWARE_ACCELERATED; see shouldAllowPinch.
-                        .onPointerEvent(PointerEventType.Enter) { pointerOverBrowserView = true }
-                        .onPointerEvent(PointerEventType.Exit) { pointerOverBrowserView = false }
-                        .onPointerEvent(PointerEventType.Press) { event ->
-                            // Get the native AWT mouse event to check button codes
-                            val awtEvent = event.nativeEvent as? java.awt.event.MouseEvent
-
-                            // Handle mouse back button - navigate back
-                            // Windows/macOS: awtButton=4, Linux: awtButton=6 or 8 (varies by mouse)
-                            if (awtEvent?.button in listOf(4, 6, 8)) {
-                                val now = System.currentTimeMillis()
-                                if (isValid && (now - lastNavigationTime) > 100 && canGoBack()) {
-                                    lastNavigationTime = now
-                                    goBack()
-                                }
-                                event.changes.forEach { it.consume() }
-                                return@onPointerEvent
+            key(viewGeneration) {
+                BrowserView(
+                    state = state,
+                    modifier =
+                        Modifier
+                            .fillMaxSize()
+                            .offset(y = hardwareTopInsetDp.dp)
+                            // Where this view is, for the pinch gate under HARDWARE_ACCELERATED —
+                            // the only signal available there, since a foreign native surface means
+                            // Compose never reports the pointer entering. Clipped bounds, so a view
+                            // scrolled half out of the window does not claim the hidden half.
+                            .onGloballyPositioned { coords ->
+                                browserViewBoundsInWindow = coords.boundsInWindow()
+                                // Captured with the bounds, from the same layout pass, so the two can
+                                // never describe different displays after a window is dragged between
+                                // monitors. See pointerInsideBounds for why the pairing is required.
+                                browserViewDensity = viewDensity
                             }
+                            // Hover tracking that gates the window-wide pinch gesture listener to
+                            // this view under OFF_SCREEN (see the DisposableEffect above). Never
+                            // fires under HARDWARE_ACCELERATED; see shouldAllowPinch.
+                            .onPointerEvent(PointerEventType.Enter) { pointerOverBrowserView = true }
+                            .onPointerEvent(PointerEventType.Exit) { pointerOverBrowserView = false }
+                            .onPointerEvent(PointerEventType.Press) { event ->
+                                // Get the native AWT mouse event to check button codes
+                                val awtEvent = event.nativeEvent as? java.awt.event.MouseEvent
 
-                            // Handle mouse forward button - navigate forward
-                            // Windows/macOS: awtButton=5, Linux: awtButton=7 or 9 (varies by mouse)
-                            if (awtEvent?.button in listOf(5, 7, 9)) {
-                                val now = System.currentTimeMillis()
-                                if (isValid && (now - lastNavigationTime) > 100 && canGoForward()) {
-                                    lastNavigationTime = now
-                                    goForward()
+                                // Handle mouse back button - navigate back
+                                // Windows/macOS: awtButton=4, Linux: awtButton=6 or 8 (varies by mouse)
+                                if (awtEvent?.button in listOf(4, 6, 8)) {
+                                    val now = System.currentTimeMillis()
+                                    if (isValid && (now - lastNavigationTime) > 100 && canGoBack()) {
+                                        lastNavigationTime = now
+                                        goBack()
+                                    }
+                                    event.changes.forEach { it.consume() }
+                                    return@onPointerEvent
                                 }
-                                event.changes.forEach { it.consume() }
-                                return@onPointerEvent
-                            }
-                        },
-            )
+
+                                // Handle mouse forward button - navigate forward
+                                // Windows/macOS: awtButton=5, Linux: awtButton=7 or 9 (varies by mouse)
+                                if (awtEvent?.button in listOf(5, 7, 9)) {
+                                    val now = System.currentTimeMillis()
+                                    if (isValid && (now - lastNavigationTime) > 100 && canGoForward()) {
+                                        lastNavigationTime = now
+                                        goForward()
+                                    }
+                                    event.changes.forEach { it.consume() }
+                                    return@onPointerEvent
+                                }
+                            },
+                )
+            }
         }
     }
 
@@ -2284,6 +2562,13 @@ internal class BrowserHandleImpl(
         coBrowseSink = null
         coBrowseBridge.onEvent = null
         coBrowseScope.cancel()
+        // A pending frame-stall probe outlives the tab otherwise, and its next act is a blocking
+        // executeJavaScript against a browser that is being torn down. shutdown() not
+        // shutdownNow(), for the same reason as the context-menu executor: a round-trip already
+        // inside executeJavaScript cannot be interrupted, and the thread is daemon.
+        frameStallJob.getAndSet(null)?.cancel()
+        frameStallScope.cancel()
+        frameProbeExecutor.shutdown()
         // Stops queued menu lookups from starting. A lookup already blocked inside
         // executeJavaScript cannot be interrupted by cancellation — the delivery site
         // checks `disposed` before handing anything back. shutdown() (not shutdownNow())
