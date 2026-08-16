@@ -1,6 +1,10 @@
 package ai.rever.boss.window
 
 import ai.rever.boss.BossAppWithAuth
+import ai.rever.boss.components.bars.ChromeBar
+import ai.rever.boss.components.bars.displayName
+import ai.rever.boss.components.bars.isBarVisible
+import ai.rever.boss.components.bars.withBarVisible
 import ai.rever.boss.components.dialogs.CLIInstallationDialog
 import ai.rever.boss.components.dialogs.ImportDataDialog
 import ai.rever.boss.components.window_panel.components.main_window_panels.createBossAppContext
@@ -316,6 +320,9 @@ fun ApplicationScope.BossWindow(
         val focusModeSettings by FocusModeSettingsManager.currentSettings.collectAsState()
         val isFocusModeEnabled = focusModeSettings.enabled
 
+        // Drives the checkmarks on View > Show <bar>
+        val appearanceSettings by WindowAppearanceSettingsManager.currentSettings.collectAsState()
+
         // Get workspace list for workspace submenu
         val workspaceManager =
             remember {
@@ -604,6 +611,32 @@ fun ApplicationScope.BossWindow(
                 )
 
                 ResourceModeMenu()
+
+                Separator()
+
+                // Per-bar show/hide. CheckboxItem rather than the dynamic "(On)/(Off)" label the
+                // Focus Mode item above uses: four consecutive entries each restating their own
+                // state in their text reads badly, and a checkmark is what an OS menu uses to say
+                // "this is on". These are also the only way back from a bar's "Hide" context-menu
+                // item, so they must stay in View rather than living only in Settings.
+                //
+                // Written straight to the manager from menuScope: these are global settings, not
+                // per-window actions, so they need none of the MenuActionsHandler routing the
+                // items below use.
+                ChromeBar.entries.forEach { bar ->
+                    CheckboxItem(
+                        "Show ${bar.displayName()}",
+                        checked = appearanceSettings.isBarVisible(bar),
+                        onCheckedChange = { visible ->
+                            menuScope.launch {
+                                WindowAppearanceSettingsManager.updateSettings(
+                                    WindowAppearanceSettingsManager.currentSettings.value
+                                        .withBarVisible(bar, visible),
+                                )
+                            }
+                        },
+                    )
+                }
 
                 Separator()
 

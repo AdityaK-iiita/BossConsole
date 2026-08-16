@@ -116,7 +116,12 @@ class FocusModeRevealTest {
         rule.setContent {
             val state = rememberFocusModeReveal(settings)
             Box(modifier = Modifier.fillMaxSize()) {
-                FocusModeHoverStrips(state = state, settings = settings, revealOffsetDp = 30.dp)
+                FocusModeHoverStrips(
+                    state = state,
+                    settings = settings,
+                    revealOffsetDp = 30.dp,
+                    barVisible = { true },
+                )
             }
         }
         rule.waitForIdle()
@@ -127,6 +132,40 @@ class FocusModeRevealTest {
         rule.onNodeWithTag(focusStripTag(FocusModeEdge.BOTTOM)).assertExists()
         rule.onNodeWithTag(focusStripTag(FocusModeEdge.LEFT)).assertDoesNotExist()
         rule.onNodeWithTag(focusStripTag(FocusModeEdge.RIGHT)).assertDoesNotExist()
+    }
+
+    /**
+     * A bar switched off in `WindowAppearanceSettings` gets no strip either.
+     *
+     * Same rule as the test above, applied to the other way a bar can be absent: hover cannot bring
+     * such a bar back (the scaffold requires the preference AND the reveal flag), so the strip would
+     * be a dead 30dp band over live content. At the top edge it is worse than dead - sweeping it
+     * flips `shown` to true, which takes the quick-actions cluster away without putting the bar back.
+     */
+    @Test
+    fun `no strip for an edge whose bar is switched off in settings`() {
+        val settings =
+            FocusModeSettings
+                .defaultsFor("Windows 11")
+                .copy(enabled = true, autoRevealEnabled = true)
+        rule.setContent {
+            val state = rememberFocusModeReveal(settings)
+            Box(modifier = Modifier.fillMaxSize()) {
+                FocusModeHoverStrips(
+                    state = state,
+                    settings = settings,
+                    revealOffsetDp = 30.dp,
+                    barVisible = { edge -> edge != FocusModeEdge.TOP },
+                )
+            }
+        }
+        rule.waitForIdle()
+        rule.mainClock.advanceTimeBy(GRACE_PERIOD_MS)
+        rule.waitForIdle()
+
+        // TOP is cleared by focus mode on these defaults, so it would have had a strip.
+        rule.onNodeWithTag(focusStripTag(FocusModeEdge.TOP)).assertDoesNotExist()
+        rule.onNodeWithTag(focusStripTag(FocusModeEdge.BOTTOM)).assertExists()
     }
 
     /**
@@ -144,7 +183,12 @@ class FocusModeRevealTest {
         rule.setContent {
             val state = rememberFocusModeReveal(settings)
             Box(modifier = Modifier.fillMaxSize()) {
-                FocusModeHoverStrips(state = state, settings = settings, revealOffsetDp = 30.dp)
+                FocusModeHoverStrips(
+                    state = state,
+                    settings = settings,
+                    revealOffsetDp = 30.dp,
+                    barVisible = { true },
+                )
             }
         }
         rule.waitForIdle()

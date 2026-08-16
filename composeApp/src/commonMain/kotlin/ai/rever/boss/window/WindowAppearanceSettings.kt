@@ -13,6 +13,28 @@ data class WindowAppearanceSettings(
      */
     val showTitleBar: Boolean = true,
     /**
+     * Whether the 40dp action bar at the top of the window is on screen.
+     *
+     * This and the three below are a *permanent* preference, and deliberately separate from focus
+     * mode's per-edge `hide*` flags. Focus mode is a transient posture with hover-reveal strips to
+     * get a bar back; these say "I never want this bar", and the only way back is the View menu.
+     * The scaffold requires both to agree, so a bar shows when this is true and focus mode is not
+     * currently clearing it.
+     *
+     * All four default to `true` on every platform, which is what makes them safe to add to an
+     * existing settings file: the manager decodes with `ignoreUnknownKeys`, so an absent key reads
+     * back as "shown" and nobody's chrome disappears on upgrade. That is why these need none of the
+     * `FocusModeSettings.decodeWithDefaults` machinery, which exists only because *its* defaults
+     * differ per platform.
+     */
+    val showTopBar: Boolean = true,
+    /** Whether the 30dp status bar at the bottom of the window is on screen. See [showTopBar]. */
+    val showBottomBar: Boolean = true,
+    /** Whether the left 40dp icon strip is on screen. See [showTopBar]. */
+    val showLeftStrip: Boolean = true,
+    /** Whether the right 40dp icon strip is on screen. See [showTopBar]. */
+    val showRightStrip: Boolean = true,
+    /**
      * How tabs in the main (top) tab bar are sized.
      * Default: SHRINK_TO_FIT (Safari behaviour)
      */

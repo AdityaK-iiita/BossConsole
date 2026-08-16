@@ -1,5 +1,9 @@
 package ai.rever.boss.components.settings.sections
 
+import ai.rever.boss.components.bars.ChromeBar
+import ai.rever.boss.components.bars.displayName
+import ai.rever.boss.components.bars.isBarVisible
+import ai.rever.boss.components.bars.withBarVisible
 import ai.rever.boss.components.settings.shared.SettingsDropdown
 import ai.rever.boss.components.settings.shared.SettingsInfoRow
 import ai.rever.boss.components.settings.shared.SettingsSection
@@ -53,6 +57,8 @@ fun WindowAppearanceSettings() {
             )
         }
 
+        BarsSection()
+
         NativeContextMenuSection()
 
         SettingsSection(title = "Tab Bar") {
@@ -74,6 +80,46 @@ fun WindowAppearanceSettings() {
                         "and the bar scrolls when they overflow.",
             )
         }
+    }
+}
+
+/**
+ * The four bar visibility flags, which each bar's right-click "Hide" and the View menu's checkmarks
+ * write too.
+ *
+ * Surfaced here as well as in those two places because Settings is where someone looks for chrome
+ * they cannot find. A bar hidden from its own context menu leaves nothing behind pointing at where
+ * it went, and "it is gone and I cannot get it back" is the failure this whole set of toggles is
+ * here to prevent.
+ */
+@Composable
+private fun BarsSection() {
+    val settings by WindowAppearanceSettingsManager.currentSettings.collectAsState()
+    val coroutineScope = rememberCoroutineScope()
+
+    SettingsSection(title = "Bars") {
+        ChromeBar.entries.forEach { bar ->
+            SettingsToggle(
+                label = "Show ${bar.displayName()}",
+                checked = settings.isBarVisible(bar),
+                onCheckedChange = { visible ->
+                    coroutineScope.launch {
+                        WindowAppearanceSettingsManager.updateSettings(
+                            settings.withBarVisible(bar, visible),
+                        )
+                    }
+                },
+            )
+        }
+
+        SettingsInfoRow(
+            label = "Applies to",
+            value = "All windows",
+            description =
+                "These stay hidden until you switch them back on, in every window - hiding a bar " +
+                    "from its right-click menu hides it everywhere. Focus Mode is separate: it " +
+                    "hides bars temporarily and reveals them when you move the pointer to the edge.",
+        )
     }
 }
 

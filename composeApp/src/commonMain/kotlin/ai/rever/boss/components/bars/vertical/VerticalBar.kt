@@ -13,12 +13,13 @@ import androidx.compose.ui.unit.Dp
 @Composable
 fun VerticalBar(
     width: Dp,
+    modifier: Modifier = Modifier,
     content: @Composable BoxScope.() -> Unit,
 ) {
     // Title bar with BOSS centered
     Box(
         modifier =
-            Modifier
+            modifier
                 .fillMaxHeight()
                 .width(width)
                 .background(BossTheme.colors.raised),

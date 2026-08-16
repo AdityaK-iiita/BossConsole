@@ -1,5 +1,7 @@
 package ai.rever.boss.components.bars.horizontal
 
+import ai.rever.boss.components.bars.ChromeBar
+import ai.rever.boss.components.bars.rememberBarContextMenuItems
 import ai.rever.boss.components.buttons.BossActionButton
 import ai.rever.boss.components.buttons.QuickActionHints
 import ai.rever.boss.components.dialogs.CommitDialog
@@ -72,20 +74,7 @@ fun BossDraggableComponent.BossTopBar(
     onNewProject: (() -> Unit)? = null,
     onCloneProject: (() -> Unit)? = null,
 ) {
-    val items =
-        listOf(
-            ContextMenuItem(
-                text = "Edit",
-                icon = Icons.Outlined.Edit,
-                onClick = { /* Handle edit action */ },
-            ),
-            ContextMenuItem(isDivider = true),
-            ContextMenuItem(
-                text = "Save",
-                icon = Icons.Outlined.Save,
-                onClick = { /* Handle save action */ },
-            ),
-        )
+    val items = rememberBarContextMenuItems(ChromeBar.TOP)
 
     HorizontalBar(modifier = Modifier.contextMenu(items = items), height = 40.dp) {
         HorizontalBarRow(modifier = Modifier.fillMaxHeight().padding(start = 36.dp)) {

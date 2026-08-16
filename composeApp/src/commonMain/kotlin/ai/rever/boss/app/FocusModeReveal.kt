@@ -155,17 +155,25 @@ private fun EdgeRevealEffects(
  * A strip is laid out only for an edge focus mode actually clears. An edge that
  * stays visible has nothing to reveal, and its strip would otherwise be an
  * invisible [revealOffsetDp]-wide band sitting over the edge of live content.
+ *
+ * [barVisible] applies the same rule to the other way a bar can be absent. A bar switched off in
+ * `WindowAppearanceSettings` is not coming back on hover - the scaffold requires that flag AND the
+ * reveal flag to agree - so a strip there is a dead band over live content, exactly what the
+ * paragraph above rules out. Sweeping such an edge would also flip `shown` to true and, for the top
+ * bar, take the quick-actions cluster away for the hover plus the grace period without putting the
+ * bar back in its place.
  */
 @Composable
 internal fun BoxScope.FocusModeHoverStrips(
     state: FocusModeRevealState,
     settings: FocusModeSettings,
     revealOffsetDp: Dp,
+    barVisible: (FocusModeEdge) -> Boolean,
 ) {
     if (!settings.autoRevealEnabled) return
 
     FocusModeEdge.entries.forEach { edge ->
-        if (settings.hides(edge)) {
+        if (settings.hides(edge) && barVisible(edge)) {
             val edgeState = state[edge]
             val thickness = if (edgeState.shown) 1.dp else revealOffsetDp
             HoverStrip(

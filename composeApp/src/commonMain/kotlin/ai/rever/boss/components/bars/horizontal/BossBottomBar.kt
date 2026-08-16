@@ -1,9 +1,12 @@
 package ai.rever.boss.components.bars.horizontal
 
+import ai.rever.boss.components.bars.ChromeBar
 import ai.rever.boss.components.bars.getBarScrollbarConfig
 import ai.rever.boss.components.bars.horizontalScrollWithScrollbar
+import ai.rever.boss.components.bars.rememberBarContextMenuItems
 import ai.rever.boss.components.buttons.BossActionButton
 import ai.rever.boss.components.events.PanelEventBus
+import ai.rever.boss.components.overlays.contextMenu
 import ai.rever.boss.components.plugin.registries.StatusBarRegistryImpl
 import ai.rever.boss.components.plugin.registries.owningPluginId
 import ai.rever.boss.components.plugin.tab_types.fluck.FluckTabInfo
@@ -47,7 +50,10 @@ import kotlinx.coroutines.launch
 @Composable
 fun BossBottomBar(tabsComponent: BossTabsComponent? = null) {
     Divider(color = BossTheme.colors.line)
-    HorizontalBar(height = 30.dp) {
+    HorizontalBar(
+        modifier = Modifier.contextMenu(items = rememberBarContextMenuItems(ChromeBar.BOTTOM)),
+        height = 30.dp,
+    ) {
         HorizontalBarRow {
             BossLeftBottomBar(tabsComponent)
             PluginStatusBarItems(StatusBarAlignment.LEFT)

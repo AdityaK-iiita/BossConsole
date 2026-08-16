@@ -18,11 +18,34 @@ class FocusQuickActionsPlacementTest {
     private val clearsTopKeepsRail = FocusModeSettings(enabled = true, hideTopBar = true, hideRightSidebar = false)
     private val clearsBoth = FocusModeSettings(enabled = true, hideTopBar = true, hideRightSidebar = true)
 
+    /** Defaults say "nothing is switched off for good", so each test names only what it changes. */
+    private fun placementOf(
+        settings: FocusModeSettings,
+        showTopBar: Boolean,
+        topBarHidden: Boolean = false,
+        rightStripHidden: Boolean = false,
+    ) = focusQuickActionsPlacement(
+        settings = settings,
+        topBarHidden = topBarHidden,
+        rightStripHidden = rightStripHidden,
+        showTopBar = showTopBar,
+    )
+
+    private fun rowsOf(
+        settings: FocusModeSettings,
+        topBarHidden: Boolean = false,
+        rightStripHidden: Boolean = false,
+    ) = focusQuickActionsRailRows(
+        settings = settings,
+        topBarHidden = topBarHidden,
+        rightStripHidden = rightStripHidden,
+    )
+
     @Test
     fun `the rail hosts them whenever focus mode leaves the rail alone`() {
         assertEquals(
             FocusQuickActionsPlacement.RIGHT_RAIL,
-            focusQuickActionsPlacement(clearsTopKeepsRail, showTopBar = false),
+            placementOf(clearsTopKeepsRail, showTopBar = false),
         )
     }
 
@@ -30,7 +53,7 @@ class FocusQuickActionsPlacementTest {
     fun `they float only once focus mode has taken the rail too`() {
         assertEquals(
             FocusQuickActionsPlacement.FLOATING,
-            focusQuickActionsPlacement(clearsBoth, showTopBar = false),
+            placementOf(clearsBoth, showTopBar = false),
         )
     }
 
@@ -40,11 +63,11 @@ class FocusQuickActionsPlacementTest {
         // down - and the rail one silently, without leaving a divider and a gap behind it.
         assertEquals(
             FocusQuickActionsPlacement.NONE,
-            focusQuickActionsPlacement(clearsTopKeepsRail, showTopBar = true),
+            placementOf(clearsTopKeepsRail, showTopBar = true),
         )
         assertEquals(
             FocusQuickActionsPlacement.NONE,
-            focusQuickActionsPlacement(clearsBoth, showTopBar = true),
+            placementOf(clearsBoth, showTopBar = true),
         )
     }
 
@@ -57,7 +80,7 @@ class FocusQuickActionsPlacementTest {
         // reveal flags rather than to the settings.
         val off = clearsBoth.copy(enabled = false)
 
-        assertEquals(FocusQuickActionsPlacement.NONE, focusQuickActionsPlacement(off, showTopBar = false))
+        assertEquals(FocusQuickActionsPlacement.NONE, placementOf(off, showTopBar = false))
     }
 
     @Test
@@ -69,7 +92,7 @@ class FocusQuickActionsPlacementTest {
         val windows = FocusModeSettings.defaultsFor("Windows 11").copy(enabled = true)
 
         assertTrue(windows.hideTopBar, "the premise: Windows still clears the top bar")
-        assertEquals(FocusQuickActionsPlacement.RIGHT_RAIL, focusQuickActionsPlacement(windows, showTopBar = false))
+        assertEquals(FocusQuickActionsPlacement.RIGHT_RAIL, placementOf(windows, showTopBar = false))
     }
 
     @Test
@@ -78,7 +101,7 @@ class FocusQuickActionsPlacementTest {
         // edge by default, so there is no rail to put anything on.
         val mac = FocusModeSettings.defaultsFor("Mac OS X").copy(enabled = true)
 
-        assertEquals(FocusQuickActionsPlacement.FLOATING, focusQuickActionsPlacement(mac, showTopBar = false))
+        assertEquals(FocusQuickActionsPlacement.FLOATING, placementOf(mac, showTopBar = false))
     }
 
     @Test
@@ -99,7 +122,7 @@ class FocusQuickActionsPlacementTest {
         // not the other, which under-reserves and pushes an icon off the bottom of the window.
         assertEquals(
             railFor(FocusQuickActionsPlacement.RIGHT_RAIL).size,
-            focusQuickActionsRailRows(clearsTopKeepsRail),
+            rowsOf(clearsTopKeepsRail),
         )
     }
 
@@ -111,12 +134,12 @@ class FocusQuickActionsPlacementTest {
         // user reaches for the top bar, on the very defaults this placement is aimed at.
         assertEquals(
             FocusQuickActionsPlacement.NONE,
-            focusQuickActionsPlacement(clearsTopKeepsRail, showTopBar = true),
+            placementOf(clearsTopKeepsRail, showTopBar = true),
             "the premise: the icons themselves stand down while the bar is up",
         )
         assertEquals(
             FOCUS_QUICK_ACTION_COUNT,
-            focusQuickActionsRailRows(clearsTopKeepsRail),
+            rowsOf(clearsTopKeepsRail),
             "but the rail keeps their rows, because showTopBar is momentary",
         )
     }
@@ -125,9 +148,79 @@ class FocusQuickActionsPlacementTest {
     fun `nothing is reserved when the actions could never land on the rail`() {
         // Focus mode off, or clearing the sidebar too: the bar must budget exactly as it did before
         // this feature existed, or every user who never enables focus mode loses rail rows to it.
-        assertEquals(0, focusQuickActionsRailRows(clearsTopKeepsRail.copy(enabled = false)))
-        assertEquals(0, focusQuickActionsRailRows(clearsBoth))
-        assertEquals(0, focusQuickActionsRailRows(clearsTopKeepsRail.copy(hideTopBar = false)))
+        assertEquals(0, rowsOf(clearsTopKeepsRail.copy(enabled = false)))
+        assertEquals(0, rowsOf(clearsBoth))
+        assertEquals(0, rowsOf(clearsTopKeepsRail.copy(hideTopBar = false)))
+    }
+
+    @Test
+    fun `a top bar hidden for good puts them on the rail, at the showTopBar the app really has`() {
+        // `showTopBar = true` because with focus mode off EdgeRevealEffects leaves `shown` true -
+        // that is the only value the scaffold can pass here, and asserting the unreachable `false`
+        // is how the NONE-placement bug shipped past this suite. See FocusModeVisibilityTest.
+        val off = FocusModeSettings(enabled = false)
+
+        assertEquals(
+            FocusQuickActionsPlacement.RIGHT_RAIL,
+            placementOf(off, showTopBar = true, topBarHidden = true),
+        )
+    }
+
+    @Test
+    fun `they float when the right strip is hidden for good, not onto a bar that is not there`() {
+        // The trap this closes: `hides(RIGHT)` is false when the user hid the strip by preference
+        // rather than through focus mode, so without the flag this would answer RIGHT_RAIL and hand
+        // three icons to a bar the scaffold is not composing at all.
+        val off = FocusModeSettings(enabled = false)
+
+        assertEquals(
+            FocusQuickActionsPlacement.FLOATING,
+            placementOf(off, showTopBar = true, topBarHidden = true, rightStripHidden = true),
+        )
+    }
+
+    @Test
+    fun `the reserve is never held for a placement of NONE`() {
+        // The corroborating symptom of the same root cause: rows are computed without showTopBar,
+        // so if the placement says NONE while the reserve says three, the rail keeps three empty
+        // icon rows. Swept across every reachable combination rather than a hand-picked one.
+        val cases =
+            listOf(
+                FocusModeSettings(enabled = false),
+                FocusModeSettings(enabled = true, hideTopBar = true, hideRightSidebar = false),
+                FocusModeSettings(enabled = true, hideTopBar = true, hideRightSidebar = true),
+                FocusModeSettings(enabled = true, hideTopBar = false, hideRightSidebar = true),
+            )
+
+        val flags = listOf(false to false, false to true, true to false, true to true)
+        val combinations = cases.flatMap { settings -> flags.map { settings to it } }
+
+        combinations.forEach { (settings, hidden) ->
+            val (topBarHidden, rightStripHidden) = hidden
+            val showTopBar = !settings.hideTopBar || !settings.enabled
+            val placement = placementOf(settings, showTopBar, topBarHidden, rightStripHidden)
+            val rows = rowsOf(settings, topBarHidden, rightStripHidden)
+            val expected = if (placement == FocusQuickActionsPlacement.RIGHT_RAIL) FOCUS_QUICK_ACTION_COUNT else 0
+
+            assertEquals(
+                expected,
+                rows,
+                "reserved $rows rows for placement $placement " +
+                    "(settings=$settings, topBarHidden=$topBarHidden, rightStripHidden=$rightStripHidden)",
+            )
+        }
+    }
+
+    @Test
+    fun `the reserve follows the appearance flags exactly as the placement does`() {
+        // Same closed loop as `the reserve matches...` above, over the new inputs: reserving rows on
+        // a strip that is switched off, or failing to reserve them on one that is not, is the
+        // under-reserve that pushes an icon off the bottom of the window.
+        val off = FocusModeSettings(enabled = false)
+
+        assertEquals(FOCUS_QUICK_ACTION_COUNT, rowsOf(off, topBarHidden = true))
+        assertEquals(0, rowsOf(off, topBarHidden = true, rightStripHidden = true))
+        assertEquals(0, rowsOf(off, rightStripHidden = true))
     }
 
     private fun railFor(placement: FocusQuickActionsPlacement) =

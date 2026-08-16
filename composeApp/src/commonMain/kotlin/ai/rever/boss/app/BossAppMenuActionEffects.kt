@@ -28,6 +28,8 @@ import ai.rever.boss.plugin.tab.terminal.TerminalTabType
 import ai.rever.boss.project.DefaultWorkingDirectory
 import ai.rever.boss.topofmind.TabTreeState
 import ai.rever.boss.window.MenuActionsHandler
+import ai.rever.boss.window.WindowAppearanceSettings
+import ai.rever.boss.window.WindowAppearanceSettingsManager
 import ai.rever.boss.window.WindowOperations
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,6 +43,30 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.random.Random
 import kotlin.time.Clock
+
+/**
+ * [settings] with the strip holding the customize button switched back on, [onLeft] saying which.
+ *
+ * "View - Customize Sidebar..." force-reveals that strip so the click has somewhere to land. Once a
+ * strip can also be hidden by preference that reveal is only half the job, because the scaffold
+ * requires the preference AND the reveal flag to agree - so a strip switched off would silently
+ * swallow the menu item again, which is the bug the reveal itself exists to fix.
+ *
+ * Switching the preference back on is the honest reading of the request: you cannot customise a bar
+ * you have hidden, so asking to customise it is asking for it back.
+ *
+ * Pure and lifted out of the effect so it is testable, which the conjunction it compensates for was
+ * not - see `CustomizeSidebarRevealTest`.
+ */
+internal fun withCustomizeTargetRevealed(
+    settings: WindowAppearanceSettings,
+    onLeft: Boolean,
+): WindowAppearanceSettings =
+    if (onLeft) {
+        settings.copy(showLeftStrip = true)
+    } else {
+        settings.copy(showRightStrip = true)
+    }
 
 /**
  * Listeners translating [MenuActionsHandler] menu-bar events (File/View/Plugin
@@ -69,10 +95,19 @@ internal fun BossAppMenuActionEffects(
     val sidebarVisibilitySettings by SidebarVisibilitySettingsManager.currentSettings.collectAsState()
     LaunchedEffect(customizeTriggers, windowId) {
         if (customizeTriggers.containsKey(windowId)) {
-            if (SidebarVisibilitySettings.isLeftSide(sidebarVisibilitySettings.customizeButtonSlotId)) {
+            val onLeft = SidebarVisibilitySettings.isLeftSide(sidebarVisibilitySettings.customizeButtonSlotId)
+            if (onLeft) {
                 reveal.showLeftSidebar = true
             } else {
                 reveal.showRightSidebar = true
+            }
+            // Force-revealing the focus-mode flag is not enough once a strip can also be switched
+            // off for good: the scaffold requires BOTH. Read at click time rather than composed in,
+            // matching the other writers of this store.
+            val current = WindowAppearanceSettingsManager.currentSettings.value
+            val restored = withCustomizeTargetRevealed(current, onLeft)
+            if (restored != current) {
+                WindowAppearanceSettingsManager.updateSettings(restored)
             }
         }
     }

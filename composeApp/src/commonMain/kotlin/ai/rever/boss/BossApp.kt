@@ -70,7 +70,7 @@ fun ComponentContext.BossApp(
                 reveal = reveal,
                 focusModeSettings = focusModeSettings,
                 revealOffsetDp = with(LocalDensity.current) { focusModeSettings.revealOffsetPx.toDp() },
-                showTitleBar = windowAppearanceSettings.showTitleBar,
+                appearance = windowAppearanceSettings,
                 onToggleMaximize = onToggleMaximize,
             )
 

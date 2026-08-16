@@ -212,7 +212,7 @@
     <ID>LongMethod:BossAppDialogs.kt$@Composable internal fun BossAppDialogs(state: BossAppState)</ID>
     <ID>LongMethod:BossAppEventBusEffects.kt$@Composable internal fun BossAppEventBusEffects(state: BossAppState)</ID>
     <ID>LongMethod:BossAppMenuActionEffects.kt$@Composable internal fun BossAppMenuActionEffects( state: BossAppState, reveal: FocusModeRevealState, )</ID>
-    <ID>LongMethod:BossAppScaffold.kt$@Composable internal fun BossAppScaffold( state: BossAppState, reveal: FocusModeRevealState, focusModeSettings: FocusModeSettings, revealOffsetDp: Dp, showTitleBar: Boolean, onToggleMaximize: (() -&gt; Unit)?, )</ID>
+    <ID>LongMethod:BossAppScaffold.kt$@Composable internal fun BossAppScaffold( state: BossAppState, reveal: FocusModeRevealState, focusModeSettings: FocusModeSettings, revealOffsetDp: Dp, appearance: WindowAppearanceSettings, onToggleMaximize: (() -&gt; Unit)?, )</ID>
     <ID>LongMethod:BossAppStartupEffects.kt$@Composable internal fun BossAppStartupEffects(state: BossAppState)</ID>
     <ID>LongMethod:BossAppWithAuth.kt$@Composable fun ComponentContext.BossAppWithAuth( windowId: String, isFirstWindow: Boolean = false, panelRegistry: ai.rever.boss.components.registery.PanelRegistry, onToggleMaximize: (() -&gt; Unit)? = null, )</ID>
     <ID>LongMethod:BossBottomBar.kt$@Composable fun RowScope.BossLeftBottomBar(tabsComponent: BossTabsComponent? = null)</ID>

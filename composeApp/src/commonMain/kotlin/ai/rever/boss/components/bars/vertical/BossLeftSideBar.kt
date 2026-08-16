@@ -1,9 +1,12 @@
 package ai.rever.boss.components.bars.vertical
 
+import ai.rever.boss.components.bars.ChromeBar
+import ai.rever.boss.components.bars.rememberBarContextMenuItems
 import ai.rever.boss.components.dividers.SDivider
 import ai.rever.boss.components.dividers.VDivider
 import ai.rever.boss.components.misc.DraggableSidebarSection
 import ai.rever.boss.components.model.BossDraggableComponent
+import ai.rever.boss.components.overlays.contextMenu
 import ai.rever.boss.components.sidebar.SidebarIconRail
 import ai.rever.boss.components.sidebar.SidebarVisibilitySettings
 import ai.rever.boss.components.sidebar.SidebarVisibilitySettingsManager
@@ -31,7 +34,13 @@ fun BossDraggableComponent.BossLeftSideBar() {
     val customizeSlotId = visibility.customizeButtonSlotId
     val customizeOnThisBar = SidebarVisibilitySettings.isLeftSide(customizeSlotId)
 
-    VerticalBar(40.dp) {
+    VerticalBar(
+        width = 40.dp,
+        // On the bar, not on the weighted Spacer below: the icons carry their own contextMenu and
+        // consume the press first, so this fires on empty rail and nowhere else - the same
+        // arrangement the top bar has had all along.
+        modifier = Modifier.contextMenu(items = rememberBarContextMenuItems(ChromeBar.LEFT_STRIP)),
+    ) {
         // BoxWithConstraints gives the rail's full height so adaptive
         // mode can budget icon rows; recomposes on window resize.
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
