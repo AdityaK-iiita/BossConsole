@@ -4,6 +4,7 @@ import ai.rever.boss.plugin.browser.BrowserSettings
 import ai.rever.boss.plugin.browser.EngineInitError
 import ai.rever.boss.plugin.browser.FluckEngine
 import ai.rever.boss.plugin.browser.LocalAwtWindow
+import ai.rever.boss.plugin.browser.NativeFileDialogs
 import ai.rever.boss.plugin.browser.installPopupWindowChrome
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
@@ -268,6 +269,11 @@ private fun configureBrowserPopupHandler(
                         frame.setLocation(initialBounds.origin().x(), initialBounds.origin().y())
                         frame.setSize(initialBounds.size().width(), initialBounds.size().height())
 
+                        // Same reason as the BrowserHandleImpl popup path: a popup browser
+                        // is never configured by the tab flow, so claim its file dialogs
+                        // before the Swing view installs the JFileChooser ones.
+                        NativeFileDialogs.installOn(popupBrowser)
+
                         val browserView = BrowserView.newInstance(popupBrowser)
                         frame.contentPane.add(browserView)
 
@@ -460,6 +466,10 @@ actual fun getBrowserState(
 
         // Configure JS dialog handlers to prevent UI freeze (Issue #369)
         setupBrowserDialogHandlers(browser)
+
+        // Answer the page's file dialogs with the OS ones, before createBrowserViewState
+        // below composes a view that would otherwise install Swing's JFileChooser.
+        NativeFileDialogs.installOn(browser)
 
         // Configure popup handler: OAuth popups → real windows, regular links → tabs
         if (onOpenInNewTab != null) {

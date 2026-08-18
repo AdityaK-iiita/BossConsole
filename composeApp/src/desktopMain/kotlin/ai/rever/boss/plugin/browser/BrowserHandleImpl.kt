@@ -1122,6 +1122,11 @@ internal class BrowserHandleImpl(
         // Setup screen capture handler
         FluckEngine.setupCaptureSessionHandler(browser)
 
+        // Answer the page's own file dialogs with the OS ones. This must run before the
+        // browser view is composed: JxBrowser's view installs a Swing JFileChooser for each
+        // of these and skips any callback already set. See NativeFileDialogs.
+        NativeFileDialogs.installOn(browser)
+
         // Setup context menu handler
         setupContextMenuHandler()
     }
@@ -2094,6 +2099,12 @@ internal class BrowserHandleImpl(
                             // Set position and size from bounds
                             frame.setLocation(initialBounds.origin().x(), initialBounds.origin().y())
                             frame.setSize(initialBounds.size().width(), initialBounds.size().height())
+
+                            // A popup browser has no handle of its own, so it never went
+                            // through setupBrowserHandlers. Claim its file dialogs before the
+                            // Swing view below installs the JFileChooser ones - an OAuth or
+                            // payment popup is exactly where an upload field turns up.
+                            NativeFileDialogs.installOn(popupBrowser)
 
                             // Create BrowserView (Swing version) and add to frame
                             val browserView =
