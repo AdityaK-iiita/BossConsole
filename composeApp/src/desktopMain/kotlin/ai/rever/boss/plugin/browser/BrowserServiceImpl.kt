@@ -141,6 +141,14 @@ private sealed interface CreationOutcome {
 
     object EngineFailure : CreationOutcome
 
+    /**
+     * The engine was replaced while this creation was in flight, so the browser it produced
+     * belongs to a closed engine. Distinct from [EngineFailure] because it is evidence about
+     * the *previous* engine, which has already been dealt with: feeding it to the wedge
+     * detector would count one wedge twice and could recycle a healthy replacement.
+     */
+    object StaleGeneration : CreationOutcome
+
     object OtherFailure : CreationOutcome
 }
 
@@ -465,9 +473,20 @@ object BrowserServiceImpl : BrowserService {
                 WedgeRecovery.recordSuccess()
                 return outcome.handle
             }
-            // Only an engine-level failure is worth recycling for, and only while the detector
-            // agrees; anything else is this request's own problem and fails as it always did.
-            if (outcome !is CreationOutcome.EngineFailure || !WedgeRecovery.recycleIfWedged()) break
+            val retry =
+                when (outcome) {
+                    // A creation the recycle invalidated retries straight onto the replacement:
+                    // the engine it needed already exists, so there is nothing to repair first.
+                    is CreationOutcome.StaleGeneration -> true
+
+                    // Only an engine-level failure is worth recycling for, and only while the
+                    // detector agrees; anything else is this request's own problem and fails as
+                    // it always did.
+                    is CreationOutcome.EngineFailure -> WedgeRecovery.recycleIfWedged()
+
+                    else -> false
+                }
+            if (!retry) break
         }
         return null
     }
@@ -485,8 +504,13 @@ object BrowserServiceImpl : BrowserService {
         // engine-level failure from a handle-construction one. Profile seeding below sits
         // inside the same outer try but must NOT be attributed to the engine.
         var engineCallFailed = false
+        // Set when the engine was recycled while this creation was in flight, so the caller
+        // retries against the replacement instead of accusing it of a failure it did not have.
+        var engineRecycled = false
         return try {
-            val engine = FluckEngine.engine
+            // Read as one step: the generation that is current when this browser is created is
+            // the only one it can honestly claim. See FluckEngine.engineWithGeneration.
+            val (engine, generation) = FluckEngine.engineWithGeneration()
 
             // Optionally run on an isolated managed profile (ephemeral or named),
             // seeding auth into it first. Null = the engine default profile (tabs).
@@ -513,10 +537,26 @@ object BrowserServiceImpl : BrowserService {
                     throw e
                 }
 
+            // newBrowser() is time-boxed at 20s and a recycle triggered by another caller's
+            // failure lands inside that window routinely. This browser belongs to the engine
+            // that was current when it was created; if that engine has since been replaced it
+            // is already closed, and every use of it from here on throws ObjectClosedException
+            // at whoever calls — a plugin crash, not a browser error. Discard it and retry.
+            //
+            // Checked before touching the browser at all, since settings() would be the first
+            // such call. Ordered after creation for a reason: a check on the way in cannot see
+            // a recycle that has not happened yet, which is the whole failure mode.
+            if (FluckEngine.currentEngineGeneration != generation) {
+                engineRecycled = true
+                // Best-effort: against a closed engine this is a no-op or a dead-IPC failure,
+                // but the browser is unreachable from any dispose path once we throw, and a
+                // recycle that closed cleanly leaves a live renderer to reclaim here.
+                runCatching { browser.close() }
+                error("Engine was recycled during browser creation (generation $generation is stale)")
+            }
+
             // Enable swipe navigation for touchscreen devices
             browser.settings().enableOverscrollHistoryNavigation()
-
-            val generation = FluckEngine.currentEngineGeneration
 
             // If a popup handed off a POST body for this URL (form-submit target="_blank"),
             // consume it and replay on first navigation. Explicit config wins if set.
@@ -583,7 +623,17 @@ object BrowserServiceImpl : BrowserService {
 
             CreationOutcome.Created(handle)
         } catch (e: Exception) {
-            logger.error(LogCategory.BROWSER, "Failed to create browser", error = e)
+            // A recycle landing mid-creation is expected and self-correcting - the retry above
+            // opens the tab on the replacement - so it is not reported as a failure.
+            if (engineRecycled) {
+                logger.warn(
+                    LogCategory.BROWSER,
+                    "Discarding browser from a recycled engine - retrying",
+                    mapOf("url" to config.url),
+                )
+            } else {
+                logger.error(LogCategory.BROWSER, "Failed to create browser", error = e)
+            }
             // A throw after newBrowser() (overscroll / popup-replay / handle ctor / meta
             // persist) is caught only here; without releasing, a NAMED profile's fence
             // stays locked for the process lifetime (deadlock) and an EPHEMERAL profile
@@ -596,7 +646,11 @@ object BrowserServiceImpl : BrowserService {
                 }
                 managed?.let { releaseManaged(it) }
             }
-            if (engineCallFailed) CreationOutcome.EngineFailure else CreationOutcome.OtherFailure
+            when {
+                engineRecycled -> CreationOutcome.StaleGeneration
+                engineCallFailed -> CreationOutcome.EngineFailure
+                else -> CreationOutcome.OtherFailure
+            }
         }
     }
 

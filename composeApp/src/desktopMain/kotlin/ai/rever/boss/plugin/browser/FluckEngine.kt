@@ -34,6 +34,7 @@ import com.teamdev.jxbrowser.permission.callback.RequestPermissionCallback
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -45,6 +46,8 @@ import java.awt.Toolkit
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.*
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -861,6 +864,32 @@ object FluckEngine {
     /** How long [recycleWedgedEngine] waits for a wedged engine to close before force-killing it. */
     private const val ENGINE_CLOSE_TIMEOUT_MS = 5_000L
 
+    /**
+     * How long a replacement engine's boot waits for the engine it replaces to let go of the
+     * profile directory. Covers [ENGINE_CLOSE_TIMEOUT_MS] plus the force-kill that follows it.
+     */
+    private const val ENGINE_DRAIN_TIMEOUT_MS = 10_000L
+
+    /** How long the force-kill waits for a doomed Chromium process to actually exit. */
+    private const val PROCESS_EXIT_TIMEOUT_MS = 3_000L
+
+    /** Poll interval while waiting for doomed Chromium processes to exit. */
+    private const val PROCESS_EXIT_POLL_MS = 100L
+
+    /**
+     * Gate that holds a replacement engine's boot until the engine it replaces has really let go
+     * of the profile directory.
+     *
+     * Chromium takes an exclusive lock on `--user-data-dir`. [recycleWedgedEngine] bumps the
+     * generation first, so every live handle reports itself stale and every tab comes straight
+     * back through the [engine] getter - observed at ~400ms, long before the doomed process is
+     * gone. Without this gate that boot loses the race to the lock, and
+     * [createEngineWithProfile] quietly falls back to a throwaway `browser-profile-<millis>`
+     * directory: the user is signed out of every site they were signed into, and the session
+     * they had is stranded in a directory nothing will read again.
+     */
+    @Volatile private var recycleDrain: CountDownLatch? = null
+
     // Set by BrowserServiceImpl once its wedge detector has spent its recycle budget: the
     // engine still refuses to create browsers and we have stopped trying to repair it.
     // Read by isEngineHealthy(), which otherwise cannot see a wedge (isClosed stays false).
@@ -898,6 +927,21 @@ object FluckEngine {
             }
 
     /**
+     * The engine together with the generation it belongs to, read as one atomic step.
+     *
+     * Reading the two separately is a bug the type system will not catch. Browser creation is
+     * time-boxed at 20s, and a recycle triggered by *another* caller's failure lands inside that
+     * window routinely — so a caller that reads the generation after creating its browser stamps
+     * a browser belonging to the closed engine with the *replacement's* generation. That handle
+     * then reports `isValid == true` forever (the generation matches, and the browser's own
+     * `isClosed` never flips because the notification would have to arrive over the IPC channel
+     * that just died), so nothing invalidates it and no tab recovers, until the first call
+     * through it throws ObjectClosedException — which is a crash inside whichever plugin made
+     * the call, not a recoverable browser error.
+     */
+    fun engineWithGeneration(): Pair<Engine, Long> = synchronized(engineLock) { engine to _engineGeneration }
+
+    /**
      * Force-replace an engine that is alive but can no longer create browsers.
      *
      * The [engine] getter above self-heals only when JxBrowser reports the engine closed. A
@@ -911,20 +955,28 @@ object FluckEngine {
      * @return true if an engine was dropped, false if there was nothing cached to recycle.
      */
     suspend fun recycleWedgedEngine(reason: String): Boolean {
-        val doomed =
-            synchronized(engineLock) {
-                // Exactly the mutations the getter performs when it finds a closed engine:
-                // drop the cached instance, clear the retry budget, and bump the generation
-                // so every live BrowserHandle reports itself invalid and its tab reloads onto
-                // the replacement (BrowserHandleImpl.isValid / Fluck.kt's generation effect).
-                _engine?.also {
-                    _engine = null
-                    initializationError = null
-                    attemptCount = 0
-                    _engineGeneration++
-                    _engineGenerationFlow.value = _engineGeneration
-                }
-            } ?: return false
+        val drain = CountDownLatch(1)
+        val doomed: Engine
+        val doomedProcesses: List<ProcessHandle>
+        synchronized(engineLock) {
+            val cached = _engine ?: return false
+            // Snapshot the doomed engine's Chromium processes HERE: under the lock, while
+            // _engine still points at it and before the generation bump. No replacement can
+            // exist yet, so every Chromium child of this JVM belongs to the engine being
+            // dropped. A moment later that is no longer true and the list would be unsafe.
+            doomed = cached
+            doomedProcesses = chromiumEngineProcesses()
+            recycleDrain = drain
+            // Exactly the mutations the getter performs when it finds a closed engine:
+            // drop the cached instance, clear the retry budget, and bump the generation
+            // so every live BrowserHandle reports itself invalid and its tab reloads onto
+            // the replacement (BrowserHandleImpl.isValid / Fluck.kt's generation effect).
+            _engine = null
+            initializationError = null
+            attemptCount = 0
+            _engineGeneration++
+            _engineGenerationFlow.value = _engineGeneration
+        }
 
         logger.warn(
             LogCategory.BROWSER,
@@ -932,38 +984,147 @@ object FluckEngine {
             mapOf(
                 "reason" to reason,
                 "newGeneration" to _engineGeneration,
+                "chromiumProcesses" to doomedProcesses.size,
             ),
         )
 
-        // close() runs OUTSIDE engineLock and on its own scope, for three reasons: a wedged
-        // engine can block in there for as long as its dead IPC takes to give up; the getter
-        // needs the lock to boot the replacement; and join() gives the timeout a real
-        // suspension point to fire on — wrapping the blocking close() directly in
-        // withTimeoutOrNull would never interrupt it.
-        val closeJob = CoroutineScope(Dispatchers.IO).launch { runCatching { doomed.close() } }
-        val closedInTime = withTimeoutOrNull(ENGINE_CLOSE_TIMEOUT_MS) { closeJob.join() } != null
+        try {
+            // close() runs OUTSIDE engineLock and on its own scope, for three reasons: a wedged
+            // engine can block in there for as long as its dead IPC takes to give up; the getter
+            // needs the lock to boot the replacement; and await() gives the timeout a real
+            // suspension point to fire on — wrapping the blocking close() directly in
+            // withTimeoutOrNull would never interrupt it.
+            val closeJob = CoroutineScope(Dispatchers.IO).async { runCatching { doomed.close() } }
+            val closeResult = withTimeoutOrNull(ENGINE_CLOSE_TIMEOUT_MS) { closeJob.await() }
 
-        if (!closedInTime) {
-            // Chromium holds an exclusive lock on --user-data-dir, so the replacement cannot
-            // boot while the old process lingers. destroyForcibly() inside the cleanup below
-            // is what actually frees it — a stopped or wedged process ignores SIGTERM.
-            logger.warn(
-                LogCategory.BROWSER,
-                "Wedged engine did not close in time - force-killing its Chromium processes",
-                mapOf("timeoutMs" to ENGINE_CLOSE_TIMEOUT_MS),
-            )
-            withContext(Dispatchers.IO) {
-                runCatching { killStaleChromiumProcesses() }
-                    .onFailure {
-                        logger.warn(
-                            LogCategory.BROWSER,
-                            "Force-kill of wedged Chromium processes failed - engine boot may fail",
-                            error = it,
-                        )
-                    }
+            // Whether close() *returned* says nothing about whether Chromium is gone, and the
+            // difference is the whole bug this branch was written for. Against a wedged engine
+            // close() fails fast with a dead-IPC error rather than hanging, so a timeout-only
+            // test read that instant failure as success and skipped the kill entirely: the
+            // process tree lived on, kept holding the profile lock (sending the replacement to
+            // a throwaway temp profile, i.e. signing the user out everywhere) and kept playing
+            // whatever audio it had. Ask the OS instead.
+            val survivors = doomedProcesses.filter { runCatching { it.isAlive }.getOrDefault(false) }
+            if (survivors.isNotEmpty()) {
+                logger.warn(
+                    LogCategory.BROWSER,
+                    "Wedged engine left Chromium processes alive - killing them",
+                    mapOf(
+                        "closeOutcome" to closeOutcomeLabel(closeResult),
+                        "processes" to survivors.size,
+                        "pids" to survivors.joinToString(",") { it.pid().toString() },
+                    ),
+                )
+                withContext(Dispatchers.IO) { killEngineProcesses(survivors) }
             }
+        } finally {
+            // Releases the replacement engine's boot (see [recycleDrain]). In a finally so a
+            // failure in here cannot leave every later boot waiting out the full timeout.
+            drain.countDown()
         }
         return true
+    }
+
+    /** How [recycleWedgedEngine]'s close attempt ended, for the log line that reports survivors. */
+    private fun closeOutcomeLabel(result: Result<Unit>?): String =
+        when {
+            result == null -> "timed-out"
+            result.isSuccess -> "returned"
+            else -> "threw: ${result.exceptionOrNull()?.message ?: "unknown"}"
+        }
+
+    /**
+     * The Chromium process trees this JVM has spawned, for a targeted kill.
+     *
+     * [killStaleChromiumProcesses] cannot serve this: it deliberately skips any process whose
+     * parent is this one, so that a sweep can never kill the *live* engine. The engine being
+     * recycled is precisely such a child, which is why a wedged engine used to survive the
+     * force-kill path and go on holding the profile lock for the rest of the session.
+     *
+     * Safety here comes from *when* this is called rather than from what it excludes: under
+     * engineLock, before the generation bump, when the only engine that can own a Chromium
+     * child is the one being dropped.
+     */
+    private fun chromiumEngineProcesses(): List<ProcessHandle> =
+        runCatching {
+            val brandedDir = BossDirectories.resolve("boss-chromium").absolutePath
+            val legacyDir = BossDirectories.resolve("jxbrowser-chromium").absolutePath
+            ProcessHandle
+                .current()
+                .children()
+                .filter { child ->
+                    val command = runCatching { child.info().command().orElse("") }.getOrDefault("")
+                    command.startsWith(brandedDir) || command.startsWith(legacyDir)
+                }.toList()
+        }.getOrElse {
+            logger.warn(LogCategory.BROWSER, "Could not enumerate Chromium processes for recycle", error = it)
+            emptyList()
+        }
+
+    /**
+     * Terminate the given engine processes and everything they spawned.
+     *
+     * Descendants are collected BEFORE the parent is signalled: killing the browser process
+     * reparents its helpers to pid 1, and an orphan can no longer be reached from here. The
+     * audio helper is one of those, which is what keeps a video audible after its tab is gone.
+     *
+     * Not covered: `chrome_crashpad_handler`, which JxBrowser reparents to pid 1 at startup, so
+     * it is neither a child nor a descendant of anything we hold. It is ~10MB, holds no lock,
+     * and [killStaleChromiumProcesses] already sweeps orphaned crashpad handlers on startup.
+     */
+    internal suspend fun killEngineProcesses(processes: List<ProcessHandle>) {
+        val tree =
+            processes.flatMap { engineProcess ->
+                runCatching { engineProcess.descendants().toList() }.getOrDefault(emptyList()) + engineProcess
+            }
+        tree.forEach { runCatching { it.destroy() } }
+        awaitProcessExit(tree)
+
+        // SIGTERM is advisory, and a wedged (or SIGSTOPped) Chromium ignores it. SIGKILL is
+        // what actually frees the --user-data-dir lock the replacement needs.
+        val stubborn = tree.filter { runCatching { it.isAlive }.getOrDefault(false) }
+        if (stubborn.isNotEmpty()) {
+            stubborn.forEach { runCatching { it.destroyForcibly() } }
+            awaitProcessExit(stubborn)
+        }
+
+        val remaining = tree.count { runCatching { it.isAlive }.getOrDefault(false) }
+        if (remaining > 0) {
+            logger.warn(
+                LogCategory.BROWSER,
+                "Chromium processes survived SIGKILL - replacement engine may fall back to a temp profile",
+                mapOf("remaining" to remaining),
+            )
+        }
+    }
+
+    internal suspend fun awaitProcessExit(processes: List<ProcessHandle>) {
+        val deadline = System.currentTimeMillis() + PROCESS_EXIT_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadline &&
+            processes.any { runCatching { it.isAlive }.getOrDefault(false) }
+        ) {
+            delay(PROCESS_EXIT_POLL_MS)
+        }
+    }
+
+    /**
+     * Hold a boot until an engine being recycled has released the profile directory.
+     *
+     * Called from [initializeEngine], which runs under engineLock — deliberately, since the
+     * point is that no engine boots while the old one is draining. [recycleWedgedEngine] takes
+     * that lock only for its opening snapshot, before this can be reached, so waiting here
+     * cannot deadlock the recycle that is going to release it.
+     */
+    private fun awaitRecycleDrain() {
+        val drain = recycleDrain ?: return
+        if (drain.count == 0L) return
+        if (!drain.await(ENGINE_DRAIN_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+            logger.warn(
+                LogCategory.BROWSER,
+                "Recycled engine still draining - booting anyway, profile directory may still be locked",
+                mapOf("timeoutMs" to ENGINE_DRAIN_TIMEOUT_MS),
+            )
+        }
     }
 
     // ---- RPA profile helpers (used by BrowserServiceImpl's managed profiles) ----
@@ -1243,6 +1404,10 @@ object FluckEngine {
 
     private fun initializeEngine(): Engine {
         attemptCount++
+
+        // Nothing below can boot while the engine this one replaces is still holding the
+        // profile directory open. See [recycleDrain] for what that costs when it is skipped.
+        awaitRecycleDrain()
 
         // NOTE: screen-recording permission is intentionally NOT requested here.
         // Asking at engine startup is an unexplained, abrupt OS prompt. It is now

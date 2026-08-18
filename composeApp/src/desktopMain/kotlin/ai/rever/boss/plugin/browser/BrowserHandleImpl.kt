@@ -1749,10 +1749,25 @@ internal class BrowserHandleImpl(
         }
     }
 
+    /**
+     * Generation first, and `isClosed` last and guarded, because the two are not equally
+     * trustworthy.
+     *
+     * `Browser.isClosed` only reports what this side has been *told*. Closing an engine whose
+     * IPC has already died leaves its browsers unmarked - the notification has no channel to
+     * arrive on - so a browser belonging to a closed engine keeps answering `false` while every
+     * call through it throws ObjectClosedException. The generation is decided locally by
+     * [FluckEngine] and cannot lie in that direction, so it is the load-bearing clause.
+     *
+     * Guarded, because this is read from `if (isValid)` at the top of nearly every method here:
+     * a throw out of the getter would escape those methods into plugin code, which is the exact
+     * failure it exists to prevent.
+     */
     override val isValid: Boolean
         get() =
-            !disposed.get() && !browser.isClosed &&
-                FluckEngine.currentEngineGeneration == engineGeneration
+            !disposed.get() &&
+                FluckEngine.currentEngineGeneration == engineGeneration &&
+                runCatching { !browser.isClosed }.getOrDefault(false)
 
     override suspend fun loadUrl(url: String) {
         if (!isValid) {
