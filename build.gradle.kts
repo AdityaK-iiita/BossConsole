@@ -26,7 +26,17 @@ plugins {
 // ktlint: formatting gate (`ktlintCheck`, wired into `check`; `ktlintFormat`
 // to fix). The format-the-world PR normalized the whole tree, so any failure
 // is a new violation — run `./gradlew ktlintFormat` and recommit.
+//
+// -PskipLint turns both gates off for a build that is not the gate. CI uses it
+// in the per-OS build jobs, which only need to prove the code compiles and the
+// tests pass; the dedicated code-quality job stays authoritative for lint.
+// Excluding the tasks on the command line is not equivalent: `-x detekt` works,
+// but ktlint wires a ktlint<SourceSet>Check task into `check` for every source
+// set in every module, so `-x ktlintCheck` drops only the umbrella and leaves
+// all of them scheduled.
 // ---------------------------------------------------------------------------
+val skipLint = providers.gradleProperty("skipLint").isPresent
+
 allprojects {
     apply(plugin = "io.gitlab.arturbosch.detekt")
     apply(plugin = "org.jlleitschuh.gradle.ktlint")
@@ -50,6 +60,14 @@ allprojects {
         // The format-the-world PR normalized every module; ktlintCheck is part
         // of `check` and NEW formatting violations fail the build.
         ignoreFailures.set(false)
+    }
+
+    if (skipLint) {
+        tasks
+            .matching {
+                it.name.contains("ktlint", ignoreCase = true) ||
+                    it.name.contains("detekt", ignoreCase = true)
+            }.configureEach { enabled = false }
     }
 }
 

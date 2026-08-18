@@ -180,8 +180,14 @@ jobs:
           echo "🔨 Building application for ${{ matrix.os }}"
           # detekt and ktlintCheck are authoritative in the code-quality job;
           # skip the redundant per-OS runs the plugins wire into check
-          # (3x waste + confusing signal)
-          ./gradlew build -x detekt -x ktlintCheck --stacktrace
+          # (3x waste + confusing signal).
+          #
+          # -PskipLint rather than `-x`: ktlint wires a ktlint<SourceSet>Check
+          # task into `check` for every source set, so `-x ktlintCheck` dropped
+          # only the umbrella task and left 351 ktlint tasks running per OS,
+          # which is how a formatting slip failed this job instead of (just)
+          # code-quality.
+          ./gradlew build -PskipLint --stacktrace
         env:
           # boss-plugin-api-core resolution from GitHub Packages (settings/composeApp repos)
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
