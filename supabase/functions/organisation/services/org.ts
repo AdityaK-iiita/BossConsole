@@ -66,6 +66,13 @@ export interface OrgDomain {
   dns_record_type: string
   dns_record_name: string
   dns_record_value: string
+  /**
+   * Confirmed accounts at this domain that are not yet members.
+   *
+   * Always 0 for an unverified row: the RPC does not compute it there, because an
+   * unverified claim can never be actioned and the count scans auth.users for a domain match.
+   */
+  addable_user_count: number
 }
 
 export interface OrgInvite {

@@ -234,6 +234,19 @@ const STYLES = `
      takes a neutral wash - a row of outlined boxes shouts louder than the words. */
   .pill.mono { border-color: transparent; background-color: var(--token-wash); color: var(--text-2); }
 
+  /* The DNS record a person has to retype into their registrar.
+     LAYOUT ONLY - every colour here is a token already asserted by contrast.test.ts on these
+     surfaces (--text-2 on card and on washOnCard). Introducing a new colour pair would need a new
+     USAGE entry there, and an unasserted pair is how the sub-AA borders shipped the first time. */
+  .dns { display: flex; flex-direction: column; gap: 4px; }
+  .dns-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  /* Fixed width so Name/Type/Value line up as a column and the records read as one block. */
+  .dns-key { font-size: 11px; color: var(--text-2); min-width: 40px; }
+  /* The value is long and arbitrary; let it wrap rather than widen the table past the viewport.
+     anywhere, not break-all: a hostname then breaks at its dots by preference. */
+  .dns .pill.mono { white-space: normal; overflow-wrap: anywhere; }
+  button.copy { padding: 1px 8px; font-size: 11px; }
+
   /* ---- forms ----------------------------------------------------------- */
 
   label { display: block; font-size: 13px; color: var(--text-2); margin-bottom: 6px; }
@@ -347,12 +360,87 @@ const STYLES = `
 
 export type BannerKind = "error" | "ok"
 
+/**
+ * Click-to-copy for anything carrying `data-copy`.
+ *
+ * Opt-in per page via [LayoutOptions.script] rather than shipped on every response, so a page with
+ * nothing to copy carries no script at all.
+ *
+ * EVENT DELEGATION, because it has to be. The CSP is `script-src 'nonce-...'` with no
+ * `unsafe-inline`, so an `onclick=` attribute is dead on arrival - a nonce cannot apply to an
+ * attribute. One nonced block listening on the document is the shape that works, and it also
+ * survives rows being re-rendered.
+ *
+ * The value is read from the attribute rather than from the element's text: the displayed record
+ * may be wrapped or truncated by CSS later, and copying what was DISPLAYED would then quietly hand
+ * someone a broken TXT value.
+ *
+ * `execCommand` is the fallback for good reason, not superstition: `navigator.clipboard` is
+ * undefined outside a secure context and its promise rejects when the document is not focused, and
+ * a DNS record you cannot copy is exactly the failure this exists to remove.
+ */
+const COPY_SCRIPT = `
+(function () {
+  var RESET_MS = 1200;
+  function flash(button, message) {
+    if (button.dataset.busy) return;
+    button.dataset.busy = "1";
+    var original = button.textContent;
+    button.textContent = message;
+    setTimeout(function () {
+      button.textContent = original;
+      delete button.dataset.busy;
+    }, RESET_MS);
+  }
+  function legacyCopy(text) {
+    var area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.top = "-1000px";
+    document.body.appendChild(area);
+    area.select();
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    document.body.removeChild(area);
+    return ok;
+  }
+  document.addEventListener("click", function (event) {
+    var target = event.target;
+    if (!target || typeof target.closest !== "function") return;
+    var button = target.closest("button[data-copy]");
+    if (!button) return;
+    event.preventDefault();
+    var text = button.getAttribute("data-copy") || "";
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        function () { flash(button, "Copied"); },
+        function () { flash(button, legacyCopy(text) ? "Copied" : "Press Ctrl+C"); }
+      );
+      return;
+    }
+    flash(button, legacyCopy(text) ? "Copied" : "Press Ctrl+C");
+  });
+})();
+`
+
+/** The click-to-copy behaviour, for a page that renders `data-copy` buttons. */
+export const COPY_BEHAVIOUR = COPY_SCRIPT
+
 export interface LayoutOptions {
   title: string
   nonce: string
   body: string
   /** Rendered above the body when present. */
   banner?: { kind: BannerKind; message: string } | null
+  /**
+   * JavaScript to inline in a nonced block, or omitted for no script at all.
+   *
+   * This is OUR OWN source only - never a value derived from a request or from an organisation
+   * field. It is written into a `<script>` verbatim, so anything interpolated into it would be
+   * executing, not displaying.
+   */
+  script?: string
 }
 
 /**
@@ -367,7 +455,7 @@ export interface LayoutOptions {
  * banner message is escaped HERE, because it is the one string that routinely
  * originates from an RPC error and would otherwise be interpolated raw.
  */
-export function layout({ title, nonce, body, banner }: LayoutOptions): string {
+export function layout({ title, nonce, body, banner, script }: LayoutOptions): string {
   const bannerHtml = banner
     ? `<div class="banner ${
       banner.kind === "ok" ? "ok" : "error"
@@ -392,6 +480,7 @@ ${body}
 <footer class="page">BOSS Organisation</footer>
 </div>
 <!--/email_off-->
+${script ? `<script nonce="${esc(nonce)}">${script}</script>` : ""}
 </body>
 </html>`
 }

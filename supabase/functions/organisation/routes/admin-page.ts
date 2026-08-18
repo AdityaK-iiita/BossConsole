@@ -12,6 +12,8 @@ import { OpenAPIHono } from "@hono/zod-openapi"
 import { loadAdminPageData } from "../services/org.ts"
 import { htmlResponse } from "../utils/responses.ts"
 import { requireOrgAdmin, requireOrgSession } from "./guards.ts"
+import { consumeHandoffToken } from "./handoff-exchange.ts"
+import { isValidSlug, readRequestFacts } from "../utils/request.ts"
 import { adminPage } from "../views/admin.ts"
 import { errorPage, NOT_AVAILABLE_MESSAGE } from "../views/error.ts"
 
@@ -35,6 +37,7 @@ const RESULT_MESSAGES: Record<string, string> = {
   domain_verified: "Domain verified.",
   domain_primary: "Primary domain updated.",
   domain_unverified: "The TXT record was not found. DNS changes can take a few minutes.",
+  domain_users_added: "Members added. Everyone with an address at that domain is now in the organisation.",
 }
 
 // invite_created and dns_failed were removed as unreachable: the invite handler renders its
@@ -49,6 +52,26 @@ const ERROR_MESSAGES: Record<string, string> = {
 }
 
 adminPageRoutes.get("/o/:slug/admin", async (ctx) => {
+  // BEFORE the session guard, because on this path there IS no session yet. The desktop panel's
+  // Configure button opens this URL with a freshly minted `?t=` handoff token and nothing else;
+  // until now only /o/:slug consumed one, so this route fell straight through to
+  // requireOrgSession, found no cookie and answered "Session expired". Configure therefore never
+  // worked from a cold start - only after Open page had already left a cookie behind.
+  //
+  // The slug is validated here rather than trusted, because it is about to be built into a
+  // Location header. requireOrgSession would have checked it, but it does not run first any more.
+  const slug = ctx.req.param("slug") ?? ""
+  if (isValidSlug(slug)) {
+    const facts = await readRequestFacts(ctx)
+    const exchanged = await consumeHandoffToken(
+      ctx,
+      facts,
+      slug,
+      `/o/${encodeURIComponent(slug)}/admin`,
+    )
+    if (exchanged) return exchanged
+  }
+
   const sessionGuard = await requireOrgSession(ctx)
   if (!sessionGuard.ok) return sessionGuard.response
 

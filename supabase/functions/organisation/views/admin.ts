@@ -8,7 +8,7 @@
  */
 
 import { esc, scrollable } from "../utils/html.ts"
-import { csrfField, layout, tabs } from "./layout.ts"
+import { COPY_BEHAVIOUR, csrfField, layout, tabs } from "./layout.ts"
 import { formatDate } from "./org.ts"
 import { CSRF_FIELD } from "../utils/csrf.ts"
 import type { OrgDetail, OrgDomain, OrgInvite, OrgMember, OrgRole } from "../services/org.ts"
@@ -42,6 +42,8 @@ export function adminPage(options: AdminPageOptions): string {
   return layout({
     title: `${org.name} configuration - BOSS`,
     nonce,
+    // Only this page renders `data-copy` buttons, so only this page carries the script.
+    script: COPY_BEHAVIOUR,
     banner: banner ?? null,
     body: `
 <header class="page">
@@ -57,7 +59,7 @@ ${pending.length > 0 ? pendingCard(action, csrf, pending) : ""}
 ${membersCard(action, csrf, org, active, roles)}
 ${rolesCard(action, csrf, org, roles)}
 ${invitesCard(action, csrf, invites, roles)}
-${domainsCard(action, csrf, domains)}`,
+${domainsCard(action, csrf, domains, org.slug)}`,
   })
 }
 
@@ -68,9 +70,15 @@ ${domainsCard(action, csrf, domains)}`,
  * bearer credential, and a link invites a middle-click that would open it in
  * this browser.
  *
- * No `onfocus="this.select()"`, and no copy button. The CSP is
- * `script-src 'nonce-...'`, which blocks inline event handlers outright, so
- * either would be dead markup that looks like it works.
+ * No `onfocus="this.select()"`: the CSP is `script-src 'nonce-...'`, which blocks
+ * inline event handlers outright, so it would be dead markup that looks like it
+ * works.
+ *
+ * It has no copy button either, but that is now a CHOICE rather than a
+ * constraint. This page carries COPY_BEHAVIOUR for the DNS records, so a
+ * `data-copy` button here would work today - the reason it was ruled out (no
+ * scripting) stopped being true. Worth adding; deliberately not folded into the
+ * DNS change.
  */
 function newInviteCard(url: string): string {
   return `
@@ -392,7 +400,93 @@ function invitesCard(
 </section>`
 }
 
-function domainsCard(action: string, csrf: string, domains: OrgDomain[]): string {
+/**
+ * The TXT record, as three copyable fields rather than one string.
+ *
+ * It used to render as `<name> TXT <value>` in a single span. That reads fine and is useless to
+ * the person holding it: every DNS registrar asks for the host and the value in SEPARATE inputs,
+ * so a one-line blob has to be picked apart by hand, and selecting part of a long token with a
+ * mouse is exactly where a truncated record comes from. A record that fails to verify because a
+ * character was dropped looks identical to one that has not propagated yet.
+ *
+ * The copy button carries the value in `data-copy` rather than reading the element's text, so what
+ * lands on the clipboard is the record even if CSS wraps or truncates what is drawn.
+ *
+ * Type is shown but has no button: "TXT" is three characters and is usually a dropdown anyway.
+ */
+function dnsRecord(domain: OrgDomain): string {
+  return `
+      <div class="dns">
+        <div class="dns-row">
+          <span class="dns-key">Name</span>
+          <span class="pill mono">${esc(domain.dns_record_name)}</span>
+          ${copyButton(domain.dns_record_name, "name")}
+        </div>
+        <div class="dns-row">
+          <span class="dns-key">Type</span>
+          <span class="pill mono">TXT</span>
+        </div>
+        <div class="dns-row">
+          <span class="dns-key">Value</span>
+          <span class="pill mono">${esc(domain.dns_record_value)}</span>
+          ${copyButton(domain.dns_record_value, "value")}
+        </div>
+      </div>`
+}
+
+/**
+ * A copy control.
+ *
+ * `type="button"` is load-bearing: these sit in a table whose other cells hold POST forms, and a
+ * button that defaulted to `submit` would be one stray Enter away from verifying or removing a
+ * domain. The aria-label distinguishes the two buttons in a row, which both read "Copy".
+ */
+function copyButton(value: string, what: string): string {
+  return `<button type="button" class="secondary copy" data-copy="${esc(value)}"` +
+    ` aria-label="Copy the DNS record ${esc(what)}">Copy</button>`
+}
+
+/**
+ * "Add the N existing users at this domain."
+ *
+ * Only for a VERIFIED domain, and only when there is somebody to add. A control that
+ * always showed would sit there reading "Add 0 users" on every organisation that has
+ * already adopted its domain, and a disabled button explaining nothing is worse than
+ * no button.
+ *
+ * THE COUNT IS IN THE LABEL, which is the whole of the confirmation step. This adds
+ * people who did not ask, and if the organisation has auto-assign on it also hands
+ * each of them the member role - so the administrator has to see the size of what
+ * they are about to do before pressing, not after. `addable_user_count` comes from
+ * the same predicate the RPC uses, so the number is the number.
+ *
+ * Not styled `danger`: it is a normal administrative action on a domain this
+ * organisation has proved it controls, not a destructive one. The hint under the
+ * table carries the consequence.
+ */
+function addUsersForm(action: string, csrf: string, domain: OrgDomain): string {
+  // Read defensively rather than trusting the declared type, because the deploy order can make it
+  // a lie: this function ships separately from the migration that adds `addable_user_count` to
+  // list_organisation_domains, and against the older database the field is absent. `undefined < 1`
+  // is FALSE, so a naive guard would have rendered "Add undefined existing users" on every
+  // verified domain in the window between the two deploys.
+  const count = typeof domain.addable_user_count === "number" ? domain.addable_user_count : 0
+  if (!domain.verified || count < 1) return ""
+  const label = count === 1 ? "Add 1 existing user" : `Add ${count} existing users`
+  return `
+        <form class="inline" method="post" action="${esc(action)}/domains/add-users">
+          ${csrfField(CSRF_FIELD, csrf)}
+          <input type="hidden" name="domain_id" value="${esc(domain.domain_id)}">
+          <button type="submit" class="secondary">${esc(label)}</button>
+        </form>`
+}
+
+function domainsCard(
+  action: string,
+  csrf: string,
+  domains: OrgDomain[],
+  orgSlug: string,
+): string {
   const rows = domains.length === 0
     ? '<tr><td colspan="4" class="empty">No domains claimed.</td></tr>'
     : domains.map((domain) => `
@@ -405,11 +499,7 @@ function domainsCard(action: string, csrf: string, domains: OrgDomain[]): string
         ? '<span class="pill ok">verified</span>'
         : '<span class="pill warn">unverified</span>'
     }</td>
-      <td>${
-      domain.verified ? "" : `<span class="mono">${esc(domain.dns_record_name)} TXT ${
-        esc(domain.dns_record_value)
-      }</span>`
-    }</td>
+      <td>${domain.verified ? "" : dnsRecord(domain)}</td>
       <td>
         ${
       domain.verified ? "" : `
@@ -428,6 +518,7 @@ function domainsCard(action: string, csrf: string, domains: OrgDomain[]): string
           </form>`
         : ""
     }
+        ${addUsersForm(action, csrf, domain)}
         <form class="inline" method="post" action="${esc(action)}/domains/remove">
           ${csrfField(CSRF_FIELD, csrf)}
           <input type="hidden" name="domain_id" value="${esc(domain.domain_id)}">
@@ -440,6 +531,9 @@ function domainsCard(action: string, csrf: string, domains: OrgDomain[]): string
 <section class="card">
   <h2>Domains</h2>
   <p class="hint">A verified domain lets people with a matching email address find and join this organisation. Add the TXT record, then press Verify.</p>
+  <p class="hint">Once a domain is verified you can also add the accounts that already use it. They become members immediately without being asked, and if new members are given the ${
+    esc(orgSlug)
+  }_user role automatically, anything shared with that role becomes readable by all of them.</p>
   ${scrollable("Domains", `
   <table>
     <thead><tr><th>Domain</th><th>Status</th><th>DNS record</th><th></th></tr></thead>

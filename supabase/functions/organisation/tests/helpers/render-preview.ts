@@ -125,7 +125,11 @@ const domains: OrgDomain[] = [
     verified_at: "2026-02-01T10:00:00Z",
     dns_record_type: "TXT",
     dns_record_name: "_boss-verify.risalabs.ai",
-    dns_record_value: "boss-verify=6f2a9c31d7b84e05",
+    // The real prefix. It was "boss-verify=" here, which the RPC never emits and
+    // extractToken would reject - a preview that could not survive a real Verify.
+    dns_record_value: "boss-org-verification=6f2a9c31d7b84e05",
+    // Verified and with people left to adopt, so the preview shows the button.
+    addable_user_count: 12,
   },
   {
     domain_id: "d2",
@@ -135,7 +139,9 @@ const domains: OrgDomain[] = [
     verified_at: null,
     dns_record_type: "TXT",
     dns_record_name: "_boss-verify.risaboss.com",
-    dns_record_value: "boss-verify=1c7e40ab99f3ad2",
+    dns_record_value: "boss-org-verification=1c7e40ab99f3ad2",
+    // Unverified rows always carry 0: the RPC does not compute the count for them.
+    addable_user_count: 0,
   },
 ]
 

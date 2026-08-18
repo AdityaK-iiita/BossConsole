@@ -17,19 +17,13 @@
  */
 
 import { OpenAPIHono } from "@hono/zod-openapi"
-import { exchangeHandoffToken, urlWithoutToken } from "../services/handoff.ts"
+import { consumeHandoffToken } from "./handoff-exchange.ts"
 import { isOrgMember } from "../services/authority.ts"
 import { loadOrgPageData } from "../services/org.ts"
-import { htmlResponse, redirectResponse } from "../utils/responses.ts"
-import { mintSession, newCsrfToken, sessionCookieHeader } from "../utils/session.ts"
+import { htmlResponse } from "../utils/responses.ts"
 import { isValidSlug, readRequestFacts } from "../utils/request.ts"
-import { clientKey, rateLimit } from "../utils/rate-limit.ts"
 import { errorPage, NOT_AVAILABLE_MESSAGE, SESSION_EXPIRED_MESSAGE } from "../views/error.ts"
 import { orgPage } from "../views/org.ts"
-
-/** 20 exchanges per minute per client. Generous for a human, useless for a loop. */
-const HANDOFF_LIMIT = 20
-const HANDOFF_WINDOW_SECONDS = 60
 
 export const orgPageRoutes = new OpenAPIHono()
 
@@ -41,88 +35,10 @@ orgPageRoutes.get("/o/:slug", async (ctx) => {
     return notAvailable()
   }
 
-  const token = new URL(ctx.req.url).searchParams.get("t")
-
-  if (token) {
-    // A state-changing GET, and the one request that does not follow the
-    // session -> CSRF -> probe order the rest of this function keeps to. Consuming a
-    // token and issuing Set-Cookie means any page could navigate a victim to
-    // /o/<slug>?t=<attacker token> and replace their org session with the attacker's
-    // identity - login CSRF. The attacker gains nothing, but the victim can be induced
-    // to type into a settings form belonging to somebody else's organisation.
-    //
-    // Sec-Fetch-Site is not settable by page script. The desktop app opens this as a
-    // top-level navigation from a boss:// link, which yields `none`, so refusing only
-    // `cross-site` costs the real flow nothing.
-    if (ctx.req.header("sec-fetch-site") === "cross-site") {
-      return htmlResponse(
-        (nonce) =>
-          errorPage({
-            nonce,
-            title: "Session unavailable - BOSS",
-            heading: "Open this from BOSS",
-            message: SESSION_EXPIRED_MESSAGE,
-          }),
-        { status: 400 },
-      )
-    }
-
-    const limit = rateLimit(
-      `handoff:${clientKey(ctx.req.raw.headers)}`,
-      HANDOFF_LIMIT,
-      HANDOFF_WINDOW_SECONDS,
-    )
-    if (!limit.allowed) {
-      return htmlResponse(
-        (nonce) =>
-          errorPage({
-            nonce,
-            title: "Too many attempts - BOSS",
-            heading: "Too many attempts",
-            message: "Please wait a moment and open the page again from BOSS.",
-          }),
-        { status: 429, headers: { "Retry-After": String(limit.retryAfterSeconds) } },
-      )
-    }
-
-    const exchange = await exchangeHandoffToken(token, slug)
-    if (!exchange.ok) {
-      // Both failure reasons render the same page. A distinguishable
-      // slug_mismatch would confirm that a guessed token is real and tell the
-      // holder which org it belongs to.
-      return htmlResponse(
-        (nonce) =>
-          errorPage({
-            nonce,
-            title: "Session unavailable - BOSS",
-            heading: "This link has expired",
-            message: SESSION_EXPIRED_MESSAGE,
-          }),
-        { status: 400 },
-      )
-    }
-
-    const value = await mintSession({
-      sub: exchange.identity.userId,
-      org: exchange.identity.orgId,
-      slug: exchange.identity.orgSlug,
-      csrf: newCsrfToken(),
-      pur: exchange.identity.purpose,
-    })
-
-    // The redirect target is rebuilt from the configured base path, so the
-    // token cannot survive in the Location by way of an echoed request URL.
-    const location = urlWithoutToken(
-      facts.basePath,
-      `/o/${encodeURIComponent(slug)}`,
-      new URL(ctx.req.url).searchParams,
-    )
-
-    return redirectResponse(location, {
-      status: 302,
-      headers: { "Set-Cookie": sessionCookieHeader(value, facts.secure, facts.basePath) },
-    })
-  }
+  // The token exchange is shared with the admin page, which the desktop panel also opens
+  // directly. See routes/handoff-exchange.ts for why it cannot live here.
+  const exchanged = await consumeHandoffToken(ctx, facts, slug, `/o/${encodeURIComponent(slug)}`)
+  if (exchanged) return exchanged
 
   const session = facts.session
   if (!session) {
