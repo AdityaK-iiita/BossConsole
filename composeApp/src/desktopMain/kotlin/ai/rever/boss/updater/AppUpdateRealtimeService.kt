@@ -1,6 +1,7 @@
 package ai.rever.boss.updater
 
 import ai.rever.boss.config.UpdateSourceConfig
+import ai.rever.boss.services.supabase.NamedSupabaseLogging
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import io.github.jan.supabase.SupabaseClient
@@ -74,6 +75,7 @@ class AppUpdateRealtimeService(
 
             client =
                 createSupabaseClient(supabaseUrl = fullUrl, supabaseKey = anonKey) {
+                    defaultLoggingFactory = { level -> NamedSupabaseLogging("app-update", level) }
                     install(Realtime) {
                         // Match SupabaseConfig heartbeat settings to avoid "Heartbeat
                         // timeout" websocket crashes in Ktor.

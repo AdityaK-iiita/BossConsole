@@ -64,6 +64,7 @@ object SupabaseConfig {
                         autoLoadFromStorage = true
                     }
                     install(Postgrest)
+                    defaultLoggingFactory = { level -> NamedSupabaseLogging("main", level) }
                     install(Realtime) {
                         // Increase heartbeat interval to prevent premature timeout disconnects.
                         // Default is 10s with 30s timeout — on slower networks or under load
