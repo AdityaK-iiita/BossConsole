@@ -2922,6 +2922,10 @@ object FluckEngine {
                 // Check if Shift key is pressed (force save dialog)
                 val forceDialog = isShiftPressed()
 
+                // Generated up here because it owns the path claim below, and a claim has to
+                // name its holder so that no other download can release it.
+                val downloadId = UUID.randomUUID().toString()
+
                 // Determine save location based on settings
                 val savePath =
                     when {
@@ -2940,13 +2944,22 @@ object FluckEngine {
                             val directory =
                                 downloadSettings.lastUsedDirectory
                                     ?: downloadSettings.defaultDownloadDirectory
-                            FileSystemUtils.generateUniqueFilePath(directory, sanitizedFileName)
+                            FileSystemUtils.generateUniqueFilePath(directory, sanitizedFileName, owner = downloadId)
                         }
                     }
 
                 if (savePath != null) {
+                    // The name the file is actually written under. generateUniqueFilePath may
+                    // have appended " (1)", and the save dialog lets the user type anything at
+                    // all, so sanitizedFileName is only ever a *request*. Recording that instead
+                    // left the Downloads panel showing "report.pdf" for a file on disk called
+                    // "report (1).pdf" - and Rename, Reveal and Open all read from the panel.
+                    val savedFileName = java.io.File(savePath).name
                     // Ensure parent directory exists
                     if (!FileSystemUtils.ensureParentDirectoryExists(savePath)) {
+                        // Bailing before setupDownloadEventListeners means none of the three
+                        // terminal handlers will run, so the claim is released here or never.
+                        FileSystemUtils.releaseFilePath(savePath, owner = downloadId)
                         action.cancel()
                         return@StartDownloadCallback
                     }
@@ -2967,15 +2980,12 @@ object FluckEngine {
                         downloadSettings = downloadSettings.copy(lastUsedDirectory = parentDir)
                     }
 
-                    // Generate unique download ID
-                    val downloadId = UUID.randomUUID().toString()
-
                     // Add download to manager immediately and open Downloads panel
                     CoroutineScope(Dispatchers.Default).launch {
                         downloadManager.addDownload(
                             DownloadItem(
                                 id = downloadId,
-                                fileName = sanitizedFileName,
+                                fileName = savedFileName,
                                 destinationPath = savePath,
                                 url = target.url(),
                                 mimeType = target.mimeType().toString(),
@@ -3068,6 +3078,8 @@ object FluckEngine {
                 // Remove from tracking maps
                 activeDownloadUrls.remove(url)
                 activeDownloads.remove(downloadId)
+                // The file exists now, so exists() guards the name from here on.
+                FileSystemUtils.releaseFilePath(destinationPath, owner = downloadId)
             }
         }
 
@@ -3084,6 +3096,9 @@ object FluckEngine {
                 // Remove from tracking maps
                 activeDownloadUrls.remove(url)
                 activeDownloads.remove(downloadId)
+                // Nothing was written, so the name goes back to the pool rather than
+                // pushing the next download of it onto a suffix it does not need.
+                FileSystemUtils.releaseFilePath(destinationPath, owner = downloadId)
             }
         }
 
@@ -3095,6 +3110,7 @@ object FluckEngine {
                 // Remove from tracking maps
                 activeDownloadUrls.remove(url)
                 activeDownloads.remove(downloadId)
+                FileSystemUtils.releaseFilePath(destinationPath, owner = downloadId)
             }
         }
     }

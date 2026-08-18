@@ -12,6 +12,7 @@ import ai.rever.boss.components.window_panel.components.main_window_panels.BossM
 import ai.rever.boss.components.window_panel.components.main_window_panels.BossTabsComponent
 import ai.rever.boss.components.window_panel.components.main_window_panels.createBossAppContext
 import ai.rever.boss.icons.FileIcons
+import ai.rever.boss.platform.bossFileDropTarget
 import ai.rever.boss.plugin.api.Panel
 import ai.rever.boss.plugin.api.TabIcon
 import ai.rever.boss.plugin.api.TabInfo
@@ -23,6 +24,7 @@ import ai.rever.boss.plugin.tab.terminal.TerminalTabInfo
 import ai.rever.boss.plugin.ui.BossTheme
 import ai.rever.boss.project.DefaultWorkingDirectory
 import ai.rever.boss.topofmind.ActiveTab
+import ai.rever.boss.utils.extractFileName
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import ai.rever.boss.window.WindowProjectStateRegistry
@@ -1539,7 +1541,18 @@ fun SplitViewPanel(
     tabDragComponent: TabDraggableComponent? = null,
     onTabDropResult: (TabDropResult) -> Unit = {},
 ) {
-    Box(modifier = modifier.fillMaxSize()) {
+    Box(
+        modifier =
+            modifier
+                .fillMaxSize()
+                // Dropping a file on the main panel opens it, routed by extension exactly as a
+                // click in the sidebar would be. Attached here rather than per-panel so the
+                // whole main area is a target, and it accepts the plain OS file flavour, so a
+                // drag out of Finder works the same as one out of a BOSS sidebar.
+                .bossFileDropTarget { paths ->
+                    paths.forEach { splitViewState.openFileInActivePanel(it, it.extractFileName()) }
+                },
+    ) {
         RenderSplitNode(
             node = splitViewState.rootNode,
             splitViewState = splitViewState,
