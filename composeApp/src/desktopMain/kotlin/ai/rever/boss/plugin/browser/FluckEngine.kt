@@ -115,313 +115,6 @@ object FluckEngine {
         }
     }
 
-    /**
-     * Swing-based find bar that overlays the browser window.
-     * Uses JxBrowser's TextFinder API for searching (no focus stealing).
-     * Styled to match BossTerm's SearchBar (VS Code-style, dark theme, top-right).
-     */
-    private val activeFindBars = java.util.concurrent.ConcurrentHashMap<com.teamdev.jxbrowser.browser.Browser, BrowserFindBar>()
-
-    private class BrowserFindBar(
-        private val browser: com.teamdev.jxbrowser.browser.Browser,
-    ) {
-        private var dialog: javax.swing.JDialog? = null
-        private var textField: javax.swing.JTextField? = null
-        private var infoLabel: javax.swing.JLabel? = null
-        private var caseSensitive = false
-        private var ownerWindow: java.awt.Window? = null
-        private var componentListener: java.awt.event.ComponentListener? = null
-        private var searchTimer: javax.swing.Timer? = null
-        var visible = false
-            private set
-
-        fun toggle() {
-            if (visible) hide() else show()
-        }
-
-        fun show() {
-            // `visible` is committed only once a window is resolved. Setting it first left the bar
-            // marked visible while show() bailed out, so the NEXT Ctrl+F called hide() and the
-            // shortcut degraded into a dead every-other-press toggle. That is reachable now that
-            // Ctrl+F is served on the no-focused-window path, which is exactly the state where
-            // AWT's focusedWindow is most likely to be null too.
-            val window =
-                java.awt.KeyboardFocusManager
-                    .getCurrentKeyboardFocusManager()
-                    .focusedWindow
-                    ?: return
-            visible = true
-            ownerWindow = window
-            javax.swing.SwingUtilities.invokeLater {
-                if (dialog == null) {
-                    createDialog(window)
-                }
-                positionDialog(window)
-                dialog?.isVisible = true
-                textField?.requestFocusInWindow()
-                textField?.selectAll()
-            }
-        }
-
-        fun hide() {
-            visible = false
-            javax.swing.SwingUtilities.invokeLater {
-                dialog?.isVisible = false
-                try {
-                    if (!browser.isClosed) browser.textFinder().stopFindingAndClearSelection()
-                } catch (e: Exception) {
-                    logger.debug(LogCategory.BROWSER, "Error clearing find highlights", mapOf("error" to (e.message ?: "unknown")))
-                }
-            }
-        }
-
-        private fun positionDialog(owner: java.awt.Window) {
-            val d = dialog ?: return
-            d.pack()
-            val x = owner.x + owner.width - d.width - 16
-            val y = owner.y + 80
-            d.setLocation(x.coerceAtLeast(owner.x + 4), y)
-        }
-
-        /** Unified find method — #4: deduplicated from doFind/doInitialFind */
-        private fun performFind(backward: Boolean) {
-            val query = textField?.text ?: return
-            if (query.isEmpty()) {
-                infoLabel?.text = ""
-                try {
-                    if (!browser.isClosed) browser.textFinder().stopFindingAndClearSelection()
-                } catch (e: Exception) {
-                    logger.debug(LogCategory.BROWSER, "Error clearing find", mapOf("error" to (e.message ?: "unknown")))
-                }
-                return
-            }
-            if (browser.isClosed) return
-            try {
-                val options =
-                    com.teamdev.jxbrowser.search.FindOptions
-                        .newBuilder()
-                        .matchCase(caseSensitive)
-                        .searchBackward(backward)
-                        .build()
-                browser.textFinder().find(query, options) { result ->
-                    javax.swing.SwingUtilities.invokeLater {
-                        val total = result.numberOfMatches()
-                        val current = result.selectedMatch()
-                        if (total > 0) {
-                            infoLabel?.text = "$current/$total"
-                            infoLabel?.foreground =
-                                java.awt.Color(
-                                    BossThemeController.current.colors.textPrimary
-                                        .toArgb(),
-                                    true,
-                                )
-                        } else {
-                            infoLabel?.text = "0/0"
-                            infoLabel?.foreground =
-                                java.awt.Color(
-                                    BossThemeController.current.colors.alert
-                                        .toArgb(),
-                                    true,
-                                )
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                logger.debug(LogCategory.BROWSER, "Find operation failed", mapOf("error" to (e.message ?: "unknown")))
-            }
-        }
-
-        /** #8: Debounced live search — 150ms delay to avoid hammering renderer per keystroke */
-        private fun debouncedFind() {
-            searchTimer?.stop()
-            searchTimer = javax.swing.Timer(150) { performFind(false) }
-            searchTimer?.isRepeats = false
-            searchTimer?.start()
-        }
-
-        private fun createDialog(owner: java.awt.Window) {
-            // Colors resolve from the active BOSS theme at dialog build time.
-            // Known asymmetry with the Compose UI: this Swing dialog SNAPSHOTS
-            // the tokens at construction, so a live theme switch restyles it
-            // only on the next createDialog(), not while it is open.
-            val colors = BossThemeController.current.colors
-            val bg = java.awt.Color(colors.panel.toArgb(), true)
-            val inputBg = java.awt.Color(colors.raised.toArgb(), true)
-            val fg = java.awt.Color(colors.textPrimary.toArgb(), true)
-            val mutedFg = java.awt.Color(colors.textSecondary.toArgb(), true)
-
-            fun cssHex(c: java.awt.Color) = "#%06x".format(c.rgb and 0xFFFFFF)
-            val font = java.awt.Font("SansSerif", java.awt.Font.PLAIN, 13)
-            val smallFont = java.awt.Font("SansSerif", java.awt.Font.PLAIN, 11)
-
-            // #3: Use Window-accepting constructor instead of Frame cast
-            val d = javax.swing.JDialog(owner)
-            d.isUndecorated = true
-            d.isAlwaysOnTop = false
-            d.background = bg
-            d.type = java.awt.Window.Type.UTILITY
-
-            val content = javax.swing.JPanel()
-            content.background = bg
-            content.layout = java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 2, 4)
-            content.border =
-                javax.swing.BorderFactory.createCompoundBorder(
-                    javax.swing.BorderFactory.createLineBorder(java.awt.Color(colors.line.toArgb(), true)),
-                    javax.swing.BorderFactory.createEmptyBorder(2, 6, 2, 6),
-                )
-
-            val tf = javax.swing.JTextField(14)
-            tf.font = font
-            tf.foreground = fg
-            tf.background = inputBg
-            tf.caretColor = fg
-            tf.border =
-                javax.swing.BorderFactory.createCompoundBorder(
-                    javax.swing.BorderFactory.createLineBorder(java.awt.Color(colors.lineStrong.toArgb(), true)),
-                    javax.swing.BorderFactory.createEmptyBorder(2, 6, 2, 6),
-                )
-            tf.preferredSize = java.awt.Dimension(160, 28)
-            textField = tf
-
-            val info = javax.swing.JLabel("")
-            info.font = smallFont
-            info.foreground = mutedFg
-            info.preferredSize = java.awt.Dimension(44, 28)
-            info.horizontalAlignment = javax.swing.SwingConstants.CENTER
-            infoLabel = info
-
-            fun makeBtn(
-                html: String,
-                tooltip: String,
-            ): javax.swing.JButton {
-                val b = javax.swing.JButton(html)
-                b.font = font
-                b.foreground = fg
-                b.background = bg
-                b.isFocusPainted = false
-                b.isBorderPainted = false
-                b.isContentAreaFilled = false
-                b.isOpaque = false
-                b.toolTipText = tooltip
-                b.preferredSize = java.awt.Dimension(28, 28)
-                b.margin = java.awt.Insets(0, 0, 0, 0)
-                b.horizontalAlignment = javax.swing.SwingConstants.CENTER
-                b.cursor = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
-                return b
-            }
-
-            val prevBtn = makeBtn("<html><span style='font-size:10px;color:${cssHex(fg)};'>\u25B2</span></html>", "Previous (Shift+Enter)")
-            val nextBtn = makeBtn("<html><span style='font-size:10px;color:${cssHex(fg)};'>\u25BC</span></html>", "Next (Enter)")
-            val caseBtn = makeBtn("<html><span style='font-size:12px;color:${cssHex(mutedFg)};'>Aa</span></html>", "Case sensitive")
-            caseBtn.preferredSize = java.awt.Dimension(40, 28)
-            val closeBtn = makeBtn("<html><span style='font-size:12px;color:${cssHex(fg)};'>\u2715</span></html>", "Close (Esc)")
-
-            prevBtn.addActionListener { performFind(true) }
-            nextBtn.addActionListener { performFind(false) }
-            caseBtn.addActionListener {
-                caseSensitive = !caseSensitive
-                val color =
-                    if (caseSensitive) {
-                        cssHex(
-                            java.awt.Color(
-                                BossThemeController.current.colors.signal
-                                    .toArgb(),
-                                true,
-                            ),
-                        )
-                    } else {
-                        cssHex(mutedFg)
-                    }
-                val weight = if (caseSensitive) "bold" else "normal"
-                caseBtn.text = "<html><span style='font-size:12px;color:$color;font-weight:$weight;'>Aa</span></html>"
-                performFind(false)
-            }
-            closeBtn.addActionListener { hide() }
-
-            val isMac = SystemUtils.isMacOS
-            tf.addKeyListener(
-                object : java.awt.event.KeyAdapter() {
-                    override fun keyPressed(e: java.awt.event.KeyEvent) {
-                        val isMainMod = if (isMac) e.isMetaDown else e.isControlDown
-                        when {
-                            e.keyCode == java.awt.event.KeyEvent.VK_ESCAPE -> {
-                                hide()
-                                e.consume()
-                            }
-
-                            e.keyCode == java.awt.event.KeyEvent.VK_F && isMainMod && !e.isShiftDown -> {
-                                hide()
-                                e.consume()
-                            }
-
-                            e.keyCode == java.awt.event.KeyEvent.VK_ENTER && e.isShiftDown -> {
-                                performFind(true)
-                                e.consume()
-                            }
-
-                            e.keyCode == java.awt.event.KeyEvent.VK_ENTER -> {
-                                performFind(false)
-                                e.consume()
-                            }
-                        }
-                    }
-                },
-            )
-
-            // #8: Debounced live search on typing
-            tf.document.addDocumentListener(
-                object : javax.swing.event.DocumentListener {
-                    override fun insertUpdate(e: javax.swing.event.DocumentEvent?) = debouncedFind()
-
-                    override fun removeUpdate(e: javax.swing.event.DocumentEvent?) = debouncedFind()
-
-                    override fun changedUpdate(e: javax.swing.event.DocumentEvent?) = debouncedFind()
-                },
-            )
-
-            content.add(tf)
-            content.add(info)
-            content.add(prevBtn)
-            content.add(nextBtn)
-            content.add(caseBtn)
-            content.add(closeBtn)
-            d.contentPane = content
-
-            val listener =
-                object : java.awt.event.ComponentAdapter() {
-                    override fun componentMoved(e: java.awt.event.ComponentEvent?) = positionDialog(owner)
-
-                    override fun componentResized(e: java.awt.event.ComponentEvent?) = positionDialog(owner)
-                }
-            owner.addComponentListener(listener)
-            componentListener = listener
-
-            dialog = d
-        }
-
-        fun dispose() {
-            searchTimer?.stop()
-            searchTimer = null
-            componentListener?.let { listener ->
-                ownerWindow?.removeComponentListener(listener)
-            }
-            componentListener = null
-            ownerWindow = null
-            dialog?.dispose()
-            dialog = null
-            textField = null
-            infoLabel = null
-        }
-    }
-
-    /**
-     * Clean up find bar resources for a browser that is being closed.
-     * Call from browser disposal logic to prevent resource leaks.
-     */
-    fun disposeBrowserFindBar(browser: com.teamdev.jxbrowser.browser.Browser) {
-        activeFindBars.remove(browser)?.dispose()
-    }
-
     // @Volatile on all three: written under engineLock but read WITHOUT the lock —
     // _engine via currentEngine/isEngineHealthy/setColorScheme, the other two via
     // initError/isAvailable() on the UI thread. Pre-warm moves the writes to a
@@ -2816,6 +2509,42 @@ object FluckEngine {
     }
 
     /**
+     * Publish [BrowserFindKeyProbe] into every frame of [browser] at document start.
+     *
+     * **Every frame, not just the main one.** A keydown is delivered to the focused frame, so a
+     * find chord pressed inside an iframe is only observable by a listener inside that iframe. The
+     * interaction collector gets away with main-frame-only injection because it reports what it
+     * sees; this one has to answer a question about a specific keypress, and a missing answer means
+     * our bar opens over a page that wanted to serve its own.
+     *
+     * Through [BrowserInjectDispatcher] rather than `browser.set(InjectJsCallback…)`: JxBrowser has
+     * exactly one such slot per browser and a second registration silently replaces the first.
+     */
+    private fun installFindKeyProbe(browser: com.teamdev.jxbrowser.browser.Browser) {
+        val bridge =
+            BrowserFindKeyProbeBridge { pageHandledKey ->
+                BrowserFindController.onPageVerdict(browser, pageHandledKey)
+            }
+        BrowserInjectDispatcher.register(browser) { frame ->
+            try {
+                frame
+                    .executeJavaScript<com.teamdev.jxbrowser.js.JsObject>("window")
+                    ?.putProperty(BrowserFindKeyProbe.BRIDGE_PROPERTY, bridge)
+                frame.executeJavaScript<Any?>(BrowserFindKeyProbe.source)
+            } catch (e: Exception) {
+                // The class only, never the message: this runs against arbitrary pages. A frame
+                // that refuses injection is normal (a cross-process navigation can tear one down
+                // mid-flight) and the verdict deadline covers it.
+                logger.debug(
+                    LogCategory.BROWSER,
+                    "Find-key probe injection failed",
+                    mapOf("error" to (e::class.simpleName ?: "Exception")),
+                )
+            }
+        }
+    }
+
+    /**
      * Sets up keyboard interceptor for a browser to forward menu shortcuts to the native menu bar.
      * This intercepts Cmd+R, Cmd+N, Cmd+T, Cmd+W, etc. (on macOS) or Ctrl+R, Ctrl+N, etc. (on Windows/Linux)
      * before JxBrowser consumes them, and manually triggers the corresponding MenuActionsHandler methods.
@@ -2828,6 +2557,12 @@ object FluckEngine {
         browser: com.teamdev.jxbrowser.browser.Browser,
         ownerWindowId: String? = null,
     ) {
+        // Adopt the browser for find-in-page before the callback below can serve a find chord.
+        // A browser created outside a BrowserHandleImpl reaches this too (the legacy
+        // BrowserFunctions.createBrowser path), which is why registration lives here rather than
+        // only in the handle: this is the one function both paths call.
+        BrowserFindController.register(browser)
+        installFindKeyProbe(browser)
         val suppressionLogged = AtomicBoolean(false)
         browser.set(
             com.teamdev.jxbrowser.browser.callback.input.PressKeyCallback::class.java,
@@ -2919,12 +2654,31 @@ object FluckEngine {
                                     .suppress()
                             }
 
+                            com.teamdev.jxbrowser.ui.KeyCode.KEY_CODE_G -> {
+                                // "Find again". Claimed only while our bar is up with a query -
+                                // otherwise it does nothing here, and proceeding leaves the chord to
+                                // a page that may have its own meaning for it.
+                                if (BrowserFindController.onFindAgainKey(browser, backward = false)) {
+                                    return@PressKeyCallback com.teamdev.jxbrowser.browser.callback.input.PressKeyCallback.Response
+                                        .suppress()
+                                }
+                            }
+
                             com.teamdev.jxbrowser.ui.KeyCode.KEY_CODE_F -> {
-                                // Toggle Swing-based find bar (uses TextFinder API, no focus issues)
-                                val findBar = activeFindBars.getOrPut(browser) { BrowserFindBar(browser) }
-                                findBar.toggle()
-                                return@PressKeyCallback com.teamdev.jxbrowser.browser.callback.input.PressKeyCallback.Response
-                                    .suppress()
+                                // NOT suppressed unconditionally any more, which is the whole point.
+                                // Suppressing meant the page never saw the key, so a site with its own
+                                // find-in-page (Sheets, Docs, Notion) could never serve it - Chrome
+                                // treats this chord as a non-reserved accelerator and lets the page
+                                // pre-empt it. onFindKeyFromPage decides: it suppresses only when our
+                                // bar is already up, and otherwise proceeds and waits for the page's
+                                // verdict. See BrowserFindKeyProbe.
+                                return@PressKeyCallback if (BrowserFindController.onFindKeyFromPage(browser)) {
+                                    com.teamdev.jxbrowser.browser.callback.input.PressKeyCallback.Response
+                                        .suppress()
+                                } else {
+                                    com.teamdev.jxbrowser.browser.callback.input.PressKeyCallback.Response
+                                        .proceed()
+                                }
                             }
 
                             else -> {
@@ -2938,11 +2692,24 @@ object FluckEngine {
                         // passes no ownerWindowId). This callback is browser-scoped either way, so
                         // anything needing only the browser is served directly rather than dropped.
                         when (keyCode) {
+                            com.teamdev.jxbrowser.ui.KeyCode.KEY_CODE_G -> {
+                                // "Find again". Claimed only while our bar is up with a query -
+                                // otherwise it does nothing here, and proceeding leaves the chord to
+                                // a page that may have its own meaning for it.
+                                if (BrowserFindController.onFindAgainKey(browser, backward = false)) {
+                                    return@PressKeyCallback com.teamdev.jxbrowser.browser.callback.input.PressKeyCallback.Response
+                                        .suppress()
+                                }
+                            }
+
                             com.teamdev.jxbrowser.ui.KeyCode.KEY_CODE_F -> {
-                                val findBar = activeFindBars.getOrPut(browser) { BrowserFindBar(browser) }
-                                findBar.toggle()
-                                return@PressKeyCallback com.teamdev.jxbrowser.browser.callback.input.PressKeyCallback.Response
-                                    .suppress()
+                                return@PressKeyCallback if (BrowserFindController.onFindKeyFromPage(browser)) {
+                                    com.teamdev.jxbrowser.browser.callback.input.PressKeyCallback.Response
+                                        .suppress()
+                                } else {
+                                    com.teamdev.jxbrowser.browser.callback.input.PressKeyCallback.Response
+                                        .proceed()
+                                }
                             }
 
                             com.teamdev.jxbrowser.ui.KeyCode.KEY_CODE_N,
@@ -2964,6 +2731,15 @@ object FluckEngine {
 
                 // Intercept main modifier + Shift + key shortcuts
                 if (isMainModifierDown && modifiers.isShiftDown && !modifiers.isAltDown) {
+                    // "Find previous", handled BEFORE the window gate for the same reason reload is:
+                    // it needs only the browser this callback already has, so routing it through a
+                    // focused window would drop it on the unowned path for nothing.
+                    if (keyCode == com.teamdev.jxbrowser.ui.KeyCode.KEY_CODE_G &&
+                        BrowserFindController.onFindAgainKey(browser, backward = true)
+                    ) {
+                        return@PressKeyCallback com.teamdev.jxbrowser.browser.callback.input.PressKeyCallback.Response
+                            .suppress()
+                    }
                     if (shortcutWindowId != null) {
                         when (keyCode) {
                             com.teamdev.jxbrowser.ui.KeyCode.KEY_CODE_F -> {

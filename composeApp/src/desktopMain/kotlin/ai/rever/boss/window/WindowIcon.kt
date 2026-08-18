@@ -38,9 +38,15 @@ import javax.imageio.ImageIO
  * The five `Heavyweight*` overlays are branded too, which is worth stating because it looks
  * pointless: they are `undecorated` and `transparent`, so they have no title bar to put an icon in.
  * They are still plain `Frame`s with no `Window.Type` set, so Windows gives them taskbar buttons and
- * Alt-Tab cards of their own - which is where an unbranded one shows a coffee cup. The one window
- * deliberately left alone is `FluckEngine`'s find bar: it is a `JDialog` and `Window.Type.UTILITY`,
- * so it has no icon surface at all.
+ * Alt-Tab cards of their own - which is where an unbranded one shows a coffee cup.
+ *
+ * The find bar used to be the one exemption, as a `JDialog` with `Window.Type.UTILITY` and so no
+ * icon surface at all. It is Compose content now (see `BrowserFindBar`), hosted by
+ * `HeavyweightCorner`'s FOCUSABLE branch as an owned `ComposeDialog` that keeps the same window
+ * type - so it still gets no taskbar button and no Alt-Tab card, and its owner stays active while it
+ * holds focus. It is branded anyway, and is no longer an exemption: the type is set through a
+ * `runCatching`, so a platform that refuses it leaves an ordinary dialog that does have an icon
+ * surface.
  */
 object BossWindowIcon {
     private val logger = BossLogger.forComponent("BossWindowIcon")

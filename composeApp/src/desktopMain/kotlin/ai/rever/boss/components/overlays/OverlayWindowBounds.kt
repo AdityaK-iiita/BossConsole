@@ -4,13 +4,16 @@ import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.rememberWindowState
 import java.awt.GraphicsEnvironment
 import java.awt.Window
+import kotlin.math.roundToInt
 
 /**
  * Where a heavyweight overlay window (popup, modal) should be placed, shared by
@@ -119,3 +122,103 @@ internal fun overlayRectOrScreen(
     bounds: IntArray?,
     screen: IntArray,
 ): IntArray = bounds ?: screen
+
+/**
+ * The rectangle the corner is resolved inside: an explicit [regionInWindow] when the caller gave
+ * one, otherwise [bounds] narrowed by [inset].
+ *
+ * [regionInWindow] is in dp relative to the content pane, matching `HeavyweightPopup`'s
+ * `anchorInWindow`, and AWT's logical units map 1:1 to dp - so this is an offset, never a scale.
+ *
+ * It is CLAMPED to [bounds] rather than trusted. The caller measures it from Compose layout while
+ * the pane is measured from AWT, and the two can disagree for a frame during a resize or a window
+ * move; an unclamped region wider than the pane would place an always-on-top overlay outside the
+ * window it belongs to. A degenerate region (zero or negative after clamping) falls back to the
+ * inset path, because placing the overlay at the pane corner is wrong but visible, whereas a
+ * zero-sized region puts it at the pane origin with no indication why.
+ */
+@Suppress("ReturnCount")
+internal fun resolveRegion(
+    bounds: IntArray?,
+    inset: DpSize,
+    regionInWindow: IntRect?,
+): IntArray? {
+    if (bounds == null || regionInWindow == null) return insetBounds(bounds, inset)
+    val left = regionInWindow.left.coerceIn(0, bounds[2])
+    val top = regionInWindow.top.coerceIn(0, bounds[3])
+    val width = regionInWindow.width.coerceAtMost(bounds[2] - left)
+    val height = regionInWindow.height.coerceAtMost(bounds[3] - top)
+    if (width <= 0 || height <= 0) return insetBounds(bounds, inset)
+    return intArrayOf(bounds[0] + left, bounds[1] + top, width, height)
+}
+
+/**
+ * Top-left corner, in AWT logical units, for an overlay of [size] placed at [alignment] inside
+ * [bounds] - or the origin when the parent could not be measured.
+ *
+ * Pure so the arithmetic is pinned by a test; composing a `Window` needs a display, so this is the
+ * only reachable part. Offsets are floored at zero so content larger than the parent overhangs the
+ * bottom-right rather than being pushed off the top-left, where it would be unreachable.
+ */
+internal fun cornerPosition(
+    bounds: IntArray?,
+    size: DpSize,
+    alignment: Alignment,
+): Pair<Int, Int> {
+    if (bounds == null) return 0 to 0
+    val width = size.width.value.toInt()
+    val height = size.height.value.toInt()
+    val slackX = (bounds[2] - width).coerceAtLeast(0)
+    val slackY = (bounds[3] - height).coerceAtLeast(0)
+    val x =
+        bounds[0] +
+            when (alignment) {
+                Alignment.TopStart, Alignment.CenterStart, Alignment.BottomStart -> 0
+                Alignment.TopEnd, Alignment.CenterEnd, Alignment.BottomEnd -> slackX
+                else -> slackX / 2
+            }
+    val y =
+        bounds[1] +
+            when (alignment) {
+                Alignment.TopStart, Alignment.TopCenter, Alignment.TopEnd -> 0
+                Alignment.BottomStart, Alignment.BottomCenter, Alignment.BottomEnd -> slackY
+                else -> slackY / 2
+            }
+    return x to y
+}
+
+/**
+ * [bounds], with [inset] taken off its END and BOTTOM edges - the sub-region a caller anchored to
+ * part of the window is actually placing itself in.
+ *
+ * Only the far edges, and that is the whole meaning rather than a simplification. The origin is
+ * where a `TopStart` overlay goes, and a caller inset from the right and the bottom has not moved
+ * its top-left corner anywhere - so a near-corner anchor must be unaffected while a far-corner one
+ * moves by exactly the inset. Expressing it as a smaller rectangle rather than as an offset added
+ * after the fact is what gets that for free, and keeps [cornerPosition]'s floor-at-the-origin
+ * behaviour applying to the region rather than to the window.
+ *
+ * Widths floor at zero: an inset wider than the window would otherwise produce a negative extent,
+ * and [cornerPosition] would read that as slack and place the overlay outside the parent.
+ *
+ * A zero inset returns [bounds] ITSELF, not a copy. Every caller that predates this passes zero,
+ * and the result is a `remember` key: an equal-but-new array would change identity on every
+ * recomposition and re-run the placement effect, which is a native `setLocation` each time.
+ */
+
+internal fun insetBounds(
+    bounds: IntArray?,
+    inset: DpSize,
+): IntArray? {
+    // An unmeasurable parent stays unmeasurable, and a zero inset returns the SAME instance - see
+    // the KDoc on identity above.
+    if (bounds == null || inset == DpSize.Zero) return bounds
+    return intArrayOf(
+        bounds[0],
+        bounds[1],
+        // Rounded, not truncated: the inset is derived as px / density, which is not integral at
+        // fractional scale factors, and truncating loses up to a unit per axis.
+        (bounds[2] - inset.width.value.roundToInt()).coerceAtLeast(0),
+        (bounds[3] - inset.height.value.roundToInt()).coerceAtLeast(0),
+    )
+}

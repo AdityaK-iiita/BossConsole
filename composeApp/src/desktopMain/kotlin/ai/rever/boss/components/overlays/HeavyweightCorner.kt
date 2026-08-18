@@ -15,16 +15,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.awt.ComposeDialog
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogWindow
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
+import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.rememberWindowState
 import kotlinx.coroutines.delay
+import java.awt.Dialog
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import javax.swing.RootPaneContainer
@@ -94,6 +99,8 @@ fun HeavyweightCorner(
     alignment: Alignment,
     initialSize: DpSize,
     inset: DpSize = DpSize.Zero,
+    focusable: Boolean = false,
+    regionInWindow: IntRect? = null,
     content: @Composable () -> Unit,
 ) {
     val parent = LocalAwtWindow.current
@@ -106,7 +113,7 @@ fun HeavyweightCorner(
     // `bounds` only changes identity on a real change (see [trackedContentPaneBounds]), and a fresh
     // array every recomposition would re-run the placement effect, and with it a native
     // setLocation, for nothing.
-    val region = remember(bounds, inset) { insetBounds(bounds, inset) }
+    val region = remember(bounds, inset, regionInWindow) { resolveRegion(bounds, inset, regionInWindow) }
     // Clamp the ceiling to the region. The ceiling is a hard clip, not a soft start, and toast text
     // is arbitrary plugin content: three wordy toasts can exceed a fixed height, and because the
     // window is CONTENT-sized the overflow is not cosmetic - the bottom toast's dismiss button ends
@@ -129,39 +136,150 @@ fun HeavyweightCorner(
         state.position = WindowPosition(at.first.dp, at.second.dp)
     }
 
+    // What the overlay measures, shared by both hosts below so the sizing rules cannot diverge.
+    val measuringContent: @Composable () -> Unit = {
+        MeasuredAgainstCeiling(
+            ceiling = ceiling,
+            density = density,
+            onMeasured = { measured = it },
+            current = measured,
+            content = content,
+        )
+    }
+
+    // A FOCUSABLE overlay is hosted by a dialog OWNED by the parent, not by a top-level window, and
+    // the difference is three behaviours rather than a preference:
+    //
+    //  - **The owner stays active.** An unowned top-level window taking focus deactivates the main
+    //    window, and things branch on that: `FocusModeQuickActions` renders its LIGHTWEIGHT path
+    //    when the window is unfocused, which under HARDWARE_ACCELERATED draws behind the Chromium
+    //    surface - so the quick-actions cluster disappeared for as long as the find bar was up, in
+    //    the one configuration it exists for.
+    //  - **App shortcuts keep routing.** `AWTKeyboardInterceptor.findWindowId` walks `owner`, so an
+    //    owned dialog resolves to its window's id; an unowned one resolves to nothing and every
+    //    keymap binding goes dead while the overlay holds focus.
+    //  - **No taskbar button and no Alt-Tab card.** `WindowIcon.kt` documents this as the reason the
+    //    find bar was a `JDialog` before it was Compose; an owned dialog keeps that property, a
+    //    plain `Frame` does not.
+    //
+    // Non-focusable callers (toasts, the focus-mode cluster) keep the top-level window they have
+    // always had, so none of this can regress them.
+    if (focusable && parent != null) {
+        OwnedCornerDialog(
+            parent = parent,
+            state = state,
+            content = measuringContent,
+        )
+        return
+    }
+
     Window(
         onCloseRequest = {},
         state = state,
         undecorated = true,
         transparent = true,
         alwaysOnTop = true,
-        focusable = false,
+        focusable = focusable,
         resizable = false,
         icon = BossWindowIcon.painter,
     ) {
         EnsureOverlayWindowTransparent(window, kind = "corner")
         ApplyBossWindowIcon(window)
-        Box(
-            modifier =
-                Modifier
-                    // Order matters: the constraint override is OUTSIDE, so the observer inside it
-                    // reports a size measured against the ceiling rather than against the window.
-                    .measuredAgainst(ceiling)
-                    .onGloballyPositioned { coordinates ->
-                        val next =
-                            DpSize(
-                                (coordinates.size.width / density).dp,
-                                (coordinates.size.height / density).dp,
-                            )
-                        // Ignore a zero measurement: it happens while the overlay is torn down, and
-                        // acting on it would collapse the window and hide content still showing.
-                        if (next.width.value > 0f && next.height.value > 0f && next != measured) {
-                            measured = next
-                        }
-                    },
-        ) {
-            content()
-        }
+        measuringContent()
+    }
+}
+
+/**
+ * Reports [content]'s size measured against [ceiling] rather than against the window it is in.
+ *
+ * Extracted from [HeavyweightCorner] so each host branch reads as a host and this reads as the
+ * sizing rule. See [measuredAgainst] for why the ceiling, and not the window, is what content is
+ * measured against.
+ */
+@Composable
+private fun MeasuredAgainstCeiling(
+    ceiling: DpSize,
+    density: Float,
+    current: DpSize?,
+    onMeasured: (DpSize) -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Box(
+        modifier =
+            Modifier
+                // Order matters: the constraint override is OUTSIDE, so the observer inside it
+                // reports a size measured against the ceiling rather than against the window.
+                .measuredAgainst(ceiling)
+                .onGloballyPositioned { coordinates ->
+                    val next =
+                        DpSize(
+                            (coordinates.size.width / density).dp,
+                            (coordinates.size.height / density).dp,
+                        )
+                    // Ignore a zero measurement: it happens while the overlay is torn down, and
+                    // acting on it would collapse the window and hide content still showing.
+                    if (next.width.value > 0f && next.height.value > 0f && next != current) {
+                        onMeasured(next)
+                    }
+                },
+    ) {
+        content()
+    }
+}
+
+/**
+ * Hosts [content] in an undecorated, transparent, MODELESS dialog owned by [parent].
+ *
+ * Uses the low-level `DialogWindow` overload because the properties that make this worth doing have
+ * to be set on the AWT dialog itself, and two of them must be set BEFORE it becomes displayable:
+ * `type` throws once the dialog has been shown, and a transparent background needs `isUndecorated`
+ * already true. `create` is the only hook that runs early enough.
+ *
+ * `isAlwaysOnTop` is deliberately NOT set. An owned dialog already floats above its owner, which is
+ * the whole requirement (Chromium's surface is a native child of that same owner); always-on-top
+ * would additionally raise it above every OTHER application, which a find bar has no business doing.
+ */
+@Composable
+private fun OwnedCornerDialog(
+    parent: AwtWindow,
+    state: WindowState,
+    content: @Composable () -> Unit,
+) {
+    DialogWindow(
+        create = {
+            ComposeDialog(parent, Dialog.ModalityType.MODELESS).apply {
+                // Before anything shows it: setType throws on a displayable window, and
+                // setBackground with an alpha is ignored while the dialog is still decorated.
+                isUndecorated = true
+                runCatching { type = AwtWindow.Type.UTILITY }
+                isResizable = false
+                background = java.awt.Color(0, 0, 0, 0)
+            }
+        },
+        dispose = ComposeDialog::dispose,
+        update = { dialog ->
+            // Position and size come from the same WindowState the top-level branch drives, so the
+            // corner maths has exactly one implementation.
+            val at = state.position
+            if (at is WindowPosition.Absolute) {
+                dialog.setLocation(at.x.value.toInt(), at.y.value.toInt())
+            }
+            dialog.setSize(
+                state.size.width.value
+                    .toInt(),
+                state.size.height.value
+                    .toInt(),
+            )
+        },
+    ) {
+        EnsureOverlayWindowTransparent(window, kind = "corner-dialog")
+        // Branded even though an owned UTILITY dialog shows no icon surface. Two reasons, and the
+        // second is why this is not an exemption: `type` is set through runCatching, so a platform
+        // that refuses it leaves an ordinary dialog that DOES have one - and reasoning "this window
+        // does not need branding" is precisely how nine windows shipped wearing the JDK coffee cup.
+        // WindowIconConventionTest enforces this for every DialogWindow call site.
+        ApplyBossWindowIcon(window)
+        content()
     }
 }
 
@@ -347,41 +465,6 @@ private val unmeasurableParentReported =
 private val logger = BossLogger.forComponent("HeavyweightCorner")
 
 /**
- * Top-left corner, in AWT logical units, for an overlay of [size] placed at [alignment] inside
- * [bounds] - or the origin when the parent could not be measured.
- *
- * Pure so the arithmetic is pinned by a test; composing a `Window` needs a display, so this is the
- * only reachable part. Offsets are floored at zero so content larger than the parent overhangs the
- * bottom-right rather than being pushed off the top-left, where it would be unreachable.
- */
-internal fun cornerPosition(
-    bounds: IntArray?,
-    size: DpSize,
-    alignment: Alignment,
-): Pair<Int, Int> {
-    if (bounds == null) return 0 to 0
-    val width = size.width.value.toInt()
-    val height = size.height.value.toInt()
-    val slackX = (bounds[2] - width).coerceAtLeast(0)
-    val slackY = (bounds[3] - height).coerceAtLeast(0)
-    val x =
-        bounds[0] +
-            when (alignment) {
-                Alignment.TopStart, Alignment.CenterStart, Alignment.BottomStart -> 0
-                Alignment.TopEnd, Alignment.CenterEnd, Alignment.BottomEnd -> slackX
-                else -> slackX / 2
-            }
-    val y =
-        bounds[1] +
-            when (alignment) {
-                Alignment.TopStart, Alignment.TopCenter, Alignment.TopEnd -> 0
-                Alignment.BottomStart, Alignment.BottomCenter, Alignment.BottomEnd -> slackY
-                else -> slackY / 2
-            }
-    return x to y
-}
-
-/**
  * Whether [next] is worth storing over [current].
  *
  * Named and pure because the alternative is invisible: a listener fires on every step of a window
@@ -407,41 +490,6 @@ internal fun shouldKeepMeasuring(
     bounds: IntArray?,
     attempts: Int,
 ): Boolean = bounds == null && attempts < MEASURE_ATTEMPTS
-
-/**
- * [bounds], with [inset] taken off its END and BOTTOM edges - the sub-region a caller anchored to
- * part of the window is actually placing itself in.
- *
- * Only the far edges, and that is the whole meaning rather than a simplification. The origin is
- * where a `TopStart` overlay goes, and a caller inset from the right and the bottom has not moved
- * its top-left corner anywhere - so a near-corner anchor must be unaffected while a far-corner one
- * moves by exactly the inset. Expressing it as a smaller rectangle rather than as an offset added
- * after the fact is what gets that for free, and keeps [cornerPosition]'s floor-at-the-origin
- * behaviour applying to the region rather than to the window.
- *
- * Widths floor at zero: an inset wider than the window would otherwise produce a negative extent,
- * and [cornerPosition] would read that as slack and place the overlay outside the parent.
- *
- * A zero inset returns [bounds] ITSELF, not a copy. Every caller that predates this passes zero,
- * and the result is a `remember` key: an equal-but-new array would change identity on every
- * recomposition and re-run the placement effect, which is a native `setLocation` each time.
- */
-internal fun insetBounds(
-    bounds: IntArray?,
-    inset: DpSize,
-): IntArray? {
-    // An unmeasurable parent stays unmeasurable, and a zero inset returns the SAME instance - see
-    // the KDoc on identity above.
-    if (bounds == null || inset == DpSize.Zero) return bounds
-    return intArrayOf(
-        bounds[0],
-        bounds[1],
-        // Rounded, not truncated: the inset is derived as px / density, which is not integral at
-        // fractional scale factors, and truncating loses up to a unit per axis.
-        (bounds[2] - inset.width.value.roundToInt()).coerceAtLeast(0),
-        (bounds[3] - inset.height.value.roundToInt()).coerceAtLeast(0),
-    )
-}
 
 /**
  * [initialSize], reduced to fit inside [bounds] when the parent is smaller.

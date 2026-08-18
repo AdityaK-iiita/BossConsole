@@ -147,13 +147,16 @@ object OverlayConfig {
      *
      * `inset` shrinks the parent rectangle at its END and BOTTOM edges before the corner is
      * resolved, so a caller anchored to a sub-region of the window (rather than to the window
-     * itself) can say so. See [OverlayCorner].
+     * itself) can say so. `regionInWindow` says the same thing exactly rather than by edge
+     * distance, and `focusable` opts the overlay into keyboard input. See [OverlayCorner].
      */
     var heavyweightCorner: (
         @Composable (
             alignment: Alignment,
             initialSize: DpSize,
             inset: DpSize,
+            focusable: Boolean,
+            regionInWindow: IntRect?,
             content: @Composable () -> Unit,
         ) -> Unit
     )? = null
@@ -237,17 +240,31 @@ fun BoxScope.OverlayHud(
  * and bottom edges makes both agree. It is applied to the heavyweight path only, where it shrinks
  * the rectangle the corner is resolved inside; the overlay itself is not made any larger, so the
  * region it covers - and therefore the region whose clicks it swallows - is unchanged.
+ *
+ * [regionInWindow] is the same idea stated exactly instead of by edge distance: the rectangle,
+ * **in dp relative to the window's content pane**, that the corner should be resolved inside. It
+ * exists because [inset] can only move an overlay in from the end and bottom edges, so a
+ * TOP-anchored caller in a sub-region (a browser pane in a split, which may not start at the top
+ * of the window) cannot express where it sits. When non-null it REPLACES [inset]. The lightweight
+ * path ignores it for the same reason it ignores [inset] - there the content is already aligned
+ * inside the caller's own region.
+ *
+ * [focusable] lets the overlay window take keyboard focus, which it must if it contains a text
+ * field. The default stays false: a focusable always-on-top window makes the main window inactive
+ * for as long as it is up, which is right for a find bar and wrong for a toast.
  */
 @Composable
 fun BoxScope.OverlayCorner(
     alignment: Alignment,
     initialSize: DpSize,
     inset: DpSize = DpSize.Zero,
+    focusable: Boolean = false,
+    regionInWindow: IntRect? = null,
     content: @Composable () -> Unit,
 ) {
     val hw = OverlayConfig.heavyweightCorner
     if (routeOverlayHeavyweight(hw != null) && hw != null) {
-        hw(alignment, initialSize, inset) { content() }
+        hw(alignment, initialSize, inset, focusable, regionInWindow) { content() }
     } else {
         Box(modifier = Modifier.align(alignment)) { content() }
     }

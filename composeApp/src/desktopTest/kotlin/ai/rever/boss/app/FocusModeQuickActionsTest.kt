@@ -71,7 +71,7 @@ class FocusModeQuickActionsTest {
     ): Boolean {
         var requested = false
         OverlayConfig.useHeavyweightPopups = heavyweight
-        OverlayConfig.heavyweightCorner = { _, _, cornerInset, _ ->
+        OverlayConfig.heavyweightCorner = { _, _, cornerInset, _, _, _ ->
             // Recorded, not composed: composing a real Window needs a display.
             requested = true
             receivedInset = cornerInset

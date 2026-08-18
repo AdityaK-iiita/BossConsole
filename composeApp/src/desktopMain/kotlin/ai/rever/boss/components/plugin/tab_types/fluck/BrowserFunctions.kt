@@ -1,5 +1,6 @@
 package ai.rever.boss.components.plugin.tab_types.fluck
 
+import ai.rever.boss.plugin.browser.BrowserFindController
 import ai.rever.boss.plugin.browser.BrowserSettings
 import ai.rever.boss.plugin.browser.EngineInitError
 import ai.rever.boss.plugin.browser.FluckEngine
@@ -347,7 +348,7 @@ actual fun disposeBrowser(browser: Any) {
     try {
         val jxBrowser = browser as? Browser
         if (jxBrowser != null) {
-            FluckEngine.disposeBrowserFindBar(jxBrowser)
+            BrowserFindController.dispose(jxBrowser)
             if (!jxBrowser.isClosed) {
                 jxBrowser.close()
             }

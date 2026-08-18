@@ -159,4 +159,16 @@ class LockedTextFinder(
         lock.read {
             textFinder.stopFindingAndClearSelection()
         }
+
+    /**
+     * Drop the find highlights but leave the current match selected and scrolled into view.
+     *
+     * This is what closing the find bar should do, and the difference is not cosmetic: clearing
+     * the selection scrolls the reader back to wherever they were before searching, so Escape
+     * throws away the result they went looking for. Chrome keeps the match; so does this.
+     */
+    fun stopFindingAndKeepSelection() =
+        lock.read {
+            textFinder.stopFindingAndKeepSelection()
+        }
 }

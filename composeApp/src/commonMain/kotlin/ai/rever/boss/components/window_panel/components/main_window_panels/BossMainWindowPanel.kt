@@ -950,7 +950,14 @@ fun BossTabsComponent.BossMainPanel(
         // plugin) read this and forward it into their widget so the
         // widget can re-issue its internal focus requester when the
         // surrounding panel regains user attention.
-        CompositionLocalProvider(LocalIsPanelActive provides isActivePanel) {
+        // LocalInMainWindowPanel rides alongside because LocalIsPanelActive cannot answer the
+        // question a shortcut needs. Its default is `true`, so a surface rendered OUTSIDE a managed
+        // panel - a sidebar slot, a dialog, a test host - reads as active too, and a window-scoped
+        // shortcut broadcast to every collector then has no way to prefer the real one.
+        CompositionLocalProvider(
+            LocalIsPanelActive provides isActivePanel,
+            LocalInMainWindowPanel provides true,
+        ) {
             BossMainPanelContent(modifier = Modifier.weight(1f).fillMaxWidth())
         }
     }
@@ -1917,3 +1924,15 @@ private fun convertTabInfoToTabConfig(tabInfo: TabInfo): TabConfig =
             )
         }
     }
+
+/**
+ * Whether the surrounding composition is inside a [BossMainWindowPanel].
+ *
+ * Host-internal, and deliberately **not** on `PluginContext`: it exists only so a window-scoped
+ * keyboard shortcut broadcast to every candidate surface can prefer the one in the main content
+ * area over one in a sidebar slot. `LocalIsPanelActive` cannot answer that - it defaults to `true`,
+ * so "outside any panel" and "in the active panel" are the same value.
+ *
+ * Defaults to `false`, so the only thing that reads as a main-panel surface is one that actually is.
+ */
+val LocalInMainWindowPanel: ProvidableCompositionLocal<Boolean> = compositionLocalOf { false }
