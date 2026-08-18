@@ -238,6 +238,45 @@ const STYLES = `
      LAYOUT ONLY - every colour here is a token already asserted by contrast.test.ts on these
      surfaces (--text-2 on card and on washOnCard). Introducing a new colour pair would need a new
      USAGE entry there, and an unasserted pair is how the sub-AA borders shipped the first time. */
+  /* The rendered README. LAYOUT ONLY - every colour is a token contrast.test.ts already asserts
+     on this surface (--text and --text-2 on card, and on the --token-wash surface). No new pair is
+     introduced here, which is the rule that kept the sub-AA borders from shipping twice.
+
+     Scoped under .md so a README cannot restyle the page around it: these rules only ever apply
+     inside the one block the renderer writes. */
+  .md { font-size: 13px; color: var(--text-2); line-height: 1.55; overflow-wrap: anywhere; }
+  .md > :first-child { margin-top: 0; }
+  .md > :last-child { margin-bottom: 0; }
+  .md h3, .md h4, .md h5, .md h6 { color: var(--text); margin: 16px 0 6px; line-height: 1.3; }
+  .md h3 { font-size: 15px; }
+  .md h4 { font-size: 13px; }
+  .md h5, .md h6 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .md p { margin: 0 0 10px; }
+  .md ul, .md ol { margin: 0 0 10px; padding-left: 20px; }
+  .md li { margin: 2px 0; }
+  .md a { color: var(--text); text-decoration: underline; }
+  .md code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+             background: var(--token-wash); border-radius: 3px; padding: 1px 4px; }
+  /* The <code> inside a fence must not take the inline chip treatment as well. */
+  .md pre.md-code { background: var(--token-wash); border-radius: 4px; padding: 10px 12px;
+                    margin: 0 0 10px; overflow-x: auto; }
+  .md pre.md-code code { background: none; padding: 0; font-size: 12px; }
+  .md blockquote { margin: 0 0 10px; padding: 2px 0 2px 10px; border-left: 2px solid var(--line);
+                   color: var(--text-2); }
+  .md hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
+  .md table { border-collapse: collapse; font-size: 12px; }
+  .md th, .md td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; }
+  .md th { color: var(--text); }
+  /* Alignment as classes, because style-src is nonce-only and an inline style attribute is
+     dropped by the browser without a word. */
+  .md .md-center { text-align: center; }
+  .md .md-right { text-align: right; }
+  /* The pager under a paginated table. LAYOUT ONLY - both colours are tokens contrast.test.ts
+     already asserts on this surface. Rendered only when there is more than one page. */
+  .pager { display: flex; align-items: center; gap: 12px; margin-top: 10px; font-size: 12px; }
+  .pager a { color: var(--text); text-decoration: underline; }
+  .pager .muted { color: var(--text-2); }
+  .pager-state { color: var(--text-2); }
   .dns { display: flex; flex-direction: column; gap: 4px; }
   .dns-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   /* Fixed width so Name/Type/Value line up as a column and the records read as one block. */
@@ -274,7 +313,13 @@ const STYLES = `
 
   /* ---- buttons --------------------------------------------------------- */
 
-  button {
+  /* A link that acts as the page's primary action (the boss:// deep link on a plugin page).
+     Shares the button rule below rather than restating its colours, so the two cannot drift and
+     no new colour pair is introduced for contrast.test.ts to miss. */
+  a.button {
+    display: inline-block; text-decoration: none; text-align: center;
+  }
+  button, a.button {
     background-color: var(--signal); color: var(--on-signal); border: 1px solid var(--signal);
     border-radius: 7px; padding: 8px 16px; font-size: 14px; font-weight: 600;
     cursor: pointer; font-family: inherit;

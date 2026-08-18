@@ -7,6 +7,7 @@
  */
 
 import { callForActor } from "../utils/org-rpc.ts"
+import { listOrgPlugins, type OrgPluginSummary } from "./plugin.ts"
 
 export interface OrgDetail {
   id: string
@@ -143,13 +144,14 @@ export async function loadAdminPageData(actorId: string, orgId: string): Promise
 
 /** The member-facing overview: org detail plus the roster. */
 export async function loadOrgPageData(actorId: string, orgId: string): Promise<
-  | { ok: true; org: OrgDetail; members: OrgMember[]; roles: OrgRole[] }
+  | { ok: true; org: OrgDetail; members: OrgMember[]; roles: OrgRole[]; plugins: OrgPluginSummary[] }
   | { ok: false; error: string }
 > {
-  const [detail, members, roles] = await Promise.all([
+  const [detail, members, roles, plugins] = await Promise.all([
     getOrgDetail(actorId, orgId),
     listMembers(actorId, orgId),
     listRoles(actorId, orgId),
+    listOrgPlugins(actorId, orgId),
   ])
 
   if (!detail.ok) return { ok: false, error: detail.error }
@@ -159,5 +161,6 @@ export async function loadOrgPageData(actorId: string, orgId: string): Promise<
     org: detail.data,
     members: members.ok ? members.data : [],
     roles: roles.ok ? roles.data : [],
+    plugins,
   }
 }

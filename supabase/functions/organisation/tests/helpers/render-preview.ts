@@ -17,9 +17,11 @@
 
 import { adminPage, inviteOnlyPage } from "../../views/admin.ts"
 import { orgPage } from "../../views/org.ts"
+import { pluginPage } from "../../views/plugin.ts"
 import { invalidInvitePage, joinPage } from "../../views/join.ts"
 import { errorPage, NOT_AVAILABLE_MESSAGE } from "../../views/error.ts"
 import type { OrgDetail, OrgDomain, OrgInvite, OrgMember, OrgRole } from "../../services/org.ts"
+import type { OrgPluginSummary, PluginDetail } from "../../services/plugin.ts"
 
 const NONCE = "previewnonce"
 /** A plausible one-time invite URL. Only its shape matters to the rendering. */
@@ -174,8 +176,141 @@ const invites: OrgInvite[] = [
   },
 ]
 
+/**
+ * Enough rows to see the section as a reader meets it: a restricted one beside public ones, so
+ * the visibility column has something to distinguish, and one long id to check the table scrolls
+ * inside its card rather than widening the page.
+ */
+const plugins: OrgPluginSummary[] = [
+  {
+    plugin_id: "ai.rever.boss.plugin.dynamic.codexglm",
+    display_name: "Codex GLM",
+    description: "RISA Codex GLM provider",
+    icon_url: null,
+    visibility: "public",
+    published: true,
+    verified: true,
+  },
+  {
+    plugin_id: "ai.rever.boss.plugin.dynamic.medicalnecessity",
+    display_name: "Medical Necessity",
+    description: "Clinical review workflow",
+    icon_url: null,
+    visibility: "org",
+    published: true,
+    verified: false,
+  },
+  {
+    plugin_id: "ai.rever.boss.plugin.dynamic.finance",
+    display_name: "Finance",
+    description: null,
+    icon_url: null,
+    visibility: "unlisted",
+    published: true,
+    verified: false,
+  },
+]
+
+/** One plugin, as its page meets it: a real README's first lines, and a restricted visibility. */
+const pluginDetail: PluginDetail = {
+  id: "33333333-3333-4333-8333-333333333333",
+  plugin_id: "ai.rever.boss.plugin.dynamic.codexglm",
+  display_name: "Codex GLM",
+  description: "RISA Codex GLM provider for BOSS, brokered through the organisation gateway.",
+  author_name: "Shivang",
+  homepage_url: "https://github.com/risa-labs-inc/boss-plugin-codexglm",
+  icon_url: null,
+  type: "panel",
+  api_version: "1.0.75",
+  verified: true,
+  published: true,
+  visibility: "org",
+  org_id: org.id,
+  org_slug: org.slug,
+  download_count: 128,
+  latest_version: "1.0.4",
+  updated_at: "2026-08-01T00:00:00Z",
+}
+
+const README = `[![build](https://img.shields.io/badge/build-passing-green.svg)](https://example.test/ci)
+
+# Codex GLM
+
+A BOSS plugin that runs Codex against the RISA LLM gateway. See [the docs](https://example.test/docs)
+or the *relative* [contributing guide](./CONTRIBUTING.md), which keeps its text and loses its link.
+
+## Install
+
+Open the Toolbox, search for \`Codex GLM\`, press **Install**. No API key: it exchanges your BOSS
+session for a short-lived scoped credential.
+
+\`\`\`bash
+boss llm-token --broker risa-llm-gateway
+export CODEX_MODEL=glm-4.6
+\`\`\`
+
+> A blockquote, for the note every README has.
+
+## Configuration
+
+| Setting | Default | Notes |
+|---|---:|:---:|
+| Model   | glm-4.6 | overridable |
+| Sandbox | workspace-write | see ~~danger~~ safety |
+
+- First bullet with \`inline code\`
+- Second bullet
+- Third
+
+1. Numbered one
+2. Numbered two
+
+---
+
+Raw HTML is shown as text: <script>alert(1)</script>
+
+Long unbroken line to check the wrap: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+`
+
 const pages: Record<string, string> = {
-  "overview.html": orgPage({ nonce: NONCE, basePath: BASE, org, members, roles }),
+  "overview.html": orgPage({ nonce: NONCE, basePath: BASE, org, members, roles, plugins }),
+  // A second copy with enough rows to page, so the pager is actually looked at rather than
+  // asserted about. Members are cloned from the real fixture to keep the row shape honest.
+  "overview-paged.html": orgPage({
+    nonce: NONCE,
+    basePath: BASE,
+    org,
+    members: Array.from({ length: 60 }, (_, i) => ({
+      ...members[i % members.length],
+      email: `member${i + 1}@risalabs.ai`,
+    })),
+    roles,
+    plugins: Array.from({ length: 40 }, (_, i) => ({
+      ...plugins[i % plugins.length],
+      plugin_id: `ai.rever.boss.plugin.dynamic.sample${i + 1}`,
+      display_name: `Sample Plugin ${i + 1}`,
+    })),
+    membersPage: 2,
+    pluginsPage: 1,
+  }),
+  "plugin.html": pluginPage({
+    nonce: NONCE,
+    basePath: BASE,
+    orgSlug: org.slug,
+    csrf: "preview-csrf",
+    plugin: pluginDetail,
+    readme: README,
+    canEdit: true,
+  }),
+  "plugin-member.html": pluginPage({
+    nonce: NONCE,
+    basePath: BASE,
+    orgSlug: org.slug,
+    csrf: "preview-csrf",
+    plugin: { ...pluginDetail, visibility: "public" },
+    readme: null,
+    canEdit: false,
+  }),
   "admin.html": adminPage({
     nonce: NONCE,
     basePath: BASE,

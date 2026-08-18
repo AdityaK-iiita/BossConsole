@@ -32,6 +32,7 @@ import { adminPageRoutes } from "./routes/admin-page.ts"
 import { adminActionRoutes } from "./routes/admin-actions.ts"
 import { domainRoutes } from "./routes/domains.ts"
 import { joinRoutes } from "./routes/join.ts"
+import { pluginPageRoutes } from "./routes/plugin-page.ts"
 
 export const app = new OpenAPIHono().basePath("/organisation")
 
@@ -44,6 +45,7 @@ app.route("/", adminPageRoutes)
 app.route("/", domainRoutes)
 app.route("/", adminActionRoutes)
 app.route("/", joinRoutes)
+app.route("/", pluginPageRoutes)
 
 /**
  * Liveness only. It deliberately does NOT report whether ORG_SESSION_SECRET is

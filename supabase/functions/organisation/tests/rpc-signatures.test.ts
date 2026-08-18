@@ -66,6 +66,100 @@ async function migrationSignatures(): Promise<Map<string, Set<string>>> {
   return signatures
 }
 
+/**
+ * Whether each function returns ROWS (`RETURNS TABLE` / `RETURNS SETOF`) or a scalar.
+ *
+ * The distinction decides which helper may call it, and getting it wrong is silent. PostgREST
+ * answers a set-returning function with a bare JSON array, which has no `success` field, so
+ * `callRpc` - which fails closed on a missing envelope - returns `ok: false` for a perfectly good
+ * result. That shipped once already: the plugin page read `get_plugin_with_stats_for_viewer`
+ * through `callRpc` and 404'd for every reader while the whole suite stayed green, because no test
+ * put a real RPC response through that step.
+ */
+async function migrationReturnShapes(): Promise<Map<string, "rows" | "scalar">> {
+  const files: string[] = []
+  for await (const entry of Deno.readDir(MIGRATIONS_DIR)) {
+    if (entry.isFile && entry.name.endsWith(".sql")) files.push(entry.name)
+  }
+  files.sort()
+
+  const shapes = new Map<string, "rows" | "scalar">()
+  const declaration =
+    /CREATE OR REPLACE FUNCTION\s+"public"\."([a-z0-9_]+)"\s*\([\s\S]*?\)\s*RETURNS\s+("?[A-Za-z_]+"?)/gi
+
+  for (const name of files) {
+    const sql = await Deno.readTextFile(`${MIGRATIONS_DIR}/${name}`)
+    for (const match of sql.matchAll(declaration)) {
+      const returned = match[2].replace(/"/g, "").toUpperCase()
+      shapes.set(
+        match[1].toLowerCase(),
+        returned === "TABLE" || returned === "SETOF" ? "rows" : "scalar",
+      )
+    }
+  }
+  return shapes
+}
+
+/** Call sites of one helper, across the function's own source. */
+async function callSitesOf(helper: string): Promise<Set<string>> {
+  const files = await sourceFiles(FUNCTION_DIR)
+  const targets = new Set<string>()
+  const pattern = new RegExp(`${helper}(?:<[\\s\\S]*?>)?\\(\\s*"([a-z0-9_]+)"`, "g")
+  for (const path of files) {
+    const source = await Deno.readTextFile(path)
+    for (const match of source.matchAll(pattern)) targets.add(match[1])
+  }
+  return targets
+}
+
+Deno.test("the return shapes parse, so the assertions below are not vacuous", async () => {
+  const shapes = await migrationReturnShapes()
+  assertEquals(
+    shapes.get("get_plugin_with_stats_for_viewer"),
+    "rows",
+    "the one RETURNS TABLE function this edge function calls no longer parses as rows",
+  )
+  assertEquals(shapes.get("get_organisation_detail"), "scalar")
+  assertEquals(shapes.get("list_org_plugins"), "scalar")
+})
+
+Deno.test("an envelope helper is never pointed at a set-returning function", async () => {
+  const shapes = await migrationReturnShapes()
+  const envelopeCallers = new Set([
+    ...await callSitesOf("callRpc"),
+    ...await callSitesOf("callForActor"),
+  ])
+  // callRpcRows call sites also match /callRpc/, so subtract them rather than asserting on both.
+  const rowCallers = await callSitesOf("callRpcRows")
+  assert(envelopeCallers.size > 0, "no envelope call sites found - the scan is broken")
+
+  for (const fn of envelopeCallers) {
+    if (rowCallers.has(fn)) continue
+    if (shapes.get(fn) !== "rows") continue
+    throw new Error(
+      `callRpc/callForActor("${fn}") targets a RETURNS TABLE function. PostgREST answers those ` +
+        `with a bare array, which has no \`success\` field, so callRpc fails closed and every ` +
+        `call returns ok:false for a good result. Use callRpcRows.`,
+    )
+  }
+})
+
+Deno.test("callRpcRows is only pointed at set-returning functions", async () => {
+  const shapes = await migrationReturnShapes()
+  const rowCallers = await callSitesOf("callRpcRows")
+  assert(rowCallers.size > 0, "no callRpcRows call sites found - the scan is broken")
+
+  for (const fn of rowCallers) {
+    const shape = shapes.get(fn)
+    assert(shape, `callRpcRows("${fn}") names a function no migration defines`)
+    assertEquals(
+      shape,
+      "rows",
+      `callRpcRows("${fn}") targets a scalar function, so its envelope would be read as a row list`,
+    )
+  }
+})
+
 Deno.test("the migrations are readable from here, so the assertions are not vacuous", async () => {
   const signatures = await migrationSignatures()
   // A wrong path would make every loop below iterate over nothing and pass. This is the floor that
@@ -84,12 +178,24 @@ Deno.test("every callForActor target actually accepts p_actor_id", async () => {
   const targets = new Set<string>()
   for (const path of files) {
     const source = await Deno.readTextFile(path)
-    for (const match of source.matchAll(/callForActor(?:<[^>]*>)?\(\s*"([a-z0-9_]+)"/g)) {
+    // The generic is skipped LAZILY. `<[^>]*>` cannot cross a nested one, so
+    // `callForActor<Record<string, unknown>>("list_org_plugins", ...)` matched nothing at all and
+    // that call site was simply absent from this check - which is the worst way for a guard to
+    // fail, because the test still passes. Lazy `[\s\S]*?>` stops at the first `>` that is
+    // followed by the opening paren.
+    for (const match of source.matchAll(/callForActor(?:<[\s\S]*?>)?\(\s*"([a-z0-9_]+)"/g)) {
       targets.add(match[1])
     }
   }
 
   assert(targets.size > 0, "no callForActor call sites found - the scan is broken")
+
+  // Anti-vacuity, on the SOURCE side. The check above only proves the scan found something; these
+  // name call sites written in the three shapes that exist - bare, single generic, nested generic -
+  // so a regex that silently stops seeing one of them fails here rather than passing quietly.
+  for (const known of ["update_organisation_settings", "get_organisation_detail", "list_org_plugins"]) {
+    assert(targets.has(known), `the call-site scan no longer sees callForActor("${known}")`)
+  }
 
   for (const fn of targets) {
     const params = signatures.get(fn)

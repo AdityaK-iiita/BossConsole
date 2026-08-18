@@ -98,3 +98,44 @@ export function callForActor<T = unknown>(
 ): Promise<RpcResult<T>> {
   return callRpc<T>(fn, { ...params, p_actor_id: actorId })
 }
+
+/**
+ * Call a SET-RETURNING RPC, which does not carry the envelope.
+ *
+ * `callRpc` fails closed on anything without `success: true`, and that is right for the org RPCs:
+ * every one of them returns a scalar jsonb envelope. A function declared `RETURNS TABLE(...)` is a
+ * different shape - PostgREST answers with a bare JSON array of rows, which has no `success` field
+ * at all - so putting one through `callRpc` returns `ok: false` for a perfectly good result. That
+ * is not theoretical: the plugin page's first draft read
+ * `get_plugin_with_stats_for_viewer` (the ONE set-returning function this edge function calls)
+ * through `callRpc`, and every plugin page 404'd, for everybody, while every test still passed.
+ *
+ * So this is a separate function rather than a relaxation of `callRpc`. Loosening the envelope
+ * check there would have made a renamed or half-migrated org RPC look like an empty-but-fine
+ * result, which is the exact failure its comment says it exists to prevent.
+ *
+ * NO ROWS IS `ok` WITH AN EMPTY ARRAY, not an error. These functions apply a visibility predicate,
+ * so "you may not see this" and "there is no such row" both arrive as zero rows and the caller
+ * decides what that means. The plugin page turns both into one 404 on purpose.
+ */
+export async function callRpcRows<T = unknown>(
+  fn: string,
+  params: Record<string, unknown>,
+): Promise<RpcResult<T[]>> {
+  const { data, error } = await serviceClient().rpc(fn, params)
+
+  if (error) {
+    // Params are not logged, for the reason callRpc states.
+    console.error(`rpc ${fn} failed:`, error.message)
+    return { ok: false, error: "Something went wrong. Please try again." }
+  }
+
+  // Fails closed the other way round: a scalar answer here means the function is not the shape
+  // this caller believes it is, and reading an envelope as a row list would be silent nonsense.
+  if (!Array.isArray(data)) {
+    console.error(`rpc ${fn} returned ${data === null ? "null" : typeof data}, expected rows`)
+    return { ok: false, error: "Something went wrong. Please try again." }
+  }
+
+  return { ok: true, data: data as T[] }
+}

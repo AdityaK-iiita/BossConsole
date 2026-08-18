@@ -23,6 +23,7 @@ import { loadOrgPageData } from "../services/org.ts"
 import { htmlResponse } from "../utils/responses.ts"
 import { isValidSlug, readRequestFacts } from "../utils/request.ts"
 import { errorPage, NOT_AVAILABLE_MESSAGE, SESSION_EXPIRED_MESSAGE } from "../views/error.ts"
+import { pageParam } from "../utils/paging.ts"
 import { orgPage } from "../views/org.ts"
 
 export const orgPageRoutes = new OpenAPIHono()
@@ -79,6 +80,13 @@ orgPageRoutes.get("/o/:slug", async (ctx) => {
       org: data.org,
       members: data.members,
       roles: data.roles,
+      plugins: data.plugins,
+      // Independent, so paging one table leaves the other where it was. Unreadable values become
+      // page 1 and out-of-range ones are clamped by the view, which is the only place that knows
+      // how many pages there are - so a stale bookmark lands on the last page rather than on
+      // nothing, and a hand-edited URL cannot produce an error.
+      membersPage: pageParam(new URL(ctx.req.url).searchParams.get("members")),
+      pluginsPage: pageParam(new URL(ctx.req.url).searchParams.get("plugins")),
     })
   )
 })
