@@ -142,6 +142,13 @@ export const RatePluginResponseSchema = z.object({
 // ============================================================================
 
 export const PublishPluginRequestSchema = z.object({
+  /**
+   * Organisation to publish under. Optional, and AUTHORISED server-side against
+   * `user_can_publish_org_plugin` - naming one you have no rights in is a 403, not a silent
+   * fallback. Omitted means the server derives it: the API key's bound organisation, else your
+   * single non-system organisation, else the boss organisation.
+   */
+  orgId: z.string().uuid('orgId must be a UUID').optional(),
   pluginId: z.string().min(3).max(100).regex(/^[a-z0-9.-]+$/i, 'Plugin ID must contain only alphanumeric characters, dots, and hyphens'),
   displayName: z.string().min(1).max(100),
   description: z.string().max(5000).optional().default(''),
@@ -207,6 +214,13 @@ export const FinalizeVersionResponseSchema = z.object({
 // ============================================================================
 
 export const PublishFromGitHubRequestSchema = z.object({
+  /**
+   * Organisation to publish under. Optional, and AUTHORISED server-side against
+   * `user_can_publish_org_plugin` - naming one you have no rights in is a 403, not a silent
+   * fallback. Omitted means the server derives it: the API key's bound organisation, else your
+   * single non-system organisation, else the boss organisation.
+   */
+  orgId: z.string().uuid('orgId must be a UUID').optional(),
   githubUrl: z.string().url('Must be a valid GitHub URL').refine(
     (url) => url.includes('github.com'),
     'URL must be a GitHub repository URL'
@@ -229,6 +243,13 @@ export const PublishFromGitHubResponseSchema = z.object({
 // ============================================================================
 
 export const PublishFromGitHubMetadataRequestSchema = z.object({
+  /**
+   * Organisation to publish under. Optional, and AUTHORISED server-side against
+   * `user_can_publish_org_plugin` - naming one you have no rights in is a 403, not a silent
+   * fallback. Omitted means the server derives it: the API key's bound organisation, else your
+   * single non-system organisation, else the boss organisation.
+   */
+  orgId: z.string().uuid('orgId must be a UUID').optional(),
   githubUrl: z.string().url('Must be a valid GitHub URL').refine(
     (url) => url.includes('github.com'),
     'URL must be a GitHub repository URL'

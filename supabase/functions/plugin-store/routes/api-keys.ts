@@ -2,6 +2,7 @@ import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi"
 import type { PluginStoreContext } from "../types/context.ts"
 import { ErrorResponseSchema } from "../types/schemas.ts"
 import { getUserFromToken } from "../utils/auth.ts"
+import { resolvePublishOrg } from "../services/publish-org.ts"
 import { API_KEY_CREATE_PERMISSION, permissionGateError } from "../utils/permissions.ts"
 import {
   generateApiKey,
@@ -41,6 +42,15 @@ const CreateApiKeyRequestSchema = z.object({
     .nullable()
     .optional()
     .describe("Optional: Number of days until the key expires (null = never)"),
+  orgId: z
+    .string()
+    .uuid("orgId must be a UUID")
+    .optional()
+    .describe(
+      "Optional: the organisation plugins created with this key are attributed to. " +
+        "Authorised against your publishing rights. Omitted means the server derives it the " +
+        "same way a browser publish does.",
+    ),
 })
 
 const CreateApiKeyResponseSchema = z.object({
@@ -220,6 +230,19 @@ apiKeys.openapi(createApiKeyRoute, async (ctx) => {
       ? new Date(Date.now() + body.expiresInDays * 24 * 60 * 60 * 1000).toISOString()
       : null
 
+    // Bind the key to an organisation AT CREATION. Leaving it null is how every key ended up
+    // resolving to boss: validate_plugin_api_key COALESCEs a null to the boss organisation, so a
+    // key that named nothing silently became a boss-publishing key - and the attribution the
+    // publish path now reads had nothing else to go on.
+    //
+    // Same resolver the publish path uses, so a key cannot be bound anywhere its owner could not
+    // have published from directly, and there is one definition of "your organisation" rather
+    // than two that drift.
+    const orgResolution = await resolvePublishOrg(supabase, user, body.orgId)
+    if (!orgResolution.ok) {
+      return ctx.json({ success: false, error: orgResolution.error }, orgResolution.status)
+    }
+
     // Insert into database
     const { data, error } = await supabase
       .from("plugin_api_keys")
@@ -230,6 +253,9 @@ apiKeys.openapi(createApiKeyRoute, async (ctx) => {
         key_hash: keyHash,
         scopes: body.scopes,
         expires_at: expiresAt,
+        // Omitted when null so validate_plugin_api_key's COALESCE stays the single place the
+        // boss fallback is expressed.
+        ...(orgResolution.orgId ? { org_id: orgResolution.orgId } : {}),
       })
       .select()
       .single()

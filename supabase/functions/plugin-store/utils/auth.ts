@@ -23,8 +23,17 @@ export interface AuthResult {
   apiKeyId?: string
   /** Only set when authenticated via API key */
   apiKeyScopes?: string[]
-  /** Only set when authenticated via API key */
-  apiKeyName?: string
+  /**
+   * The organisation this API key may publish for. Only set when authenticated via API key.
+   *
+   * `validate_plugin_api_key` COALESCEs it to the boss organisation, so keys minted before
+   * 20260803000000 keep working rather than losing the ability to publish.
+   *
+   * IT IS NOT AUTHORITY ON ITS OWN. The key is not an independent principal: the publish path
+   * still gates on `user_can_publish_org_plugin(user_id, org_id)`, so revoking the human's
+   * membership kills their CI key's publish rights too. That is the RPC's own stated contract.
+   */
+  apiKeyOrgId?: string
 }
 
 /**
@@ -193,9 +202,17 @@ export async function validateApiKey(
       return null
     }
 
-    // Update last_used_at (non-blocking but with error logging for audit trail)
+    // `key_id`, NOT `api_key_id`. 20260803000000 DROPped and recreated validate_plugin_api_key
+    // with `RETURNS TABLE(key_id, user_id, scopes, org_id)`, and this file was never updated - so
+    // `keyInfo.api_key_id` has been `undefined` ever since. Two things broke silently: this RPC
+    // was called with `p_key_id: undefined`, so `last_used_at` stopped advancing, and every
+    // `if (user.apiKeyId)` audit-log call in publish.ts became a no-op, which means API-key
+    // publishes have not been recorded in the audit trail at all.
+    //
+    // `key_name` went away in the same migration and is not read back: the one consumer was a log
+    // string that already falls back to the id.
     try {
-      await supabase.rpc("update_api_key_last_used", { p_key_id: keyInfo.api_key_id })
+      await supabase.rpc("update_api_key_last_used", { p_key_id: keyInfo.key_id })
     } catch (error) {
       console.warn("Failed to update API key last_used timestamp:", error)
       // Don't fail the request, but log for investigation
@@ -208,9 +225,9 @@ export async function validateApiKey(
       // No JWT, so no user_permissions claim — resolved from the owner's roles
       // on demand by userHasPermission().
       jwtPermissions: null,
-      apiKeyId: keyInfo.api_key_id,
+      apiKeyId: keyInfo.key_id,
       apiKeyScopes: keyInfo.scopes,
-      apiKeyName: keyInfo.key_name,
+      apiKeyOrgId: keyInfo.org_id ?? undefined,
     }
   } catch (e) {
     console.error("Exception validating API key:", e)
@@ -335,7 +352,9 @@ export async function getAuthenticatedUser(
   if (requiredPermission && !(await userHasPermission(supabase, user, requiredPermission))) {
     console.error(
       `User ${user.userId} lacks required permission ${requiredPermission}` +
-        (user.apiKeyId ? ` (via API key ${user.apiKeyName ?? user.apiKeyId})` : "")
+        // The id, not a name: `key_name` stopped being returned by validate_plugin_api_key in
+        // 20260803000000, so the `?? apiKeyName` branch had been dead and always fell through.
+        (user.apiKeyId ? ` (via API key ${user.apiKeyId})` : "")
     )
     return {
       ok: false,

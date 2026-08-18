@@ -26,6 +26,7 @@ import {
   permissionGateError,
 } from "../utils/permissions.ts"
 
+const API_KEY_ORG_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 const OWNER_ID = "11111111-1111-1111-1111-111111111111"
 const VALID_KEY = "boss_pk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6" // 40 chars
 
@@ -74,11 +75,17 @@ function stubSupabase(opts: StubOptions = {}): { client: SupabaseClient; calls: 
         return Promise.resolve(
           opts.apiKey
             ? {
+              // THE REAL SHAPE. 20260803000000 recreated validate_plugin_api_key as
+              // RETURNS TABLE(key_id, user_id, scopes, org_id): `api_key_id` and `key_name` no
+              // longer exist. This stub kept returning the old names, so it agreed with auth.ts's
+              // stale reads and both were wrong together - which is how `apiKeyId: undefined`
+              // survived, silently disabling API-key audit logging and the last_used_at update.
+              // A stub that models a dead contract is worse than no test.
               data: [{
+                key_id: "key-1",
                 user_id: OWNER_ID,
-                api_key_id: "key-1",
-                key_name: "ci",
                 scopes: opts.apiKey.scopes,
+                org_id: API_KEY_ORG_ID,
               }],
               error: null,
             }
@@ -196,7 +203,11 @@ Deno.test("API key publishes when its owner still holds plugins.create", async (
 
   assert(outcome.ok)
   assertEquals(outcome.user.jwtPermissions, null, "API-key auth carries no claim")
-  assertEquals(outcome.user.apiKeyName, "ci")
+  // POPULATED, not undefined. Every `if (user.apiKeyId)` audit-log call in publish.ts hangs off
+  // this, and update_api_key_last_used is called with it.
+  assertEquals(outcome.user.apiKeyId, "key-1")
+  // And the key's organisation has to reach the publish path, which is why the RPC returns it.
+  assertEquals(outcome.user.apiKeyOrgId, API_KEY_ORG_ID)
   assertEquals(calls.probed, [{ userId: OWNER_ID, permission: PLUGIN_CREATE_PERMISSION }])
 })
 

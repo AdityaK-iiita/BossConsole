@@ -14,6 +14,7 @@ import {
   ErrorResponseSchema
 } from "../types/schemas.ts"
 import { getPlugin, createPlugin, setPluginTags, getPluginById, updatePlugin } from "../services/plugins.ts"
+import { resolvePublishOrg } from "../services/publish-org.ts"
 import { createVersion, versionExists, finalizeVersion, getVersionById } from "../services/versions.ts"
 import { getSignedUploadUrl, getSignedDownloadUrl, generateJarPath, uploadJar } from "../services/storage.ts"
 import { getAuthenticatedUser, getUserDisplayName, logApiKeyAction } from "../utils/auth.ts"
@@ -133,6 +134,14 @@ publish.openapi(publishPluginRoute, async (ctx) => {
     // Get author display name - use custom name if provided, otherwise derive from email
     const authorName = body.authorName || await getUserDisplayName(supabase, user.userId)
 
+    // Which organisation owns it. Resolved and AUTHORISED before any row is written: this
+    // handler runs as service role, so the `can_publish_org_plugin` WITH CHECK on `plugins` is
+    // bypassed and nothing else would refuse an organisation the caller has no rights in.
+    const orgResolution = await resolvePublishOrg(supabase, user, body.orgId)
+    if (!orgResolution.ok) {
+      return ctx.json({ success: false, error: orgResolution.error }, orgResolution.status)
+    }
+
     // Create plugin
     const result = await createPlugin(
       supabase,
@@ -145,7 +154,8 @@ publish.openapi(publishPluginRoute, async (ctx) => {
       body.iconUrl,
       body.type,
       body.apiVersion,
-      body.requiredPermissions
+      body.requiredPermissions,
+      orgResolution.orgId
     )
 
     // Auto-register the permissions this plugin introduces (ungranted; admin grants later).
@@ -689,6 +699,14 @@ publish.openapi(publishFromGitHubRoute, async (ctx) => {
       isNewPlugin = true
       const authorName = manifest.author || await getUserDisplayName(supabase, user.userId)
 
+      // Which organisation owns it. Resolved and AUTHORISED before any row is written: this
+      // handler runs as service role, so the `can_publish_org_plugin` WITH CHECK on `plugins` is
+      // bypassed and nothing else would refuse an organisation the caller has no rights in.
+      const orgResolution = await resolvePublishOrg(supabase, user, body.orgId)
+      if (!orgResolution.ok) {
+        return ctx.json({ success: false, error: orgResolution.error }, orgResolution.status)
+      }
+
       const result = await createPlugin(
         supabase,
         user.userId,
@@ -700,7 +718,8 @@ publish.openapi(publishFromGitHubRoute, async (ctx) => {
         manifest.iconUrl || '',
         ((manifest.type as string) || 'panel').toLowerCase(),
         manifest.apiVersion,
-        manifest.requiredPermissions || []
+        manifest.requiredPermissions || [],
+        orgResolution.orgId
       )
 
       pluginUuid = result.id
@@ -972,6 +991,14 @@ publish.openapi(publishFromGitHubMetadataRoute, async (ctx) => {
       isNewPlugin = true
       const authorName = manifest.author || await getUserDisplayName(supabase, user.userId)
 
+      // Which organisation owns it. Resolved and AUTHORISED before any row is written: this
+      // handler runs as service role, so the `can_publish_org_plugin` WITH CHECK on `plugins` is
+      // bypassed and nothing else would refuse an organisation the caller has no rights in.
+      const orgResolution = await resolvePublishOrg(supabase, user, body.orgId)
+      if (!orgResolution.ok) {
+        return ctx.json({ success: false, error: orgResolution.error }, orgResolution.status)
+      }
+
       const result = await createPlugin(
         supabase,
         user.userId,
@@ -983,7 +1010,8 @@ publish.openapi(publishFromGitHubMetadataRoute, async (ctx) => {
         '',
         ((manifest.type as string) || 'panel').toLowerCase(),
         manifest.apiVersion || '1.0.0',
-        manifest.requiredPermissions || []
+        manifest.requiredPermissions || [],
+        orgResolution.orgId
       )
       pluginUuid = result.id
     }
