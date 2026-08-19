@@ -88,7 +88,7 @@ intellij-platform = "243.21565.199"
 # checking rather than trusting the ordering: fetchApiPluginJar has no Maven fallback, so
 # a pin that dropped a type would surface as an unrelated compile error, and this comment
 # is the only record of which api PR a pin corresponds to.
-boss-plugin-api = "1.0.79"
+boss-plugin-api = "1.0.80"
 
 [libraries]
 kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }

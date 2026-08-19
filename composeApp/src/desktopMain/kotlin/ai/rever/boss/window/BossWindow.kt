@@ -22,6 +22,7 @@ import ai.rever.boss.plugin.ui.BossAlertDialog
 import ai.rever.boss.plugin.ui.BossTheme
 import ai.rever.boss.plugin.ui.BossThemeController
 import ai.rever.boss.plugin.ui.LocalHeavyweightOverlays
+import ai.rever.boss.services.editor.EditorAPIAccess
 import ai.rever.boss.services.terminal.TerminalAPIAccess
 import ai.rever.boss.updater.UpdateCoordinator
 import ai.rever.boss.utils.CLIInstaller
@@ -408,6 +409,21 @@ fun ApplicationScope.BossWindow(
                         MenuActionsHandler.triggerCloseTab(windowState.id)
                     },
                 )
+
+                // Auto save belongs to the editor plugin, which owns the save path and the
+                // setting; the host only renders the control because plugins cannot contribute
+                // to the native menu bar. Null means no editor plugin, or one older than the
+                // setting - hide the item rather than show one that does nothing.
+                val autoSaveEnabled = EditorAPIAccess.rememberAutoSaveEnabled()
+                if (autoSaveEnabled != null) {
+                    Separator()
+
+                    CheckboxItem(
+                        "Auto Save",
+                        checked = autoSaveEnabled.value,
+                        onCheckedChange = { EditorAPIAccess.setAutoSaveEnabled(it) },
+                    )
+                }
 
                 Separator()
 
