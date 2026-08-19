@@ -324,26 +324,58 @@ interface BrowserHandle {
     fun setContextMenuCallback(callback: ContextMenuCallback?)
 
     // ============================================================
-    // SECRET AUTO-FILL
+    // SECRET AUTO-FILL (deprecated, no-op)
     // ============================================================
 
     /**
      * Fill credentials into form fields on the current page.
      *
-     * This finds username and password fields and fills them with the provided values.
-     * Used for secret manager auto-fill integration.
+     * **Deprecated and now a no-op that always returns false. Fill through [executeJavaScript]
+     * instead, targeting the element you already identified.** Scheduled for removal.
      *
-     * @param username Username to fill
-     * @param password Password to fill
-     * @param fillBoth If true, fills both username and password. If false, only fills
-     *                 the currently focused field based on its type.
-     * @return true if credentials were filled successfully, false otherwise
+     * The signature is the problem: it cannot say WHICH field, so the host had to guess, and the
+     * guess was wrong in the ways real login pages are actually built. Measured on
+     * `accounts.google.com`: that page carries a `display: none` password input and the guess took
+     * the first `input[type="password"]` in the DOM - that one - so the password went into a hidden
+     * field and the screen did not change. The visible identifier box was missed entirely, because
+     * `[autocomplete="username"]` is an exact attribute match and the field declares
+     * `autocomplete="username webauthn"`, a space-separated token list. The last-resort strategy
+     * was "first text input in a `<form>` containing a password", and that page has no `<form>`.
+     *
+     * Every caller already knows what the guess was reconstructing: a right-click menu was raised
+     * on a specific field, an autofill suggestion is anchored to a specific box. Filling that
+     * element beats any heuristic, so credential filling belongs on the caller's side of the
+     * boundary along with the rules for deciding a field is real. See fluck-browser's
+     * `CredentialFill`.
+     *
+     * **This copy is the one that runs.** `BrowserHandle` is host-compiled and served parent-first,
+     * so the boss-plugin-api jar's copy is shadowed - the behaviour change lands here, with this
+     * release, and consumers gate on `minBossVersion`.
+     *
+     * **A no-op body rather than deletion, deliberately.** Removing the declaration would make
+     * every caller compiled against an older api throw `NoSuchMethodError` at the call site.
+     * fluck-browser 1.2.19 guards its call and would degrade to nothing, but 1.2.18 and earlier
+     * call it bare inside a `launch`, where an `Error` reaches the coroutine uncaught and the host
+     * tears the whole plugin down - closing every open browser tab. Returning false gives those
+     * builds a silent no-op, which is also strictly better than what they do today: writing a
+     * password into a hidden input. The declaration goes in a later release, once 1.2.19+ has
+     * propagated.
+     *
+     * @return always false
      */
+    @Deprecated(
+        message =
+            "Cannot express which field to fill, so the host had to guess and guessed wrong on " +
+                "real login pages. Now a no-op returning false; fill via executeJavaScript, " +
+                "targeting the element you already identified. Scheduled for removal.",
+        // Deliberately no ReplaceWith: executeJavaScript is not a drop-in for this, and an
+        // auto-applied quick fix would produce code that compiles and fills nothing.
+    )
     suspend fun fillCredentials(
         username: String,
         password: String,
         fillBoth: Boolean = true,
-    ): Boolean
+    ): Boolean = false
 
     // ============================================================
     // CLIPBOARD OPERATIONS

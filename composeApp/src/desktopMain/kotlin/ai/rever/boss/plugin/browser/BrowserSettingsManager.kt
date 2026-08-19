@@ -63,7 +63,7 @@ object BrowserSettingsManager {
                 // Validate retry/recovery settings to prevent invalid values from manual file editing
                 BrowserSettings.maxInitRetries = settings.maxInitRetries.coerceIn(1, 10)
                 BrowserSettings.maxRecoveryAttempts = settings.maxRecoveryAttempts.coerceIn(1, 10)
-                // Secret Manager settings
+                // Secret Manager settings (setter mirrors to the system property the plugin reads)
                 BrowserSettings.discretePasswordFill = settings.discretePasswordFill
                 // Tab sharing (setter mirrors to the system property the plugin reads)
                 BrowserSettings.showShareButton = settings.showShareButton

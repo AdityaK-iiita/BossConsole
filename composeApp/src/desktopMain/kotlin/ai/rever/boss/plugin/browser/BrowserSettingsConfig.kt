@@ -22,8 +22,18 @@ object BrowserSettings {
     var jsPromptDefaultValue: String = "" // Empty string or user-configured default
     var jsPromptUsePageDefault: Boolean = true // Use page's default value if true, else use jsPromptDefaultValue
 
-    // Secret Manager settings (configurable via Settings > Browser > Secret Manager)
+    // Secret Manager settings (configurable via Settings > Browser > Secret Manager).
+    //
+    // Mirrored to a JVM system property for the same reason [SHOW_SHARE_BUTTON_PROP] is: the
+    // credential fill moved out of the host and into the fluck-browser plugin, which loads in a
+    // separate classloader and cannot read this object. Without the mirror the Settings toggle
+    // would still flip a field nothing reads - a switch that silently does nothing.
+    const val DISCRETE_PASSWORD_FILL_PROP = "boss.fluck.discretePasswordFill"
     var discretePasswordFill: Boolean = true // Hide filled passwords with blur effect for privacy
+        set(value) {
+            field = value
+            System.setProperty(DISCRETE_PASSWORD_FILL_PROP, value.toString())
+        }
 
     // Tab sharing (configurable via Settings > Browser > Tab Sharing). OFF by default:
     // the co-browse share (QR) button stays hidden in the browser toolbar until the
@@ -35,6 +45,16 @@ object BrowserSettings {
             field = value
             System.setProperty(SHOW_SHARE_BUTTON_PROP, value.toString())
         }
+
+    init {
+        // Publish the defaults up front. A Kotlin property initializer does not run through the
+        // custom setter, so without this the properties stay unset until the settings file is
+        // loaded - and a first launch with no settings file, or a failed load, would leave the
+        // plugin reading nothing. It defaults `discretePasswordFill` back to true on its own, but
+        // relying on two places to agree on a privacy default is how they drift apart.
+        System.setProperty(DISCRETE_PASSWORD_FILL_PROP, discretePasswordFill.toString())
+        System.setProperty(SHOW_SHARE_BUTTON_PROP, showShareButton.toString())
+    }
 }
 
 /**

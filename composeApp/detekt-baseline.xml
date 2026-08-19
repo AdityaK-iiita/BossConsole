@@ -103,7 +103,6 @@
     <ID>CyclomaticComplexMethod:FluckEngine.kt$FluckEngine$private fun createEngineInstance( chromiumDir: java.nio.file.Path, profileDirPath: java.nio.file.Path, ): Engine</ID>
     <ID>CyclomaticComplexMethod:FluckEngine.kt$FluckEngine$private fun killStaleChromiumProcesses()</ID>
     <ID>CyclomaticComplexMethod:FormFieldDetector.kt$FormFieldDetector$private fun determineFieldType( inputType: String, fieldName: String, fieldId: String, placeholder: String, autocomplete: String, className: String, ariaLabel: String, ): FieldType</ID>
-    <ID>CyclomaticComplexMethod:FormFieldInjector.kt$FormFieldInjector$suspend fun fillCredentials( browser: LockedBrowser, username: String, password: String, mode: FillMode = FillMode.BOTH, ): FillResult</ID>
     <ID>CyclomaticComplexMethod:GlobalSearchDialog.kt$@Composable fun GlobalSearchDialog( projectPath: String, workspaceManager: WorkspaceManager, onDismiss: () -&gt; Unit, onFileSelect: (String) -&gt; Unit, onTabSelect: ((windowId: String, panelId: String, tabId: String) -&gt; Unit)? = null, onBookmarkSelect: ((bookmarkId: String, collectionId: String) -&gt; Unit)? = null, onRunConfigSelect: ((configId: String) -&gt; Unit)? = null, onCommandSelect: ((actionId: String) -&gt; Unit)? = null, )</ID>
     <ID>CyclomaticComplexMethod:GlobalSearchService.kt$GlobalSearchService$private fun convertPluginSearchResult(result: PluginSearchResult): SearchResult?</ID>
     <ID>CyclomaticComplexMethod:KernelBootstrap.kt$KernelBootstrap$fun registerPluginServices( performanceDataProvider: PerformanceDataProvider? = null, downloadDataProvider: DownloadDataProvider? = null, gitDataProvider: GitDataProvider? = null, logDataProvider: LogDataProvider? = null, activeTabsProvider: ActiveTabsProvider? = null, secretDataProvider: SecretDataProvider? = null, supabaseDataProvider: SupabaseDataProvider? = null, splitViewOperations: SplitViewOperations? = null, runConfigurationDataProvider: RunConfigurationDataProvider? = null, panelEventProvider: PanelEventProvider? = null, roleManagementProvider: RoleManagementProvider? = null, directoryPickerProvider: DirectoryPickerProvider? = null, projectDataProvider: ProjectDataProvider? = null, notificationProvider: NotificationProvider? = null, )</ID>
@@ -194,7 +193,6 @@
     <ID>LargeClass:DesktopGitService.kt$GitService</ID>
     <ID>LargeClass:DynamicPluginManager.kt$DynamicPluginManager</ID>
     <ID>LargeClass:FluckEngine.kt$FluckEngine</ID>
-    <ID>LargeClass:FormFieldInjector.kt$FormFieldInjector</ID>
     <ID>LargeClass:KeymapPresets.kt$KeymapPresets</ID>
     <ID>LargeClass:PluginStoreSetup.kt$PluginStoreSetup</ID>
     <ID>LargeClass:SplitView.kt$SplitViewState</ID>
@@ -291,11 +289,6 @@
     <ID>LongMethod:FluckEngine.kt$FluckEngine.BrowserFindBar$private fun createDialog(owner: java.awt.Window)</ID>
     <ID>LongMethod:FocusModeSettings.kt$@Composable fun FocusModeSettings()</ID>
     <ID>LongMethod:FormFieldDetector.kt$FormFieldDetector$fun injectFormDetectionScript(browser: LockedBrowser)</ID>
-    <ID>LongMethod:FormFieldInjector.kt$FormFieldInjector$private suspend fun applyDiscreteMode(browser: LockedBrowser)</ID>
-    <ID>LongMethod:FormFieldInjector.kt$FormFieldInjector$suspend fun fillField( browser: LockedBrowser, fieldInfo: FormFieldDetector.FormFieldInfo, value: String, ): FillResult</ID>
-    <ID>LongMethod:FormFieldInjector.kt$FormFieldInjector$suspend fun findAndFillPassword( browser: LockedBrowser, password: String, ): FillResult</ID>
-    <ID>LongMethod:FormFieldInjector.kt$FormFieldInjector$suspend fun findAndFillUsername( browser: LockedBrowser, username: String, ): FillResult</ID>
-    <ID>LongMethod:FormFieldInjector.kt$FormFieldInjector$suspend fun installFormSubmissionMonitor(browser: LockedBrowser)</ID>
     <ID>LongMethod:FullscreenBrowserWindow.kt$FullscreenBrowserWindow$private fun createFullscreenWindow( browser: Browser, tabId: String, )</ID>
     <ID>LongMethod:GenericDialogHost.kt$@Composable private fun MultiChoiceDialog(request: DialogRequest.MultiChoice)</ID>
     <ID>LongMethod:GenericDialogHost.kt$@Composable private fun SingleChoiceDialog(request: DialogRequest.SingleChoice)</ID>
@@ -1253,7 +1246,6 @@
     <ID>TooGenericExceptionCaught:FocusModeSettingsManager.kt$FocusModeSettingsManager$e: Exception</ID>
     <ID>TooGenericExceptionCaught:FontManager.kt$FontManager$e: Exception</ID>
     <ID>TooGenericExceptionCaught:FormFieldDetector.kt$FormFieldDetector$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:FormFieldInjector.kt$FormFieldInjector$e: Exception</ID>
     <ID>TooGenericExceptionCaught:FullscreenBrowserWindow.kt$FullscreenBrowserWindow$e: Exception</ID>
     <ID>TooGenericExceptionCaught:GitHubConfig.kt$GitHubConfig$e: Exception</ID>
     <ID>TooGenericExceptionCaught:GlobalSearchService.kt$GlobalSearchService$e: Exception</ID>
@@ -1428,8 +1420,6 @@
     <ID>UnusedParameter:CodeEditor.kt$projectPath: String</ID>
     <ID>UnusedParameter:Dashboard.kt$onActivatePlugin: (String) -&gt; Unit</ID>
     <ID>UnusedParameter:Dashboard.kt$onNewTerminal: () -&gt; Unit</ID>
-    <ID>UnusedParameter:FormFieldInjector.kt$FormFieldInjector$fieldIdentifier: String = "activeElement"</ID>
-    <ID>UnusedParameter:FormFieldInjector.kt$FormFieldInjector$fieldInfo: FormFieldDetector.FormFieldInfo</ID>
     <ID>UnusedParameter:KeymapValidator.kt$KeymapValidator$settings: KeymapSettings</ID>
     <ID>UnusedParameter:LoginFormScreen.kt$onLoginSuccess: () -&gt; Unit</ID>
     <ID>UnusedParameter:PasskeyAuthViewModel.kt$PasskeyAuthViewModel$email: String</ID>
@@ -1445,7 +1435,6 @@
     <ID>UnusedParameter:WindowManager.kt$WindowManager$windowId: String</ID>
     <ID>UnusedParameter:WizardDialog.kt$isLastStep: Boolean</ID>
     <ID>UnusedPrivateMember:FormFieldDetector.kt$FormFieldDetector$private fun parseFieldInfo(jsObjectString: String): FormFieldInfo?</ID>
-    <ID>UnusedPrivateMember:FormFieldInjector.kt$FormFieldInjector$private suspend fun logFieldDebugInfo( browser: LockedBrowser, phase: String, fieldIdentifier: String = "activeElement", ): String</ID>
     <ID>UnusedPrivateMember:PluginPersistence.kt$PluginPersistence$private fun saveConfig()</ID>
     <ID>UnusedPrivateMember:SplitView.kt$SplitViewState$private fun findPanelWithFile(filePath: String): Pair&lt;String, BossTabsComponent&gt;?</ID>
     <ID>UnusedPrivateProperty:DefaultPlugin.kt$DefaultPlugin$private val notificationListener = PluginSandboxNotificationListener(notificationService).also { (sandboxManager as? PluginSandboxManagerImpl)?.addListener(it) }</ID>

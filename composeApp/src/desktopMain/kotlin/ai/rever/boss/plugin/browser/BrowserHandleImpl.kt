@@ -148,14 +148,14 @@ internal data class ContextMenuTarget(
  *   An inline image's source is a `data:` URL of the whole encoded image, which this is
  *   the first path to hand to plugins; past [MAX_INLINE_IMAGE_URL_LENGTH] it counts as no
  *   address rather than shipping megabytes of base64 into every menu.
- * - Editable is reported for the main frame only, and `fillCredentials` is why it stays that
- *   way: it runs against `browser.mainFrame()` and `document.activeElement`, so offering it
- *   for a field inside an iframe could write a password into whatever main-frame input
- *   happens to be focused. Frame-accurate detection has to wait for a frame-accurate fill
- *   path. `cut`/`copySelection`/`paste`/`selectAll` no longer share that limit — they go
- *   through [BrowserHandleImpl.editorCommand], which targets `focusedFrame()` — but this gate
- *   still decides whether the menu offers them at all, so widening it is what would actually
- *   put them in reach inside an iframe.
+ * - Editable is reported for the main frame only. The reason used to be the credential fill,
+ *   which ran against `browser.mainFrame()` and `document.activeElement`, so offering it for a
+ *   field inside an iframe could write a password into whatever main-frame input happened to be
+ *   focused. That method is gone and filling now belongs to the caller, which targets an element
+ *   it already identified - so this gate is no longer holding a fill path back.
+ *   `cut`/`copySelection`/`paste`/`selectAll` go through [BrowserHandleImpl.editorCommand], which
+ *   targets `focusedFrame()` and would work inside an iframe already; this gate is what stops the
+ *   menu offering them there, and widening it is now a self-contained change.
  */
 internal fun ContextMenuTarget.toContextMenuInfo(
     pageUrl: String,
@@ -563,7 +563,7 @@ internal class BrowserHandleImpl(
     // Lock for thread-safe browser operations
     private val browserLock = ReentrantReadWriteLock()
 
-    // Helper to create LockedBrowser for FormFieldDetector/FormFieldInjector
+    // Helper to create LockedBrowser for FormFieldDetector
     private fun createLockedBrowser(): LockedBrowser = LockedBrowser(browser, browserLock)
 
     /** Expose the raw JxBrowser instance for internal use (e.g. RPA recorder). */
@@ -1319,12 +1319,12 @@ internal class BrowserHandleImpl(
      * that calls `preventDefault()` on mousedown (custom form widgets do) leaves focus
      * where it was, and this then describes the *previously* focused field while
      * [BrowserContextMenuInfo.isEditable], which comes from the click target, correctly
-     * describes the clicked one. The fill path (`fillCredentials`, `FormFieldInjector`)
-     * targets `activeElement` too, so the two agree with each other and can jointly be
-     * wrong about which field the user meant.
+     * describes the clicked one.
      *
-     * Resolving from `params.location()` via `elementFromPoint`, or deferring resolution
-     * until a fill action is actually chosen, would remove the assumption.
+     * A caller that fills from `activeElement` inherits the same assumption, and the two at least
+     * agree with each other. One that resolves the element itself - from `params.location()` via
+     * `elementFromPoint`, or by deferring resolution until a fill is actually chosen - does not
+     * need this to be right, and is the direction to go if it ever matters.
      */
     private fun getFormFieldInfoFromJS(frame: com.teamdev.jxbrowser.frame.Frame): FormFieldInfo? {
         return try {
@@ -2273,52 +2273,6 @@ internal class BrowserHandleImpl(
             logger.debug(LogCategory.BROWSER, "DevTools opened", mapOf("handleId" to id))
         } catch (e: Exception) {
             logger.warn(LogCategory.BROWSER, "Failed to open DevTools", error = e)
-        }
-    }
-
-    // ============================================================
-    // SECRET AUTO-FILL
-    // ============================================================
-
-    override suspend fun fillCredentials(
-        username: String,
-        password: String,
-        fillBoth: Boolean,
-    ): Boolean {
-        if (!isValid) return false
-        return try {
-            val mode =
-                if (fillBoth) {
-                    FormFieldInjector.FillMode.BOTH
-                } else {
-                    // Determine which field to fill based on focused field type
-                    val focusedType =
-                        browser
-                            .mainFrame()
-                            .map { frame ->
-                                frame.executeJavaScript<String?>(
-                                    """
-                                    (function() {
-                                        var el = document.activeElement;
-                                        if (!el || el.tagName !== 'INPUT') return null;
-                                        return el.type || 'text';
-                                    })()
-                                    """.trimIndent(),
-                                )
-                            }.orElse(null)
-
-                    when (focusedType) {
-                        "password" -> FormFieldInjector.FillMode.PASSWORD_ONLY
-                        else -> FormFieldInjector.FillMode.USERNAME_ONLY
-                    }
-                }
-
-            val lockedBrowser = createLockedBrowser()
-            val result = FormFieldInjector.fillCredentials(lockedBrowser, username, password, mode)
-            result is FormFieldInjector.FillResult.Success || result is FormFieldInjector.FillResult.PartialSuccess
-        } catch (e: Exception) {
-            logger.warn(LogCategory.BROWSER, "Failed to fill credentials", error = e)
-            false
         }
     }
 
