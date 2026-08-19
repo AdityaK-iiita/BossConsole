@@ -39,6 +39,21 @@ data class MissingPluginDependency(
 }
 
 /**
+ * A loaded plugin that declares a dependency on the one being unloaded.
+ *
+ * The host's own shape, distinct from the api's `DependentPluginInfo`: this one carries
+ * [loadPriority] so the restart runs in the same order a load would, and it is what the
+ * commonMain dialog and the pure tests speak. The delegate converts at the api boundary.
+ */
+data class DependentPlugin(
+    val pluginId: String,
+    val displayName: String,
+    /** True when the dependent declared it `optional`, i.e. it works without it. */
+    val optional: Boolean,
+    val loadPriority: Int = 100,
+)
+
+/**
  * Works out which of a plugin's declared dependencies are absent.
  *
  * Pure, so the interesting rules are testable without a plugin loader: manifest
@@ -154,6 +169,49 @@ object PluginDependencyResolution {
             .map { dependency -> manifest.toMissing(dependency) }
 
     /**
+     * Every loaded, enabled plugin that declares a dependency on [pluginId] - optional ones
+     * included - for the prompt that offers to restart them.
+     *
+     * [blockingDependentsOf] is this list narrowed to the hard declarations, so the veto and the
+     * prompt cannot disagree about who depends on what. They deliberately answer *different*
+     * questions on top of the same set:
+     *
+     * - the **veto** counts only `optional: false`, because that is what the manifest means by
+     *   "cannot work without it";
+     * - the **prompt** counts optional dependents too, because that is the case it exists for.
+     *   All three of the AI Gateway's consumers declare it optional, so its update already
+     *   succeeded and left them running against a classloader that had closed underneath them.
+     *   "Works without it" describes a cold start, not a handle resolved before the swap.
+     *
+     * Self-declarations and DISABLED dependents drop out for the reasons given on
+     * [blockingDependentsOf]; [isDisabled] has no default there and none here either.
+     */
+    fun dependentsOf(
+        pluginId: String,
+        loadedManifests: List<PluginManifest>,
+        isDisabled: (pluginId: String) -> Boolean,
+    ): List<DependentPlugin> =
+        loadedManifests
+            .filterNot { manifest -> manifest.pluginId == pluginId }
+            .mapNotNull { manifest ->
+                manifest.dependencies
+                    .filter { dependency -> dependency.pluginId == pluginId }
+                    // A manifest declaring the same dependency twice with different flags is
+                    // treated by its stricter declaration, as `missingFor` does: calling
+                    // something optional that the plugin actually requires is the worse way to
+                    // be wrong, and here it would also drop the dependent from the veto.
+                    .minByOrNull { dependency -> dependency.optional }
+                    ?.let { dependency ->
+                        DependentPlugin(
+                            pluginId = manifest.pluginId,
+                            displayName = manifest.displayName,
+                            optional = dependency.optional,
+                            loadPriority = manifest.loadPriority,
+                        )
+                    }
+            }.filterNot { dependent -> isDisabled(dependent.pluginId) }
+
+    /**
      * Display names of the [loadedManifests] that would actually break if [pluginId] were
      * unloaded, for `DynamicPluginManager.checkCanUnload`.
      *
@@ -192,17 +250,14 @@ object PluginDependencyResolution {
         loadedManifests: List<PluginManifest>,
         isDisabled: (pluginId: String) -> Boolean,
     ): List<String> =
-        loadedManifests
-            // A manifest naming itself is a mistake ([missingFor] drops it on the install side
-            // too), but here it would be a permanent one: the plugin could never be unloaded,
-            // updated or removed, and the reason shown would name the plugin being unloaded.
-            .filterNot { manifest -> manifest.pluginId == pluginId }
-            .filter { manifest ->
-                manifest.dependencies.any { dependency ->
-                    dependency.pluginId == pluginId && !dependency.optional
-                }
-            }.filterNot { manifest -> isDisabled(manifest.pluginId) }
-            .map { manifest -> manifest.displayName }
+        // Expressed on top of [dependentsOf] rather than repeating its filters, so the plugins
+        // the prompt offers to restart are always a superset of the ones the veto names. When
+        // those two drifted before, the prompt could describe a set the unload had already
+        // refused over - and the self-declaration and DISABLED rules would have to be right
+        // twice.
+        dependentsOf(pluginId, loadedManifests, isDisabled)
+            .filterNot { dependent -> dependent.optional }
+            .map { dependent -> dependent.displayName }
 
     private fun PluginManifest.toMissing(dependency: PluginDependency) =
         MissingPluginDependency(

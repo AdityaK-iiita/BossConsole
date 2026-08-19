@@ -1181,8 +1181,40 @@ class DynamicPluginManager(
                 )
             }
         }
+        // The plugin is back. Anything that agreed to be restarted for its sake now can be,
+        // against the version that actually loaded rather than the gap where nothing was.
+        // Outside the mutex for the same reason as the two hooks above, and more sharply: each
+        // restart re-enters uninstallPlugin and installPlugin, so calling this under the lock
+        // would deadlock the manager against itself. Only for a plugin that really registered -
+        // a DISABLED result means the new version is not running, and restarting its dependents
+        // would point them at nothing.
+        result.getOrNull()?.takeIf { it.state == PluginState.LOADED }?.let { info ->
+            DependentRestartCoordinator.flushAfterLoad(info.manifest.pluginId)
+        }
         return result
     }
+
+    /**
+     * Loaded, enabled plugins that declare a dependency on [pluginId] - optional ones included.
+     *
+     * A superset of what [checkCanUnload] vetoes on, and the same underlying set: see
+     * `PluginDependencyResolution.dependentsOf` for why the prompt counts optional declarations
+     * that the veto does not. Ordered by load priority, so restarting them walks the same order
+     * a cold start would.
+     *
+     * Reads live state without the mutex. Callers use it to decide whether to ask a question
+     * before starting an unload, and the authoritative check runs inside the lock anyway - the
+     * same best-effort arrangement as `uninstallPlugin`'s pre-mutex teardown gate.
+     */
+    fun dependentsOf(pluginId: String): List<DependentPlugin> =
+        PluginDependencyResolution
+            .dependentsOf(
+                pluginId = pluginId,
+                loadedManifests = pluginLoader.getLoadedPlugins().map { it.manifest },
+                // Fails closed, exactly as in checkCanUnload: only a state we positively
+                // recognise as DISABLED takes a dependent out of the list.
+                isDisabled = { id -> _pluginStates.value[id]?.state == PluginState.DISABLED },
+            ).sortedBy { dependent -> dependent.loadPriority }
 
     /**
      * Check if a plugin can be unloaded without issues.

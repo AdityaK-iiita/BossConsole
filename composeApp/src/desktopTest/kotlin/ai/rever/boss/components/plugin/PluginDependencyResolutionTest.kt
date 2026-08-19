@@ -749,3 +749,177 @@ class PluginDependencyBusTest {
             )
         }
 }
+
+/**
+ * What the dependent-restart prompt lists, as against what the unload veto counts.
+ *
+ * The two read the same set through `dependentsOf`, and these pin where they diverge: the veto
+ * counts only hard declarations, the prompt counts every loaded dependent. Getting that backwards
+ * either refuses an update nobody asked to have refused, or silently leaves a plugin running
+ * against a classloader that has closed.
+ */
+class PluginDependentsTest {
+    private fun manifest(
+        pluginId: String = "com.example.dependent",
+        displayName: String = "Dependent",
+        dependencies: List<PluginDependency> = emptyList(),
+    ) = PluginManifest(
+        pluginId = pluginId,
+        displayName = displayName,
+        version = "1.0.0",
+        apiVersion = "1.0.0",
+        mainClass = "com.example.Main",
+        dependencies = dependencies,
+    )
+
+    private fun dependency(
+        pluginId: String,
+        optional: Boolean = false,
+    ) = PluginDependency(pluginId = pluginId, version = "1.0.0", optional = optional)
+
+    @Test
+    fun `an optional dependent is listed for restart even though it does not block`() {
+        // The whole reason the restart prompt exists. The gateway's consumers all declare it
+        // optional, so the veto lets the update through - and used to leave them running
+        // against a classloader that had closed underneath them.
+        val loaded =
+            listOf(
+                manifest(
+                    pluginId = "com.example.jupyter",
+                    displayName = "Jupyter Notebook",
+                    dependencies = listOf(dependency("com.example.gateway", optional = true)),
+                ),
+            )
+
+        val dependents =
+            PluginDependencyResolution.dependentsOf(
+                pluginId = "com.example.gateway",
+                loadedManifests = loaded,
+                isDisabled = { false },
+            )
+
+        assertEquals(listOf("com.example.jupyter"), dependents.map { it.pluginId })
+        assertTrue(dependents.single().optional)
+        assertEquals(
+            emptyList(),
+            PluginDependencyResolution.blockingDependentsOf("com.example.gateway", loaded) { false },
+        )
+    }
+
+    @Test
+    fun `dependentsOf lists required and optional together`() {
+        val dependents =
+            PluginDependencyResolution.dependentsOf(
+                pluginId = "com.example.gateway",
+                loadedManifests =
+                    listOf(
+                        manifest(
+                            pluginId = "com.example.flow",
+                            displayName = "Flow",
+                            dependencies = listOf(dependency("com.example.gateway", optional = true)),
+                        ),
+                        manifest(
+                            pluginId = "com.example.llmrpa",
+                            displayName = "LLM RPA",
+                            dependencies = listOf(dependency("com.example.gateway")),
+                        ),
+                        manifest(
+                            pluginId = "com.example.unrelated",
+                            displayName = "Unrelated",
+                            dependencies = listOf(dependency("com.example.other")),
+                        ),
+                    ),
+                isDisabled = { false },
+            )
+
+        assertEquals(listOf("com.example.flow", "com.example.llmrpa"), dependents.map { it.pluginId })
+        assertEquals(listOf(true, false), dependents.map { it.optional })
+    }
+
+    @Test
+    fun `a manifest naming itself is not its own dependent`() {
+        // Same rule as the veto, and for the same reason: it would make the plugin permanently
+        // unremovable, and here it would also offer to restart the plugin being unloaded.
+        val dependents =
+            PluginDependencyResolution.dependentsOf(
+                pluginId = "com.example.gateway",
+                loadedManifests =
+                    listOf(
+                        manifest(
+                            pluginId = "com.example.gateway",
+                            displayName = "AI Gateway",
+                            dependencies = listOf(dependency("com.example.gateway")),
+                        ),
+                    ),
+                isDisabled = { false },
+            )
+
+        assertEquals(emptyList(), dependents)
+    }
+
+    @Test
+    fun `a disabled dependent is not listed for restart`() {
+        val dependents =
+            PluginDependencyResolution.dependentsOf(
+                pluginId = "com.example.gateway",
+                loadedManifests =
+                    listOf(
+                        manifest(
+                            pluginId = "com.example.flow",
+                            displayName = "Flow",
+                            dependencies = listOf(dependency("com.example.gateway", optional = true)),
+                        ),
+                    ),
+                // disablePlugin leaves the plugin in getLoadedPlugins(), so without this it
+                // would be restarted on behalf of something that is not running.
+                isDisabled = { id -> id == "com.example.flow" },
+            )
+
+        assertEquals(emptyList(), dependents)
+    }
+
+    @Test
+    fun `a dependency declared twice is listed by its stricter declaration`() {
+        // Matches missingFor and the veto: calling something optional that the plugin actually
+        // requires would also drop it from blockingDependentsOf, which reads off this list.
+        val dependents =
+            PluginDependencyResolution.dependentsOf(
+                pluginId = "com.example.gateway",
+                loadedManifests =
+                    listOf(
+                        manifest(
+                            pluginId = "com.example.flow",
+                            displayName = "Flow",
+                            dependencies =
+                                listOf(
+                                    dependency("com.example.gateway", optional = true),
+                                    dependency("com.example.gateway", optional = false),
+                                ),
+                        ),
+                    ),
+                isDisabled = { false },
+            )
+
+        assertEquals(1, dependents.size)
+        assertFalse(dependents.single().optional)
+        assertEquals(
+            listOf("Flow"),
+            PluginDependencyResolution.blockingDependentsOf(
+                pluginId = "com.example.gateway",
+                loadedManifests =
+                    listOf(
+                        manifest(
+                            pluginId = "com.example.flow",
+                            displayName = "Flow",
+                            dependencies =
+                                listOf(
+                                    dependency("com.example.gateway", optional = true),
+                                    dependency("com.example.gateway", optional = false),
+                                ),
+                        ),
+                    ),
+                isDisabled = { false },
+            ),
+        )
+    }
+}

@@ -71,23 +71,24 @@ intellij-platform = "243.21565.199"
 # releases ONLY: plugin-platform/plugin-api-core downloads this release's jar and
 # filters the api package locally (no Maven registry involved).
 #
-# 1.0.77 is the release cut by risa-labs-inc/boss-plugin-api#33, which adds
-# SplitViewOperations.openPanelAsTab + supportsOpenPanelAsTab - the members
-# SplitViewOperationsImpl on this branch implements (BossConsole#177).
+# 1.0.79 adds PluginLoaderDelegate.unloadPluginForIntent + getDependentPlugins and the
+# PluginUnloadIntent / PluginUnloadResult / DependentPluginInfo types - what
+# PluginLoaderDelegateImpl on this branch implements so a plugin whose dependents are
+# loaded can be updated after a prompt instead of being refused outright.
 #
-# That interface is @HostImplemented: plugin-api-core filters it into the host and
+# PluginLoaderDelegate is @HostImplemented: plugin-api-core filters it into the host and
 # serves it parent-first, so THIS pin is what every plugin resolves. Nothing a
 # plugin declares can reach these members before this bump lands in a release -
-# minApiVersion cannot, which is why the api documents them as a minBossVersion gate.
+# minApiVersion cannot, which is why the api documents them as a minBossVersion gate
+# and tells callers to catch LinkageError.
 #
-# It is a SUPERSET of the 1.0.76 it replaces, verified against the release jar
-# rather than assumed - releases are cut from the api repo's main, so 1.0.77 keeps
-# #25's browser telemetry events (the reason for the 1.0.76 pin) along with
-# everything below them. Worth checking rather than trusting the ordering:
-# fetchApiPluginJar has no Maven fallback, so a pin that dropped a type would
-# surface as an unrelated compile error, and this comment is the only record of
-# which api PR a pin corresponds to.
-boss-plugin-api = "1.0.77"
+# It is a SUPERSET of the 1.0.77 it replaces: 1.0.79 is cut from the api repo's main at
+# the 1.0.78 bump, so it keeps #33's SplitViewOperations.openPanelAsTab (the reason for
+# the 1.0.77 pin) and #34's AiCliSessionAPI along with everything below them. Worth
+# checking rather than trusting the ordering: fetchApiPluginJar has no Maven fallback, so
+# a pin that dropped a type would surface as an unrelated compile error, and this comment
+# is the only record of which api PR a pin corresponds to.
+boss-plugin-api = "1.0.79"
 
 [libraries]
 kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }

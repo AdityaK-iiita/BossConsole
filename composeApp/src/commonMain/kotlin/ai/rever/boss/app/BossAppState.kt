@@ -5,6 +5,7 @@ import ai.rever.boss.components.model.BossDraggableComponent
 import ai.rever.boss.components.model.TabDraggableComponent
 import ai.rever.boss.components.plugin.AvailablePluginUpdate
 import ai.rever.boss.components.plugin.DefaultPlugin
+import ai.rever.boss.components.plugin.DependentRestartPrompt
 import ai.rever.boss.components.plugin.MissingDependencyPrompt
 import ai.rever.boss.components.plugin.PluginUninstallPrompt
 import ai.rever.boss.components.plugin.StoreVersionPrompt
@@ -116,6 +117,16 @@ internal class BossAppState(
         mutableStateOf<MissingDependencyPrompt?>(null)
     var installingMissingDependency by mutableStateOf(false)
     var missingDependencyError by mutableStateOf<String?>(null)
+
+    /**
+     * Plugins that would be restarted by an unload the user has not answered yet.
+     *
+     * The unload is suspended on this prompt's own `answer`, so leaving it null-but-unanswered
+     * strands the caller until [ai.rever.boss.components.plugin.DependentRestartBus]'s timeout.
+     * Every path that clears this field must complete the deferred first.
+     */
+    var pendingDependentRestart by
+        mutableStateOf<DependentRestartPrompt?>(null)
 
     // A terminal command that arrived from outside this BOSS invocation and is
     // waiting for the operator to confirm it. Null whenever nothing is pending.

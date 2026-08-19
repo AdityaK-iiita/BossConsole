@@ -3,6 +3,7 @@ package ai.rever.boss.components.plugin
 import ai.rever.boss.plugin.MissingDependencyReporter
 import ai.rever.boss.plugin.PluginStoreSetup
 import ai.rever.boss.plugin.api.PluginState
+import ai.rever.boss.plugin.api.PluginUnloadIntent
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import java.io.File
@@ -90,6 +91,15 @@ actual object PluginUpdateBridge {
         val update =
             mgr.availableUpdates.value.firstOrNull { it.pluginId == pluginId }
                 ?: return Result.failure(Exception("No update available"))
+
+        // Ask before downloading anything. This path unloads with `force = true`, so it never
+        // met the dependents veto - and never restarted the dependents either, which left them
+        // holding a handle into the classloader this update is about to close. Asked here rather
+        // than inside `updatePlugin`'s unload lambda so a decline costs no download, and so the
+        // question arrives before the "Updating…" status message stops making sense.
+        if (!confirmDependentRestart(pluginId, update.displayName, PluginUnloadIntent.UPDATE, manager)) {
+            return Result.failure(DependentRestartDeclinedException(pluginId))
+        }
 
         // newVersion comes from the (remote) store manifest, and SemanticVersion.parse does NOT
         // reject path separators in prerelease/build metadata — so sanitize the filename and verify

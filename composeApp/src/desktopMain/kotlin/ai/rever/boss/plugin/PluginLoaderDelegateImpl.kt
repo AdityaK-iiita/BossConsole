@@ -1,5 +1,8 @@
 package ai.rever.boss.plugin
 
+import ai.rever.boss.components.plugin.DependentPlugin
+import ai.rever.boss.components.plugin.DependentRestartCoordinator
+import ai.rever.boss.components.plugin.DependentRestartEventBus
 import ai.rever.boss.components.plugin.DynamicPluginInfo
 import ai.rever.boss.components.plugin.DynamicPluginManager
 import ai.rever.boss.components.plugin.MicrokernelRuntime
@@ -8,11 +11,14 @@ import ai.rever.boss.components.plugin.resolveReloadJarPath
 import ai.rever.boss.components.registery.PanelComponentStoreRegistry
 import ai.rever.boss.components.window_panel.SplitViewStateRegistry
 import ai.rever.boss.components.window_panel.components.main_window_panels.BossTabsComponent
+import ai.rever.boss.plugin.api.DependentPluginInfo
 import ai.rever.boss.plugin.api.InaccessiblePluginInfo
 import ai.rever.boss.plugin.api.LoadedPluginInfo
 import ai.rever.boss.plugin.api.PanelId
 import ai.rever.boss.plugin.api.PluginLoaderDelegate
 import ai.rever.boss.plugin.api.PluginState
+import ai.rever.boss.plugin.api.PluginUnloadIntent
+import ai.rever.boss.plugin.api.PluginUnloadResult
 import ai.rever.boss.plugin.loader.PluginSignatureSidecar
 import ai.rever.boss.plugin.loader.PluginUnloadException
 import ai.rever.boss.plugin.repository.remote.PluginStoreConfig
@@ -168,15 +174,158 @@ class PluginLoaderDelegateImpl(
         }
     }
 
-    override suspend fun unloadPlugin(pluginId: String): Boolean =
+    /**
+     * The pre-1.0.79 verb, kept because an installed Toolbox still calls it.
+     *
+     * Routed through [unloadPluginForIntent] with [PluginUnloadIntent.UNSPECIFIED] rather than
+     * left on the old path, so the dependent-restart prompt reaches a Toolbox that has not been
+     * updated yet. The intent verb buys wording and restart timing, not the feature itself.
+     */
+    override suspend fun unloadPlugin(pluginId: String): Boolean {
+        val result = unloadPluginForIntent(pluginId, PluginUnloadIntent.UNSPECIFIED)
+        return result.unloaded
+    }
+
+    override fun getDependentPlugins(pluginId: String): List<DependentPluginInfo> =
+        dynamicPluginManager.dependentsOf(pluginId).map { dependent ->
+            DependentPluginInfo(
+                pluginId = dependent.pluginId,
+                displayName = dependent.displayName,
+                optional = dependent.optional,
+                runningInstances = getRunningInstanceCount(dependent.pluginId),
+            )
+        }
+
+    /**
+     * Unload, asking first when other plugins depend on this one.
+     *
+     * Before this, a loaded hard dependent made the unload fail outright, and because the
+     * Toolbox updates a plugin by uninstalling and reinstalling it, that refusal landed on the
+     * Update button - the AI Gateway could not be updated while any consumer was running. The
+     * refusal was also unexplained: [unloadPlugin] hands back a `Boolean`, so the reasons naming
+     * the blocking plugins never left the host.
+     *
+     * Three things are deliberate here:
+     *
+     * - **The prompt is raised outside the manager mutex**, like the tab teardown in
+     *   `uninstallPlugin`. It waits on a person; holding the lock across that would freeze every
+     *   other plugin operation in the window for as long as the dialog is open.
+     * - **Confirming forces the unload.** Having asked the question the veto exists to ask,
+     *   re-applying it would just refuse what the user agreed to. `canUnload = false` system
+     *   plugins are still refused, because that gate answers a different question and no dialog
+     *   was shown for it - so the pre-check keeps its own `canUnload` term.
+     * - **Nothing is asked when there are no dependents.** The overwhelmingly common unload must
+     *   look exactly as it did.
+     */
+    override suspend fun unloadPluginForIntent(
+        pluginId: String,
+        intent: PluginUnloadIntent,
+    ): PluginUnloadResult {
+        val target = dynamicPluginManager.getPluginInfo(pluginId)
+        val dependents = dependentsFor(pluginId)
+        // Nothing to ask about, or a plugin the manifest gate protects - which is refused
+        // whatever the user would have said, so asking would be a dialog with one real answer.
+        // Mirrors uninstallPlugin's own ordering, which checks canUnload before the dependents.
+        if (dependents.isEmpty() || target?.manifest?.canUnload == false) {
+            return unloadPluginUnasked(pluginId, force = false)
+        }
+
+        val confirmed =
+            DependentRestartEventBus.ask(
+                DependentRestartCoordinator.promptFor(
+                    targetPluginId = pluginId,
+                    targetDisplayName = target?.manifest?.displayName ?: pluginId,
+                    intent = intent,
+                    dependents = dependents,
+                ),
+            )
+        return if (confirmed) {
+            // Logged as well as the decline, so the log says a question was asked and answered.
+            // Without this a confirmed prompt was invisible: the only trace was a force=true
+            // unload, which is indistinguishable from the paths that always forced.
+            logger.info(
+                LogCategory.SYSTEM,
+                "Dependent-restart prompt confirmed; forcing the unload",
+                mapOf(
+                    "pluginId" to pluginId,
+                    "intent" to intent.name,
+                    "dependents" to dependents.joinToString(", ") { it.pluginId },
+                ),
+            )
+            unloadConfirmed(pluginId, intent, dependents.map { it.pluginId })
+        } else {
+            logger.info(
+                LogCategory.SYSTEM,
+                "Dependent-restart prompt declined; leaving the plugin loaded",
+                mapOf("pluginId" to pluginId, "intent" to intent.name),
+            )
+            PluginUnloadResult(unloaded = false, cancelledByUser = true)
+        }
+    }
+
+    /**
+     * The unload the user just agreed to, plus the arrangement to restart what depended on it.
+     *
+     * Forced, because the veto exists to ask exactly the question that was already asked -
+     * re-applying it here would refuse what the user agreed to.
+     */
+    private suspend fun unloadConfirmed(
+        pluginId: String,
+        intent: PluginUnloadIntent,
+        dependentIds: List<String>,
+    ): PluginUnloadResult {
+        // Recorded BEFORE the unload, not after: for an update, whoever reinstalls the plugin
+        // can be quicker than this function's own continuation, and a record written after the
+        // load had already happened would never be claimed.
+        if (intent != PluginUnloadIntent.REMOVE) {
+            DependentRestartCoordinator.record(pluginId, dependentIds)
+        }
+        val result = unloadPluginUnasked(pluginId, force = true)
+        when {
+            // The forced unload failed after all, so nothing should be restarted on its behalf.
+            !result.unloaded -> DependentRestartCoordinator.record(pluginId, emptyList())
+
+            // A removal has no load to wait for, so restart now. The dependents re-resolve their
+            // handle to null, which is the truth about what is installed.
+            intent == PluginUnloadIntent.REMOVE -> DependentRestartCoordinator.restartNow(dependentIds)
+        }
+        return result
+    }
+
+    /**
+     * Best-effort, outside the manager mutex: failing to enumerate dependents must not fail the
+     * unload, because the authoritative veto still runs inside `uninstallPlugin`.
+     */
+    private fun dependentsFor(pluginId: String): List<DependentPlugin> =
+        runCatching { dynamicPluginManager.dependentsOf(pluginId) }
+            .onFailure { cause ->
+                logger.warn(
+                    LogCategory.SYSTEM,
+                    "Could not enumerate dependents before unload (continuing unasked)",
+                    mapOf(
+                        "pluginId" to pluginId,
+                        "error" to (cause.message ?: cause::class.simpleName ?: "unknown"),
+                    ),
+                )
+            }.getOrDefault(emptyList())
+
+    private suspend fun unloadPluginUnasked(
+        pluginId: String,
+        force: Boolean,
+    ): PluginUnloadResult =
         try {
-            logger.info(LogCategory.SYSTEM, "Unloading plugin via delegate", mapOf("pluginId" to pluginId))
-            val result = dynamicPluginManager.uninstallPlugin(pluginId, force = false)
-            // The Boolean this returns is all the caller gets, so a failure would otherwise
-            // leave no trace anywhere: uninstallPlugin logs "Uninstalling plugin" *before*
-            // deciding, so the log just stopped mid-sequence and the reasons the manager
-            // assembled (which name the plugins standing in the way) were dropped here. That is
-            // what made the Toolbox's Update button look like it did nothing at all.
+            logger.info(
+                LogCategory.SYSTEM,
+                "Unloading plugin via delegate",
+                mapOf("pluginId" to pluginId, "force" to force.toString()),
+            )
+            val result = dynamicPluginManager.uninstallPlugin(pluginId, force = force)
+            // Logged here as well as returned, because [unloadPlugin] still reduces this to a
+            // Boolean for callers that have not moved to the intent verb: uninstallPlugin logs
+            // "Uninstalling plugin" *before* deciding, so without this the log stopped
+            // mid-sequence and the reasons the manager assembled (which name the plugins
+            // standing in the way) were dropped here. That is what made the Toolbox's Update
+            // button look like it did nothing at all.
             //
             // Refusal and failure are logged apart because uninstallPlugin returns
             // Result.failure for both, and they send a reader to opposite places: a refusal
@@ -203,10 +352,10 @@ class PluginLoaderDelegateImpl(
                     cause,
                 )
             }
-            result.isSuccess
+            PluginUnloadResult(unloaded = result.isSuccess, reasons = refusalReasons)
         } catch (e: Exception) {
             logger.error(LogCategory.SYSTEM, "Exception unloading plugin", error = e)
-            false
+            PluginUnloadResult(unloaded = false)
         }
 
     override suspend fun reloadPlugin(pluginId: String): LoadedPluginInfo? {

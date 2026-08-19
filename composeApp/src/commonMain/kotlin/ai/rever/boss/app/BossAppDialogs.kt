@@ -15,6 +15,8 @@ import ai.rever.boss.components.dialogs.TerminalLinkOpenDialog
 import ai.rever.boss.components.dialogs.TopOfMindDialog
 import ai.rever.boss.components.events.FileEventBus
 import ai.rever.boss.components.events.PanelEventBus
+import ai.rever.boss.components.plugin.DependentRestartDeclinedException
+import ai.rever.boss.components.plugin.DependentRestartDialog
 import ai.rever.boss.components.plugin.DynamicPluginManager
 import ai.rever.boss.components.plugin.MissingDependencyDialog
 import ai.rever.boss.components.plugin.PluginDependencyEventBus
@@ -99,10 +101,26 @@ internal fun BossAppDialogs(state: BossAppState) {
                     coroutineScope.launch {
                         StatusMessageManager.showMessage("Updating ${prompt.displayName}…")
                         val r = PluginUpdateBridge.performUpdate(prompt.pluginId, mgr)
-                        if (r.isSuccess) {
-                            StatusMessageManager.showMessage("Updated ${prompt.displayName} to v${r.getOrNull()}")
-                        } else {
-                            StatusMessageManager.showMessage("Update failed: ${r.exceptionOrNull()?.message}")
+                        val cause = r.exceptionOrNull()
+                        when {
+                            r.isSuccess -> {
+                                StatusMessageManager.showMessage(
+                                    "Updated ${prompt.displayName} to v${r.getOrNull()}",
+                                )
+                            }
+
+                            // Declining the dependent-restart prompt is an answer, not a fault:
+                            // nothing downloaded, nothing unloaded. "Update failed" would read
+                            // as something having gone wrong with a choice the user just made.
+                            cause is DependentRestartDeclinedException -> {
+                                StatusMessageManager.showMessage(
+                                    "${prompt.displayName} was left on v${prompt.currentVersion}",
+                                )
+                            }
+
+                            else -> {
+                                StatusMessageManager.showMessage("Update failed: ${cause?.message}")
+                            }
                         }
                     }
                 }
@@ -158,14 +176,25 @@ internal fun BossAppDialogs(state: BossAppState) {
                                     prompt.storeSourceUrl,
                                     mgr,
                                 )
-                            if (r.isSuccess) {
-                                StatusMessageManager.showMessage(
-                                    "${prompt.displayName} is now on the store version v${r.getOrNull()}",
-                                )
-                            } else {
-                                StatusMessageManager.showMessage(
-                                    "Could not install the store version: ${r.exceptionOrNull()?.message}",
-                                )
+                            val cause = r.exceptionOrNull()
+                            when {
+                                r.isSuccess -> {
+                                    StatusMessageManager.showMessage(
+                                        "${prompt.displayName} is now on the store version v${r.getOrNull()}",
+                                    )
+                                }
+
+                                cause is DependentRestartDeclinedException -> {
+                                    StatusMessageManager.showMessage(
+                                        "${prompt.displayName} was left on ${prompt.runningVersion}",
+                                    )
+                                }
+
+                                else -> {
+                                    StatusMessageManager.showMessage(
+                                        "Could not install the store version: ${cause?.message}",
+                                    )
+                                }
                             }
                         }
                     }
@@ -203,6 +232,10 @@ internal fun BossAppDialogs(state: BossAppState) {
                             }
                             PanelComponentStoreRegistry.resetPanels(prompt.panelIds)
                             StatusMessageManager.showMessage("Uninstalled ${prompt.displayName}")
+                        } else if (result.exceptionOrNull() is DependentRestartDeclinedException) {
+                            // Cancel on the dependent-restart prompt. The plugin is still
+                            // installed and still running, which is what was asked for.
+                            StatusMessageManager.showMessage("${prompt.displayName} was left installed")
                         } else {
                             StatusMessageManager.showMessage(
                                 "Could not uninstall ${prompt.displayName}: ${result.exceptionOrNull()?.message}",
@@ -609,6 +642,23 @@ internal fun BossAppDialogs(state: BossAppState) {
                 )
                 state.pendingTerminalLinkUrl = ""
                 state.pendingTerminalSourceId = null
+            },
+        )
+    }
+
+    // An unload is waiting on this answer: other plugins depend on the one being updated or
+    // removed. Both handlers complete the prompt's `answer` before clearing the field - the
+    // collector's finally block is only a backstop for a window closing mid-dialog.
+    state.pendingDependentRestart?.let { prompt ->
+        DependentRestartDialog(
+            prompt = prompt,
+            onDismiss = {
+                prompt.answer.complete(false)
+                state.pendingDependentRestart = null
+            },
+            onConfirm = {
+                prompt.answer.complete(true)
+                state.pendingDependentRestart = null
             },
         )
     }

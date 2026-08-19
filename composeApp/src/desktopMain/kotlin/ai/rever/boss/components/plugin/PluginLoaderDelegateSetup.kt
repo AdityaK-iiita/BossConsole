@@ -83,6 +83,16 @@ actual object PluginLoaderDelegateSetup {
         if (DynamicPluginManager.pluginPanelsRefresh == null) {
             DynamicPluginManager.pluginPanelsRefresh = { id, panelIds -> delegate.refreshPluginPanels(id, panelIds) }
         }
+        // Restarting a plugin that depends on one being updated or removed, after the user
+        // agreed to it. Closing its tabs is EDT work and reloading it needs the persisted jar
+        // path, neither of which commonMain can reach - hence the hook rather than a direct call
+        // from the manager.
+        if (DependentRestartCoordinator.restartPlugin == null) {
+            DependentRestartCoordinator.restartPlugin = { id -> delegate.resetPluginInstances(id) }
+        }
+        if (DependentRestartCoordinator.instanceCount == null) {
+            DependentRestartCoordinator.instanceCount = { id -> delegate.getRunningInstanceCount(id) }
+        }
         // Which build each plugin is running. The signals (signature sidecar, jar mtime) are on
         // disk, so the answer comes from here rather than from commonMain.
         if (DynamicPluginManager.pluginBuildProbe == null) {

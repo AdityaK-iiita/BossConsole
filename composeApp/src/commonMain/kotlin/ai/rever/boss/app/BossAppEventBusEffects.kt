@@ -14,6 +14,7 @@ import ai.rever.boss.components.events.TerminalEventBus
 import ai.rever.boss.components.events.TerminalLinkEventBus
 import ai.rever.boss.components.events.URLEventBus
 import ai.rever.boss.components.events.WorkspaceEventBus
+import ai.rever.boss.components.plugin.DependentRestartEventBus
 import ai.rever.boss.components.plugin.PanelIds
 import ai.rever.boss.components.plugin.PluginDependencyEventBus
 import ai.rever.boss.components.plugin.resolveRegisteredPanelId
@@ -232,6 +233,30 @@ internal fun BossAppEventBusEffects(state: BossAppState) {
                 // though a prompt already received here and not yet shown does go with it.
                 snapshotFlow { state.pendingMissingPluginDependency }.first { it == null }
             }
+    }
+
+    // An unload is waiting on a person: other plugins depend on the one being updated or
+    // removed, and confirming restarts them. Unlike the prompt above, this one is BLOCKING an
+    // operation - the unload suspends on `prompt.answer` - so every exit from here has to
+    // complete that deferred, including the one where this effect is cancelled with a dialog
+    // still up. Without the try/finally, closing the window mid-dialog would leave the caller
+    // waiting out the bus's five-minute timeout.
+    LaunchedEffect(windowId) {
+        try {
+            DependentRestartEventBus.restartPrompts
+                .collect { prompt ->
+                    state.pendingDependentRestart = prompt
+                    // Back-pressure exactly as above: a second unload's question waits in the
+                    // channel rather than replacing a dialog someone is reading.
+                    snapshotFlow { state.pendingDependentRestart }.first { it == null }
+                    // The dialog's own handlers answer; this is the backstop for a prompt
+                    // cleared without one, which would otherwise hang the unload.
+                    prompt.answer.complete(false)
+                }
+        } finally {
+            state.pendingDependentRestart?.answer?.complete(false)
+            state.pendingDependentRestart = null
+        }
     }
 
     // Listen for terminal link click events (Issue #346)

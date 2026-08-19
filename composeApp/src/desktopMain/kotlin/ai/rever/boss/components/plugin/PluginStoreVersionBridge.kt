@@ -3,6 +3,7 @@ package ai.rever.boss.components.plugin
 import ai.rever.boss.plugin.KeyedDetachedJobs
 import ai.rever.boss.plugin.PluginStoreSetup
 import ai.rever.boss.plugin.api.PluginState
+import ai.rever.boss.plugin.api.PluginUnloadIntent
 import ai.rever.boss.plugin.repository.shortFailureReason
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
@@ -72,8 +73,16 @@ actual object PluginStoreVersionBridge {
         version: String,
         sourceUrl: String?,
         manager: DynamicPluginManager,
-    ): Result<String> =
-        DETACHED_SWAPS.run(
+    ): Result<String> {
+        // Outside the detached job on purpose: the question belongs to the window the user is
+        // looking at, and detaching it would let the swap start before anyone had answered.
+        // Same reasoning as PluginUpdateBridge - this path forces the unload too, so it never
+        // met the veto and never restarted the dependents.
+        val displayName = manager.getPluginInfo(pluginId)?.manifest?.displayName ?: pluginId
+        if (!confirmDependentRestart(pluginId, displayName, PluginUnloadIntent.UPDATE, manager)) {
+            return Result.failure(DependentRestartDeclinedException(pluginId))
+        }
+        return DETACHED_SWAPS.run(
             key = pluginId,
             onDetachedFailure = { error ->
                 // The window closed while this ran, so nothing is left to show the failure to.
@@ -102,4 +111,5 @@ actual object PluginStoreVersionBridge {
                 },
             )
         }
+    }
 }
