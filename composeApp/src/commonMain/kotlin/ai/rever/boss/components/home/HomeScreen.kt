@@ -5,7 +5,6 @@ import ai.rever.boss.components.dashboard.cards.FileCard
 import ai.rever.boss.components.dashboard.cards.ProjectCard
 import ai.rever.boss.components.dashboard.cards.SplitTemplateCard
 import ai.rever.boss.components.dashboard.sections.DashboardSection
-import ai.rever.boss.components.dialogs.ProjectOpenModeDialog
 import ai.rever.boss.components.plugin.panels.left_top.ProjectState
 import ai.rever.boss.dashboard.RecentBrowserPage
 import ai.rever.boss.dashboard.RecentBrowserPagesManager
@@ -19,9 +18,10 @@ import ai.rever.boss.keymap.model.KeymapActions
 import ai.rever.boss.keymap.model.shortcutLabelFor
 import ai.rever.boss.plugin.scrollbar.verticalScrollWithScrollbar
 import ai.rever.boss.plugin.ui.BossTheme
+import ai.rever.boss.project.ProjectRemovalScope
+import ai.rever.boss.project.removeProjectAndReport
 import ai.rever.boss.window.LocalWindowProjectState
 import ai.rever.boss.window.Project
-import ai.rever.boss.window.WindowOperations
 import ai.rever.boss.window.selectProjectInWindow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -38,9 +38,11 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Modifier
+import kotlinx.coroutines.launch
 
 /**
  * The BOSS home screen: what you were working on, everything you can do, and what else exists.
@@ -77,7 +79,9 @@ fun HomeScreen(modifier: Modifier = Modifier) {
     val splitTemplates by SplitTemplatesManager.allTemplates.collectAsState()
 
     var projectToOpen by remember { mutableStateOf<Project?>(null) }
+    var projectToRemove by remember { mutableStateOf<Project?>(null) }
     val scrollState = rememberScrollState()
+    val scope = rememberCoroutineScope()
 
     Box(modifier = modifier.fillMaxSize().background(BossTheme.colors.panel)) {
         Column(
@@ -99,6 +103,7 @@ fun HomeScreen(modifier: Modifier = Modifier) {
                 actions = actions,
                 onAskWhichWindow = { projectToOpen = it },
                 onOpenHere = { selectProjectInWindow(windowProjectState, it) },
+                onAskToRemove = { projectToRemove = it },
             )
 
             RecentPagesSection(suggestions = suggestions, actions = actions)
@@ -111,42 +116,14 @@ fun HomeScreen(modifier: Modifier = Modifier) {
         }
     }
 
-    projectToOpen?.let { project ->
-        OpenModeDialog(
-            project = project,
-            onOpenHere = { selectProjectInWindow(windowProjectState, it) },
-            onDone = { projectToOpen = null },
-        )
-    }
-}
-
-/**
- * Asks which window a recent project should open in.
- *
- * Extracted mostly to keep [HomeScreen] readable, but the new-window branch is the interesting
- * part: it must create the window *with* the project.
- */
-@Composable
-private fun OpenModeDialog(
-    project: Project,
-    onOpenHere: (Project) -> Unit,
-    onDone: () -> Unit,
-) {
-    ProjectOpenModeDialog(
-        project = project,
-        onDismiss = onDone,
-        onOpenInCurrentWindow = { chosen ->
-            onOpenHere(chosen)
-            onDone()
-        },
-        onOpenInNewWindow = { chosen ->
-            // createNewWindowWithProject, not createNewWindow() then select. Project state is PER
-            // WINDOW, so selecting after creating applied the project to the window the user
-            // clicked in and left the new one empty. The two other callers of this flow
-            // (BossTopBar, BossAppDialogs) already use this API.
-            WindowOperations.createNewWindowWithProject(chosen)
-            onDone()
-        },
+    HomeProjectDialogs(
+        projectToOpen = projectToOpen,
+        projectToRemove = projectToRemove,
+        openProjectPath = selectedProject.path,
+        onOpenHere = { selectProjectInWindow(windowProjectState, it) },
+        onOpenDone = { projectToOpen = null },
+        onRemoveDone = { projectToRemove = null },
+        onRemove = { project, removalScope -> scope.launch { removeProjectAndReport(project, removalScope) } },
     )
 }
 
@@ -165,6 +142,7 @@ private fun JumpBackInSection(
     actions: HomeActions,
     onAskWhichWindow: (Project) -> Unit,
     onOpenHere: (Project) -> Unit,
+    onAskToRemove: (Project) -> Unit,
 ) {
     if (recentProjects.isEmpty()) return
     DashboardSection(
@@ -178,7 +156,9 @@ private fun JumpBackInSection(
                     project = project,
                     // Only ask which window when this one already holds a project.
                     onClick = { if (windowHoldsProject) onAskWhichWindow(project) else onOpenHere(project) },
-                    onRemove = { ProjectState.removeRecentProject(project.path) },
+                    // Asks rather than removing. The cross used to forget the project on
+                    // the click, with no undo and no way to get rid of the folder.
+                    onRemove = { onAskToRemove(project) },
                 )
             }
         }

@@ -7,6 +7,7 @@ import ai.rever.boss.components.buttons.QuickActionHints
 import ai.rever.boss.components.dialogs.CommitDialog
 import ai.rever.boss.components.dialogs.ProjectOpenModeDialog
 import ai.rever.boss.components.dialogs.ProjectSelectionDialog
+import ai.rever.boss.components.dialogs.RemoveProjectDialog
 import ai.rever.boss.components.events.PanelEventBus
 import ai.rever.boss.components.events.TerminalLinkEventBus
 import ai.rever.boss.components.model.BossDraggableComponent
@@ -24,6 +25,7 @@ import ai.rever.boss.git.GitStashInfo
 import ai.rever.boss.platform.rememberDirectoryPicker
 import ai.rever.boss.plugin.ui.BossAlertDialog
 import ai.rever.boss.plugin.ui.BossTheme
+import ai.rever.boss.project.removeProjectAndReport
 import ai.rever.boss.services.supabase.AuthService
 import ai.rever.boss.utils.extractFileName
 import ai.rever.boss.window.LocalWindowGitState
@@ -141,6 +143,7 @@ fun BossDraggableComponent.getProjectSelectContextMenuItems(
     showNewProjectDialog: () -> Unit,
     showCloneProjectDialog: () -> Unit,
     onProjectSelected: (Project) -> Unit,
+    onRemoveProject: (Project) -> Unit,
 ): List<ContextMenuItem> {
     val recentProjects by ProjectState.recentProjects.collectAsState()
 
@@ -153,7 +156,9 @@ fun BossDraggableComponent.getProjectSelectContextMenuItems(
                     icon = Icons.Outlined.Folder,
                     trailingIcon = Icons.Outlined.Close,
                     trailingIconColor = androidx.compose.ui.graphics.Color.Gray,
-                    onTrailingClick = { ProjectState.removeRecentProject(project.path) },
+                    // Asks, like the home screen's card cross. Both crosses mean the same
+                    // thing, so both go through RemoveProjectDialog.
+                    onTrailingClick = { onRemoveProject(project) },
                     onClick = { onProjectSelected(project) },
                 )
             },
@@ -425,6 +430,7 @@ fun BossDraggableComponent.BossTopLeftBar(
     var showProjectDialog by remember { mutableStateOf(false) }
     var projectToOpen by remember { mutableStateOf<Project?>(null) }
     var deletedProjectName by remember { mutableStateOf<String?>(null) }
+    var projectToRemove by remember { mutableStateOf<Project?>(null) }
 
     // Window-specific git state - each window maintains independent git state
     // This fixes the issue where opening a new window with no project would hide git UI in all windows
@@ -511,9 +517,23 @@ fun BossDraggableComponent.BossTopLeftBar(
                 showNewProjectDialog = { onNewProject?.invoke() },
                 showCloneProjectDialog = { onCloneProject?.invoke() },
                 onProjectSelected = { project -> handleProjectSelection(project) },
+                onRemoveProject = { project -> projectToRemove = project },
             ),
         hintText = if (selectedProject.path.isEmpty()) "Click to open a project" else "Current Project: ${selectedProject.path}",
     )
+
+    // "Remove this project?" - the trailing cross on a recent-projects menu row.
+    projectToRemove?.let { project ->
+        RemoveProjectDialog(
+            project = project,
+            isOpenHere = project.path == selectedProject.path,
+            onDismiss = { projectToRemove = null },
+            onConfirm = { removalScope ->
+                projectToRemove = null
+                scope.launch { removeProjectAndReport(project, removalScope) }
+            },
+        )
+    }
 
     // Deleted project dialog
     deletedProjectName?.let { projectName ->
