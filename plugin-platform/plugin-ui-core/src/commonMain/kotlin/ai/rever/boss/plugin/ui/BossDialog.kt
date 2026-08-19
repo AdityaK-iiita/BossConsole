@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -358,31 +359,48 @@ fun BossAlertDialog(
     val colors = BossTheme.colors
     val space = BossTheme.space
     BossDialog(onDismissRequest = onDismissRequest, properties = properties) {
-        Surface(
-            modifier =
-                modifier
-                    .width(AlertWidth)
-                    .wrapContentHeight(),
-            shape = shape ?: BossTheme.radius.dialogShape,
-            color = backgroundColor.takeOrElse { colors.panel },
-            contentColor = contentColor.takeOrElse { colors.textPrimary },
-        ) {
-            Column(modifier = Modifier.padding(space.xl)) {
-                if (title != null) {
-                    CompositionLocalProvider(LocalContentColor provides colors.textPrimary) {
-                        ProvideTextStyle(BossTheme.type.title, title)
+        // [AlertWidth] is what an alert WANTS, not what it must have.
+        //
+        // `.width(AlertWidth)` set the minimum as well as the maximum, so in the scrimmed
+        // in-window path — where this Surface is measured against the app window rather than
+        // against a dialog window of its own — a window narrower than 400dp got a card it could
+        // not fit, clipped at the edge. Reported against the Atlas plugin, whose panel slot is
+        // routinely narrower than that: a Row of actions inside a card that cannot shrink is
+        // measured first child to last, so the last one — the primary — was squeezed to zero
+        // width on a consent surface. Measured at 240dp, not inferred.
+        //
+        // BoxWithConstraints rather than `widthIn(max = AlertWidth)`: with only a maximum, a
+        // Surface wraps its content, so every short alert in the app would suddenly be narrower
+        // than 400dp. Taking the smaller of what we want and what there is leaves the wide case
+        // byte-identical and changes only the case that was broken.
+        BoxWithConstraints(contentAlignment = Alignment.Center) {
+            val available = (maxWidth - space.lg * 2).coerceAtLeast(0.dp)
+            Surface(
+                modifier =
+                    modifier
+                        .width(AlertWidth.coerceAtMost(available))
+                        .wrapContentHeight(),
+                shape = shape ?: BossTheme.radius.dialogShape,
+                color = backgroundColor.takeOrElse { colors.panel },
+                contentColor = contentColor.takeOrElse { colors.textPrimary },
+            ) {
+                Column(modifier = Modifier.padding(space.xl)) {
+                    if (title != null) {
+                        CompositionLocalProvider(LocalContentColor provides colors.textPrimary) {
+                            ProvideTextStyle(BossTheme.type.title, title)
+                        }
                     }
-                }
-                if (title != null && text != null) {
-                    Spacer(Modifier.height(space.md))
-                }
-                if (text != null) {
-                    CompositionLocalProvider(LocalContentColor provides colors.textSecondary) {
-                        ProvideTextStyle(BossTheme.type.body, text)
+                    if (title != null && text != null) {
+                        Spacer(Modifier.height(space.md))
                     }
+                    if (text != null) {
+                        CompositionLocalProvider(LocalContentColor provides colors.textSecondary) {
+                            ProvideTextStyle(BossTheme.type.body, text)
+                        }
+                    }
+                    Spacer(Modifier.height(space.xl))
+                    buttons()
                 }
-                Spacer(Modifier.height(space.xl))
-                buttons()
             }
         }
     }
