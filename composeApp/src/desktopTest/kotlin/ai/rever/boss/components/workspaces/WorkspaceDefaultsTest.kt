@@ -1,7 +1,6 @@
 package ai.rever.boss.components.workspaces
 
 import ai.rever.boss.plugin.workspace.SplitConfig.SinglePanel
-import ai.rever.boss.utils.SystemUtils
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -12,33 +11,57 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Locks down the platform default workspace and its one-time migration.
+ * Locks down the default workspace, how the setting resolves, and the one-time migrations.
  *
- * The platform branch is driven explicitly through [defaultWorkspaceIdFor] and
- * the `isWindows` parameter of [WorkspaceSettingsMigrations.migrate], so both
- * branches run on every CI leg rather than only on the matching runner. The
- * host-resolved [defaultWorkspaceIdForPlatform] is checked separately - that is
- * the only assertion that this OS is wired to the right branch at all.
+ * The default is now platform-independent - nothing is applied until someone picks - but
+ * the migrations still branch on the platform, so they are driven through the explicit
+ * `isWindows` parameter of [WorkspaceSettingsMigrations.migrate] and both branches run on
+ * every CI leg rather than only on the matching runner.
  */
 class WorkspaceDefaultsTest {
     private val json = Json { ignoreUnknownKeys = true }
 
+    /**
+     * The whole point of the change: no platform comes up on a layout nobody chose. Asserted
+     * as a plain equality on the compiled-in default rather than through a platform helper,
+     * because there is no longer a platform branch for a helper to hide.
+     */
     @Test
-    fun `windows defaults to the browser-only workspace`() {
-        assertEquals(PredefinedWorkspaces.BROWSER_ONLY_ID, defaultWorkspaceIdFor(isWindows = true))
+    fun `every platform starts with no workspace and asks`() {
+        assertEquals(WorkspaceSettings.ASK_WORKSPACE_ID, WorkspaceSettings().defaultWorkspaceId)
+    }
+
+    /**
+     * "Ask" must apply nothing by itself. `getDefaultWorkspace()` is what the fresh-start
+     * path reads, and a non-null answer there would put a layout on screen at launch - the
+     * exact behaviour being removed.
+     */
+    @Test
+    fun `ask and none both resolve to no workspace to apply`() {
+        assertIs<ProjectSelectionWorkspace.Ask>(WorkspaceSettings().resolveOnProjectSelection())
+        assertIs<ProjectSelectionWorkspace.None>(
+            WorkspaceSettings(defaultWorkspaceId = WorkspaceSettings.NO_WORKSPACE_ID).resolveOnProjectSelection(),
+        )
     }
 
     @Test
-    fun `other platforms keep the claude code workspace`() {
-        assertEquals(PredefinedWorkspaces.CLAUDE_CODE_ID, defaultWorkspaceIdFor(isWindows = false))
+    fun `an explicitly chosen workspace still resolves to applying it`() {
+        val resolved =
+            WorkspaceSettings(defaultWorkspaceId = PredefinedWorkspaces.CLAUDE_CODE_ID).resolveOnProjectSelection()
+        val apply = assertIs<ProjectSelectionWorkspace.Apply>(resolved)
+        assertEquals(PredefinedWorkspaces.CLAUDE_CODE_ID, apply.workspace.id)
     }
 
+    /**
+     * A stale id - a workspace a newer build shipped and this one does not - must resolve to
+     * doing nothing, not to a prompt. This is what the previous nullable lookup did, and a
+     * dialog raised because an id went missing would be unexplainable to the user.
+     */
     @Test
-    fun `host resolution follows this platform`() {
-        val expected =
-            if (SystemUtils.isWindows) PredefinedWorkspaces.BROWSER_ONLY_ID else PredefinedWorkspaces.CLAUDE_CODE_ID
-        assertEquals(expected, defaultWorkspaceIdForPlatform())
-        assertEquals(expected, WorkspaceSettings().defaultWorkspaceId)
+    fun `an unknown workspace id resolves to doing nothing`() {
+        assertIs<ProjectSelectionWorkspace.None>(
+            WorkspaceSettings(defaultWorkspaceId = "workspace-from-the-future").resolveOnProjectSelection(),
+        )
     }
 
     @Test
@@ -110,20 +133,47 @@ class WorkspaceDefaultsTest {
         assertEquals(PredefinedWorkspaces.CLAUDE_CODE_ID, legacy.defaultWorkspaceId)
     }
 
+    /**
+     * A never-updated Windows file is on the pre-v1 universal Claude Code default. Both steps
+     * run against one value in one pass, so it lands on "ask" rather than stopping at
+     * browser-only and needing a second launch.
+     */
     @Test
-    fun `an existing windows install on the old default moves to browser-only once`() {
+    fun `a pre-v1 windows install lands on ask in one pass`() {
         val legacy = WorkspaceSettings(defaultWorkspaceId = PredefinedWorkspaces.CLAUDE_CODE_ID, settingsVersion = 0)
 
         val migrated = assertNotNull(WorkspaceSettingsMigrations.migrate(legacy, isWindows = true))
-        assertEquals(PredefinedWorkspaces.BROWSER_ONLY_ID, migrated.defaultWorkspaceId)
+        assertEquals(WorkspaceSettings.ASK_WORKSPACE_ID, migrated.defaultWorkspaceId)
         assertEquals(WorkspaceSettings.CURRENT_SETTINGS_VERSION, migrated.settingsVersion)
 
         // Stamped version, so the next launch is a no-op rather than a rewrite.
         assertNull(WorkspaceSettingsMigrations.migrate(migrated, isWindows = true))
     }
 
+    /** A v1 Windows install already sits on browser-only; step two is the only one that fires. */
     @Test
-    fun `a windows install that chose another workspace keeps it`() {
+    fun `a v1 windows install on browser-only moves to ask`() {
+        val v1 = WorkspaceSettings(defaultWorkspaceId = PredefinedWorkspaces.BROWSER_ONLY_ID, settingsVersion = 1)
+
+        val migrated = assertNotNull(WorkspaceSettingsMigrations.migrate(v1, isWindows = true))
+        assertEquals(WorkspaceSettings.ASK_WORKSPACE_ID, migrated.defaultWorkspaceId)
+    }
+
+    /**
+     * Browser-only is *not* the pre-v2 default anywhere but Windows, so a Mac or Linux user
+     * who picked it deliberately keeps it. The 1 -> 2 step branches on the platform for this
+     * reason alone.
+     */
+    @Test
+    fun `a non-windows install that chose browser-only keeps it`() {
+        val chosen = WorkspaceSettings(defaultWorkspaceId = PredefinedWorkspaces.BROWSER_ONLY_ID, settingsVersion = 1)
+
+        val migrated = assertNotNull(WorkspaceSettingsMigrations.migrate(chosen, isWindows = false))
+        assertEquals(PredefinedWorkspaces.BROWSER_ONLY_ID, migrated.defaultWorkspaceId)
+    }
+
+    @Test
+    fun `an install that chose another workspace keeps it`() {
         val chosen = WorkspaceSettings(defaultWorkspaceId = "workspace-dual-terminal", settingsVersion = 0)
 
         val migrated = assertNotNull(WorkspaceSettingsMigrations.migrate(chosen, isWindows = true))
@@ -131,12 +181,19 @@ class WorkspaceDefaultsTest {
         assertEquals(WorkspaceSettings.CURRENT_SETTINGS_VERSION, migrated.settingsVersion)
     }
 
+    /**
+     * "None" is an answer someone gave, and it is now one of two ways to apply nothing.
+     * Rewriting it to "ask" would turn a deliberate "leave me alone" into a prompt on every
+     * project selection.
+     */
     @Test
-    fun `disabled auto-apply survives the migration on windows`() {
-        val none = WorkspaceSettings(defaultWorkspaceId = "none", settingsVersion = 0)
+    fun `disabled auto-apply survives the migration on both platforms`() {
+        listOf(true, false).forEach { isWindows ->
+            val none = WorkspaceSettings(defaultWorkspaceId = WorkspaceSettings.NO_WORKSPACE_ID, settingsVersion = 0)
 
-        val migrated = assertNotNull(WorkspaceSettingsMigrations.migrate(none, isWindows = true))
-        assertEquals("none", migrated.defaultWorkspaceId)
+            val migrated = assertNotNull(WorkspaceSettingsMigrations.migrate(none, isWindows = isWindows))
+            assertEquals(WorkspaceSettings.NO_WORKSPACE_ID, migrated.defaultWorkspaceId, "isWindows=$isWindows")
+        }
     }
 
     /**
@@ -154,7 +211,7 @@ class WorkspaceDefaultsTest {
             }
         val stamped =
             WorkspaceSettings(
-                defaultWorkspaceId = PredefinedWorkspaces.BROWSER_ONLY_ID,
+                defaultWorkspaceId = WorkspaceSettings.ASK_WORKSPACE_ID,
                 settingsVersion = WorkspaceSettings.CURRENT_SETTINGS_VERSION,
             )
 
@@ -166,12 +223,13 @@ class WorkspaceDefaultsTest {
         )
     }
 
+    /** The Mac case the user reported: a fresh-enough install sitting on Claude Code stops. */
     @Test
-    fun `non-windows installs are only stamped, never repointed`() {
+    fun `a non-windows install on the claude code default moves to ask`() {
         val legacy = WorkspaceSettings(defaultWorkspaceId = PredefinedWorkspaces.CLAUDE_CODE_ID, settingsVersion = 0)
 
         val migrated = assertNotNull(WorkspaceSettingsMigrations.migrate(legacy, isWindows = false))
-        assertEquals(PredefinedWorkspaces.CLAUDE_CODE_ID, migrated.defaultWorkspaceId)
+        assertEquals(WorkspaceSettings.ASK_WORKSPACE_ID, migrated.defaultWorkspaceId)
         assertEquals(WorkspaceSettings.CURRENT_SETTINGS_VERSION, migrated.settingsVersion)
     }
 }

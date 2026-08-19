@@ -8,6 +8,7 @@ import ai.rever.boss.components.bars.withBarVisible
 import ai.rever.boss.components.dialogs.CLIInstallationDialog
 import ai.rever.boss.components.dialogs.ImportDataDialog
 import ai.rever.boss.components.window_panel.components.main_window_panels.createBossAppContext
+import ai.rever.boss.components.workspaces.workspaceManager
 import ai.rever.boss.focusmode.FocusModeSettingsManager
 import ai.rever.boss.keymap.KeymapSettingsManager
 import ai.rever.boss.keymap.menu.MenuShortcutBridge
@@ -323,12 +324,12 @@ fun ApplicationScope.BossWindow(
         // Drives the checkmarks on View > Show <bar>
         val appearanceSettings by WindowAppearanceSettingsManager.currentSettings.collectAsState()
 
-        // Get workspace list for workspace submenu
-        val workspaceManager =
-            remember {
-                ai.rever.boss.components.workspaces
-                    .WorkspaceManager()
-            }
+        // Get workspace list for workspace submenu.
+        //
+        // The shared instance, not a private one. A second WorkspaceManager has its own
+        // currentWorkspace, which never sees a switch made anywhere else - so the menu's
+        // "disable the active workspace" row greyed out whatever this instance had last
+        // loaded (nothing, usually) rather than what the window is actually showing.
         val workspaces by workspaceManager.workspaces.collectAsState()
         val currentWorkspace by workspaceManager.currentWorkspace.collectAsState()
 

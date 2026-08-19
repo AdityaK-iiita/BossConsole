@@ -1,6 +1,5 @@
 package ai.rever.boss.components.events
 
-import ai.rever.boss.dashboard.SplitTemplate
 import ai.rever.boss.ipc.IpcEventBridge
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -37,8 +36,16 @@ data class DashboardShowNewProjectEvent(
     val sourceWindowId: String,
 )
 
-data class DashboardApplySplitTemplateEvent(
-    val template: SplitTemplate,
+/**
+ * Apply a whole layout to this window, named by [workspaceId].
+ *
+ * An id, not the workspace: the handler resolves it against `WorkspaceManager.workspaces`,
+ * which is what makes the home screen's cards, the top bar's menu and the app menu act on
+ * one list. The event this replaced carried a `SplitTemplate` by value, from a parallel
+ * list of the same layouts that only the home screen read.
+ */
+data class DashboardApplyWorkspaceEvent(
+    val workspaceId: String,
     val sourceWindowId: String,
 )
 
@@ -132,9 +139,9 @@ object DashboardEventBus {
     private val _showNewProjectEvents = MutableSharedFlow<DashboardShowNewProjectEvent>(extraBufferCapacity = 10)
     val showNewProjectEvents: SharedFlow<DashboardShowNewProjectEvent> = _showNewProjectEvents.asSharedFlow()
 
-    // Split templates
-    private val _applySplitTemplateEvents = MutableSharedFlow<DashboardApplySplitTemplateEvent>(extraBufferCapacity = 10)
-    val applySplitTemplateEvents: SharedFlow<DashboardApplySplitTemplateEvent> = _applySplitTemplateEvents.asSharedFlow()
+    // Workspace layouts
+    private val _applyWorkspaceEvents = MutableSharedFlow<DashboardApplyWorkspaceEvent>(extraBufferCapacity = 10)
+    val applyWorkspaceEvents: SharedFlow<DashboardApplyWorkspaceEvent> = _applyWorkspaceEvents.asSharedFlow()
 
     // Open a plugin-registered tab type by id
     private val _openTabTypeEvents = MutableSharedFlow<DashboardOpenTabTypeEvent>(extraBufferCapacity = 10)
@@ -197,13 +204,13 @@ object DashboardEventBus {
         ipcBridge?.forward("DashboardShowNewProjectEvent", event, sourceWindowId)
     }
 
-    suspend fun applySplitTemplate(
-        template: SplitTemplate,
+    suspend fun applyWorkspace(
+        workspaceId: String,
         sourceWindowId: String,
     ) {
-        val event = DashboardApplySplitTemplateEvent(template, sourceWindowId)
-        _applySplitTemplateEvents.emit(event)
-        ipcBridge?.forward("DashboardApplySplitTemplateEvent", event, sourceWindowId)
+        val event = DashboardApplyWorkspaceEvent(workspaceId, sourceWindowId)
+        _applyWorkspaceEvents.emit(event)
+        ipcBridge?.forward("DashboardApplyWorkspaceEvent", event, sourceWindowId)
     }
 
     suspend fun openTabType(

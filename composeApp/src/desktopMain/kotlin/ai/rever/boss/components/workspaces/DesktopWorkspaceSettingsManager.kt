@@ -114,9 +114,8 @@ actual object WorkspaceSettingsManager {
         )
     }
 
-    actual fun getDefaultWorkspace(): LayoutWorkspace? {
-        val workspaceId = _currentSettings.value.defaultWorkspaceId
-        if (workspaceId == "none") return null
-        return PredefinedWorkspaces.allWorkspaces.find { it.id == workspaceId }
-    }
+    // Delegates rather than repeating the lookup: "ask" and "none" both mean "no workspace
+    // to apply on my own", and a second copy of that rule is how they would come to disagree.
+    actual fun getDefaultWorkspace(): LayoutWorkspace? =
+        (_currentSettings.value.resolveOnProjectSelection() as? ProjectSelectionWorkspace.Apply)?.workspace
 }

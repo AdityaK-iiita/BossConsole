@@ -1,5 +1,6 @@
 package ai.rever.boss.updater
 
+import ai.rever.boss.components.dialogs.dialogScrollFence
 import ai.rever.boss.plugin.ui.BossAlertDialog
 import ai.rever.boss.plugin.ui.BossTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -10,23 +11,12 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.AlertDialog
 import androidx.compose.material.Text
 import androidx.compose.material.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.FirstBaseline
-import androidx.compose.ui.layout.IntrinsicMeasurable
-import androidx.compose.ui.layout.IntrinsicMeasureScope
-import androidx.compose.ui.layout.LastBaseline
-import androidx.compose.ui.layout.LayoutModifier
-import androidx.compose.ui.layout.Measurable
-import androidx.compose.ui.layout.MeasureResult
-import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.Constraints
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -81,13 +71,13 @@ fun UpdateAvailableDialog(
                         fontWeight = FontWeight.Medium,
                     )
                     Spacer(Modifier.height(4.dp))
-                    // Column+verticalScroll behind NotesAreaSizing (see its kdoc):
+                    // Column+verticalScroll behind dialogScrollFence (see its kdoc):
                     // the scroll area's intrinsic height AND baseline alignment
                     // lines must both be fenced off, or the desktop AlertDialog
                     // re-sizes / shifts the text slot as the notes are scrolled.
                     Column(
                         Modifier
-                            .then(NotesAreaSizing(220.dp))
+                            .dialogScrollFence(NOTES_MAX_HEIGHT)
                             .verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
@@ -123,53 +113,5 @@ fun UpdateAvailableDialog(
     )
 }
 
-/**
- * Sizing fence for scrollable content inside the desktop material [AlertDialog].
- *
- * Two leaks have to be plugged, or the dialog resizes/jumps while scrolling:
- *
- * 1. Intrinsics: the dialog sizes its popup from intrinsic measurements, and
- *    heightIn(max) clamps layout only — so both layout and intrinsic height
- *    are capped here.
- * 2. Baselines: AlertDialogBaselineLayout places the text slot at
- *    `titleBaseline + offset - slotFirstBaseline`. FirstBaseline merges
- *    across children with MIN policy and propagates out of scroll containers
- *    offset by the scroll position — scrolling makes the slot's merged
- *    FirstBaseline increasingly negative, which pushes the slot down and
- *    grows the dialog by exactly the scrolled amount. Pinning both baselines
- *    to constants stops any scroll-dependent value from escaping.
- */
-private data class NotesAreaSizing(
-    private val max: Dp,
-) : LayoutModifier {
-    override fun MeasureScope.measure(
-        measurable: Measurable,
-        constraints: Constraints,
-    ): MeasureResult {
-        val cappedMax = max.roundToPx().coerceAtMost(constraints.maxHeight)
-        val placeable =
-            measurable.measure(
-                constraints.copy(
-                    minHeight = constraints.minHeight.coerceAtMost(cappedMax),
-                    maxHeight = cappedMax,
-                ),
-            )
-        return layout(
-            placeable.width,
-            placeable.height,
-            alignmentLines = mapOf(FirstBaseline to 0, LastBaseline to placeable.height),
-        ) {
-            placeable.placeRelative(0, 0)
-        }
-    }
-
-    override fun IntrinsicMeasureScope.minIntrinsicHeight(
-        measurable: IntrinsicMeasurable,
-        width: Int,
-    ): Int = measurable.minIntrinsicHeight(width).coerceAtMost(max.roundToPx())
-
-    override fun IntrinsicMeasureScope.maxIntrinsicHeight(
-        measurable: IntrinsicMeasurable,
-        width: Int,
-    ): Int = measurable.maxIntrinsicHeight(width).coerceAtMost(max.roundToPx())
-}
+/** How tall the release-notes scroll area is allowed to grow before it scrolls. */
+private val NOTES_MAX_HEIGHT = 220.dp

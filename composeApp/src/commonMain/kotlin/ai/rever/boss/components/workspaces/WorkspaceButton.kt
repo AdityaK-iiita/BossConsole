@@ -29,12 +29,18 @@ import compose.icons.feathericons.Briefcase
 expect fun openWorkspaceDirectory(path: String)
 
 /**
- * Workspace button with dropdown menu
+ * Workspace button with dropdown menu.
+ *
+ * [workspaceManager] is required, with no fallback instance. It used to default to
+ * `remember { WorkspaceManager() }`, which is a silent second source of truth: a private
+ * manager's `currentWorkspace` never sees a switch made anywhere else, so the green dot
+ * marking the active workspace would point at nothing. The one caller has always passed
+ * the shared manager, so the default was only a trap waiting for a second one.
  */
 @Composable
 fun WorkspaceButton(
     onOpenWorkspace: (LayoutWorkspace) -> Unit,
-    workspaceManager: WorkspaceManager = remember { WorkspaceManager() },
+    workspaceManager: WorkspaceManager,
     getCurrentWorkspace: (() -> LayoutWorkspace)? = null,
     onShowTopOfMind: (() -> Unit)? = null,
 ) {

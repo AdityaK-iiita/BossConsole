@@ -4,7 +4,7 @@ import ai.rever.boss.cache.loadFaviconFromCache
 import ai.rever.boss.components.plugin.tab_types.fluck.FluckTabInfo
 import ai.rever.boss.components.window_panel.SplitOrientation
 import ai.rever.boss.components.window_panel.SplitViewState
-import ai.rever.boss.dashboard.SplitTemplatesManager
+import ai.rever.boss.dashboard.WorkspacePlaceholders
 import ai.rever.boss.icons.FileIcons
 import ai.rever.boss.plugin.api.TabIcon
 import ai.rever.boss.plugin.api.TabInfo
@@ -322,7 +322,7 @@ private fun createTabFromWorkspaceConfig(
             // Process URL placeholders
             val processedUrl =
                 tabConfig.url?.let {
-                    SplitTemplatesManager.processPlaceholders(it, resolvedProjectPath, null)
+                    WorkspacePlaceholders.processPlaceholders(it, resolvedProjectPath, null)
                 } ?: "about:blank"
 
             FluckTabInfo(
@@ -343,13 +343,13 @@ private fun createTabFromWorkspaceConfig(
             // no-project terminal, and honouring it would restore the problem on every launch.
             val workingDir =
                 DefaultWorkingDirectory.restored(tabConfig.workingDirectory)?.let {
-                    SplitTemplatesManager.processPlaceholders(it, resolvedProjectPath, null)
+                    WorkspacePlaceholders.processPlaceholders(it, resolvedProjectPath, null)
                 } ?: resolvedProjectPath
 
             // Process initial command placeholder (shell command → quote {projectPath})
             val initialCmd =
                 tabConfig.initialCommand?.let {
-                    SplitTemplatesManager.processPlaceholders(it, resolvedProjectPath, null, quoteProjectPath = true)
+                    WorkspacePlaceholders.processPlaceholders(it, resolvedProjectPath, null, quoteProjectPath = true)
                 }
 
             TerminalTabInfo(
@@ -369,7 +369,7 @@ private fun createTabFromWorkspaceConfig(
             if (splitViewState.tabRegistry.isRegistered(JupyterTabInfo.TYPE_ID)) {
                 val filePath =
                     tabConfig.filePath?.let {
-                        SplitTemplatesManager.processPlaceholders(it, resolvedProjectPath, null)
+                        WorkspacePlaceholders.processPlaceholders(it, resolvedProjectPath, null)
                     } ?: ""
                 JupyterTabInfo.create(filePath, title = tabConfig.title)
             } else {
@@ -394,7 +394,7 @@ private fun createEditorTab(
     // Process file path placeholder
     val filePath =
         tabConfig.filePath?.let {
-            SplitTemplatesManager.processPlaceholders(it, resolvedProjectPath, null)
+            WorkspacePlaceholders.processPlaceholders(it, resolvedProjectPath, null)
         } ?: ""
     val fileIconInfo = FileIcons.forFile(tabConfig.title)
 

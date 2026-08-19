@@ -2,7 +2,7 @@ package ai.rever.boss.app
 
 import ai.rever.boss.components.workspaces.PredefinedWorkspaces
 import ai.rever.boss.components.workspaces.requiresProject
-import ai.rever.boss.dashboard.SplitTemplatesManager
+import ai.rever.boss.dashboard.WorkspacePlaceholders
 import ai.rever.boss.plugin.workspace.PanelConfig
 import ai.rever.boss.plugin.workspace.SplitConfig.SinglePanel
 import ai.rever.boss.plugin.workspace.TabConfig
@@ -70,7 +70,7 @@ class FreshStartWorkspaceTest {
     }
 
     /**
-     * The placeholder list mirrors `SplitTemplatesManager.processPlaceholders`, and nothing
+     * The placeholder list mirrors `WorkspacePlaceholders.processPlaceholders`, and nothing
      * links the two. A fifth placeholder added there and missed here would not mark a
      * workspace as project-requiring, and the failure mode is the one the KDoc warns about:
      * a CLI running somewhere the user never chose.
@@ -80,7 +80,7 @@ class FreshStartWorkspaceTest {
         val handled = listOf("{projectPath}", "{gitRemoteUrl}", "{currentFile}", "{claudeContinueFlag}")
         for (placeholder in handled) {
             val substituted =
-                SplitTemplatesManager.processPlaceholders(placeholder, "/tmp/project", currentFile = "/tmp/f.kt")
+                WorkspacePlaceholders.processPlaceholders(placeholder, "/tmp/project", currentFile = "/tmp/f.kt")
             assertFalse(
                 substituted.contains(placeholder),
                 "$placeholder is substituted from the project, so requiresProject must know about it",

@@ -19,8 +19,13 @@ import ai.rever.boss.window.WindowProjectState
  *   `~/BossProjects` (see `DefaultWorkingDirectory`), so applying the Claude Code default
  *   here would open a terminal running `claude --dangerously-skip-permissions` in an
  *   empty projects folder on the first launch of a fresh install. Browser-only needs
- *   nothing, which is why the Windows default reaches first launch and the terminal-first
- *   defaults keep waiting for a project, on every platform, exactly as before.
+ *   nothing, which is why it reaches first launch and the terminal-first layouts keep
+ *   waiting for a project.
+ *
+ * A fresh install reaches neither branch any more: its default is
+ * `WorkspaceSettings.ASK_WORKSPACE_ID`, so `getDefaultWorkspace()` returns null and the
+ * window opens empty, which is the point. This path is now for someone who went to
+ * Settings and named a workspace they want applied without being asked.
  */
 internal fun shouldApplyOnFreshStart(
     workspace: LayoutWorkspace?,
@@ -29,8 +34,9 @@ internal fun shouldApplyOnFreshStart(
 
 /**
  * Apply the configured default workspace to a first window that restored nothing - no
- * Last Session, no project - so a fresh install comes up on its default layout rather
- * than on an empty window.
+ * Last Session, no project - so an install whose owner named a default comes up on it
+ * rather than on an empty window. With the shipped default ("ask") there is nothing to
+ * apply and the window stays empty until a project is opened.
  *
  * Returns the workspace applied, or null if [shouldApplyOnFreshStart] declined. Must be
  * called before `markHandlersReady`: [applyWorkspace] clears all panels, which would

@@ -8,12 +8,16 @@ import ai.rever.boss.utils.SystemUtils
  * Whether selecting a project also opens the host's project panels (Codebase and
  * Run Configurations) on its own.
  *
- * Windows starts as a plain browser - see `defaultWorkspaceIdFor` - so nothing
- * but the chosen workspace comes up there: no sidebar panel opens by itself, and
- * no plugin panel either, since Codebase and Run Configurations are the only
- * panels the host ever opens without being asked. Every panel is still one
- * sidebar click, menu item, deep link or CLI command away; only the automatic
- * open is suppressed.
+ * Windows starts bare, so nothing but the chosen workspace comes up there: no
+ * sidebar panel opens by itself, and no plugin panel either, since Codebase and
+ * Run Configurations are the only panels the host ever opens without being asked.
+ * Every panel is still one sidebar click, menu item, deep link or CLI command
+ * away; only the automatic open is suppressed.
+ *
+ * This is keyed on the platform, not on the chosen workspace, and stays that way
+ * now that no platform has a workspace default at all - the two questions were
+ * always separate, and Windows wanting a quiet first run did not depend on which
+ * layout it opened with.
  */
 internal object StartupPanelPolicy {
     /** Platform-explicit form, so both branches are reachable from a test on any host. */

@@ -36,7 +36,7 @@ Start screen with cards for quick access to recent items and actions.
 - `FileCard.kt` - Recent files
 - `ProjectCard.kt` - Project suggestions
 - `ActionCard.kt` - Quick actions
-- `SplitTemplateCard.kt` - Layout templates
+- `WorkspaceCard.kt` - Workspace layouts, read from the same `WorkspaceManager` list the top bar and the app menu use
 
 ## Download Manager
 

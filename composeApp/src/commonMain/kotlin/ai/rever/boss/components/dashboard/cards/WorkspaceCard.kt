@@ -1,7 +1,8 @@
 package ai.rever.boss.components.dashboard.cards
 
-import ai.rever.boss.dashboard.SplitTemplate
+import ai.rever.boss.components.workspaces.LayoutWorkspace
 import ai.rever.boss.plugin.ui.BossTheme
+import ai.rever.boss.plugin.workspace.SplitConfig
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -41,11 +43,22 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * Card displaying a split template with visual preview.
+ * Home-screen card for one [LayoutWorkspace], with a preview of its split layout.
+ *
+ * Replaces the card that rendered a `SplitTemplate`. The home screen used to list
+ * `SplitTemplatesManager.allTemplates` (since deleted) while the top bar, the app menu and the
+ * default-workspace setting all listed `WorkspaceManager.workspaces` - two parallel
+ * definitions of the same seven layouts, which had already drifted (only the workspace
+ * list has Browser Only, and only its Claude Code entry passes `{claudeContinueFlag}`).
+ * One list now feeds all of them, so a workspace saved from the top bar shows up here.
+ *
+ * The preview walks the real [SplitConfig] rather than looking for panels labelled
+ * "left" and "right": the template card could only draw two, so Code Review's bottom
+ * terminal was missing from a card whose whole job is to show the arrangement.
  */
 @Composable
-fun SplitTemplateCard(
-    template: SplitTemplate,
+fun WorkspaceCard(
+    workspace: LayoutWorkspace,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -53,42 +66,36 @@ fun SplitTemplateCard(
     val isHovered by interactionSource.collectIsHoveredAsState()
 
     val scale by animateFloatAsState(
-        targetValue = if (isHovered) 1.02f else 1f,
-        animationSpec = spring(dampingRatio = 0.6f),
+        targetValue = if (isHovered) HOVER_SCALE else 1f,
+        animationSpec = spring(dampingRatio = HOVER_SPRING_DAMPING),
     )
-
-    val backgroundColor = if (isHovered) BossTheme.colors.signalWash else BossTheme.colors.raised
-    val borderColor = if (isHovered) BossTheme.colors.signal.copy(alpha = 0.5f) else Color.Transparent
-
     val cardShape = RoundedCornerShape(12.dp)
 
     Column(
         modifier =
             modifier
-                .width(180.dp)
-                .height(140.dp) // Fixed height for consistency
+                .width(CARD_WIDTH)
+                .height(CARD_HEIGHT)
                 .scale(scale)
                 .clip(cardShape)
-                .background(color = backgroundColor)
+                .background(if (isHovered) BossTheme.colors.signalWash else BossTheme.colors.raised)
                 .border(
                     width = 1.dp,
-                    color = borderColor,
+                    color =
+                        if (isHovered) {
+                            BossTheme.colors.signal.copy(alpha = HOVER_BORDER_ALPHA)
+                        } else {
+                            Color.Transparent
+                        },
                     shape = cardShape,
                 ).clickable { onClick() }
                 .hoverable(interactionSource)
                 .padding(12.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
-        // Template name
-        Box(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .height(18.dp),
-            contentAlignment = Alignment.Center,
-        ) {
+        CenteredLine(height = NAME_HEIGHT) {
             Text(
-                text = template.name,
+                text = workspace.name,
                 color = BossTheme.colors.textPrimary,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -97,19 +104,11 @@ fun SplitTemplateCard(
             )
         }
 
-        // Visual preview of the split layout
-        SplitPreview(template)
+        LayoutPreviewFrame(workspace.layout)
 
-        // Description
-        Box(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .height(28.dp),
-            contentAlignment = Alignment.Center,
-        ) {
+        CenteredLine(height = DESCRIPTION_HEIGHT) {
             Text(
-                text = template.description,
+                text = workspace.description,
                 color = BossTheme.colors.textSecondary,
                 fontSize = 10.sp,
                 maxLines = 2,
@@ -119,47 +118,74 @@ fun SplitTemplateCard(
     }
 }
 
-/**
- * Visual preview showing the split layout with panel type icons.
- */
+/** The dark inset the split preview is drawn into. */
 @Composable
-private fun SplitPreview(template: SplitTemplate) {
-    val leftPanel = template.panels.find { it.position == "left" }
-    val rightPanel = template.panels.find { it.position == "right" }
-
-    Row(
+private fun LayoutPreviewFrame(layout: SplitConfig) {
+    Box(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .height(50.dp)
+                .height(PREVIEW_HEIGHT)
                 .clip(RoundedCornerShape(6.dp))
                 .background(BossTheme.colors.ink),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        // Left panel
-        if (leftPanel != null) {
-            PanelPreview(
-                type = leftPanel.type,
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-            )
-        }
+        LayoutPreview(layout, Modifier.fillMaxSize())
+    }
+}
 
-        // Right panel
-        if (rightPanel != null) {
-            PanelPreview(
-                type = rightPanel.type,
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-            )
-        }
+/** Fixed-height centred slot, so cards line up whatever their text runs to. */
+@Composable
+private fun CenteredLine(
+    height: androidx.compose.ui.unit.Dp,
+    content: @Composable () -> Unit,
+) {
+    Box(
+        modifier = Modifier.fillMaxWidth().height(height),
+        contentAlignment = Alignment.Center,
+    ) {
+        content()
     }
 }
 
 /**
- * Single panel preview with type icon.
+ * Draw the split tree: a vertical split is a Row, a horizontal split is a Column, a panel
+ * is its first tab's type. Recursive, so a nested arrangement draws as it actually is.
  */
 @Composable
+private fun LayoutPreview(
+    layout: SplitConfig,
+    modifier: Modifier = Modifier,
+) {
+    when (layout) {
+        is SplitConfig.SinglePanel -> {
+            PanelPreview(
+                type =
+                    layout.panel.tabs
+                        .firstOrNull()
+                        ?.type,
+                modifier = modifier,
+            )
+        }
+
+        is SplitConfig.VerticalSplit -> {
+            Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                LayoutPreview(layout.left, Modifier.weight(1f).fillMaxHeight())
+                LayoutPreview(layout.right, Modifier.weight(1f).fillMaxHeight())
+            }
+        }
+
+        is SplitConfig.HorizontalSplit -> {
+            Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                LayoutPreview(layout.top, Modifier.weight(1f).fillMaxWidth())
+                LayoutPreview(layout.bottom, Modifier.weight(1f).fillMaxWidth())
+            }
+        }
+    }
+}
+
+@Composable
 private fun PanelPreview(
-    type: String,
+    type: String?,
     modifier: Modifier = Modifier,
 ) {
     val (icon, color, label) =
@@ -170,6 +196,8 @@ private fun PanelPreview(
 
             // Deliberate one-off: the design system has no purple token (editor identity color).
             "editor" -> Triple(Icons.Outlined.Code, Color(0xFFB877DB), "Code")
+
+            null -> Triple(Icons.Outlined.Code, BossTheme.colors.textSecondary, "Empty")
 
             else -> Triple(Icons.Outlined.Code, BossTheme.colors.textSecondary, type)
         }
@@ -190,10 +218,22 @@ private fun PanelPreview(
             )
             Text(
                 text = label,
-                color = color.copy(alpha = 0.8f),
+                color = color.copy(alpha = LABEL_ALPHA),
                 fontSize = 8.sp,
                 fontWeight = FontWeight.Medium,
             )
         }
     }
 }
+
+private val CARD_WIDTH = 180.dp
+
+/** Fixed, so a strip of cards lines up whatever their descriptions run to. */
+private val CARD_HEIGHT = 140.dp
+private val NAME_HEIGHT = 18.dp
+private val PREVIEW_HEIGHT = 50.dp
+private val DESCRIPTION_HEIGHT = 28.dp
+private const val HOVER_SCALE = 1.02f
+private const val HOVER_SPRING_DAMPING = 0.6f
+private const val HOVER_BORDER_ALPHA = 0.5f
+private const val LABEL_ALPHA = 0.8f

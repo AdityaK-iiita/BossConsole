@@ -18,11 +18,10 @@ import ai.rever.boss.components.plugin.DependentRestartEventBus
 import ai.rever.boss.components.plugin.PanelIds
 import ai.rever.boss.components.plugin.PluginDependencyEventBus
 import ai.rever.boss.components.plugin.resolveRegisteredPanelId
-import ai.rever.boss.components.window_panel.SplitOrientation
 import ai.rever.boss.components.window_panel.SplitViewState
-import ai.rever.boss.components.workspaces.PredefinedWorkspaces
 import ai.rever.boss.components.workspaces.WorkspaceSerializer
 import ai.rever.boss.components.workspaces.applyWorkspace
+import ai.rever.boss.components.workspaces.requiresProject
 import ai.rever.boss.components.workspaces.workspaceManager
 import ai.rever.boss.dashboard.DashboardStatsManager
 import ai.rever.boss.git.GitTerminalService
@@ -704,55 +703,48 @@ internal fun BossAppEventBusEffects(state: BossAppState) {
                 state.showNewProjectDialog = true
             }.launchIn(this)
 
-        // Handle split template events
-        DashboardEventBus.applySplitTemplateEvents
+        // Handle workspace layout events from the home screen's cards.
+        DashboardEventBus.applyWorkspaceEvents
             .filter { event -> event.sourceWindowId == windowId }
             .onEach { event ->
-                // Prefer the predefined workspace of the same id, which is what the old home
-                // screen call site did and this handler did not. It matters: all seven built-in
-                // templates have an exact `workspace-<id>` twin, and a workspace applies the
-                // whole arrangement - including bottom panels, which the tab-by-tab fallback
-                // below silently ignores (the `code-review` template has one). Without this,
-                // moving the home screen onto the bus would have quietly downgraded every
-                // workspace layout tile.
-                val matchingWorkspace =
-                    PredefinedWorkspaces.allWorkspaces.find { it.id == "workspace-${event.template.id}" }
-                        ?: PredefinedWorkspaces.allWorkspaces.find { it.name == event.template.name }
-                if (matchingWorkspace != null) {
-                    workspaceManager.loadWorkspace(matchingWorkspace)
-                    applyWorkspace(matchingWorkspace, splitViewState)
+                // Resolved against the live list rather than carried in the event, so the
+                // home screen, the top bar menu and the app menu all apply the same
+                // workspace for the same name - including workspaces saved to disk, which
+                // the split-template list this replaced could not see at all.
+                val workspace = workspaceManager.workspaces.value.find { it.id == event.workspaceId }
+                if (workspace == null) {
+                    logger.warn(
+                        LogCategory.WORKSPACE,
+                        "Home screen asked for a workspace that is no longer in the list",
+                        mapOf("workspaceId" to event.workspaceId),
+                    )
                     return@onEach
                 }
 
-                // Split templates with no workspace twin - apply using active panel
-                val activeComponent = splitViewState.getActiveTabsComponent()
-                if (activeComponent != null) {
-                    val activePanelId = splitViewState.activePanelId
-                    val projectPath =
-                        DefaultWorkingDirectory.resolve(windowProjectState.selectedProject.value.path)
-                    // Create tabs from template panels
-                    val leftPanelConfig = event.template.panels.find { it.position == "left" }
-                    val rightPanelConfig = event.template.panels.find { it.position == "right" }
-
-                    leftPanelConfig?.let { config ->
-                        createTabFromTemplateConfig(config, projectPath)?.let { tab ->
-                            activeComponent.addTab(tab)
-                            if (rightPanelConfig != null) {
-                                createTabFromTemplateConfig(rightPanelConfig, projectPath)?.let { rightTab ->
-                                    splitViewState.splitPanel(
-                                        panelId = activePanelId,
-                                        orientation = SplitOrientation.VERTICAL,
-                                        tabToMove = rightTab,
-                                    )
-                                }
-                            }
-                        }
-                    } ?: rightPanelConfig?.let { config ->
-                        createTabFromTemplateConfig(config, projectPath)?.let { tab ->
-                            activeComponent.addTab(tab)
-                        }
-                    }
+                // A project-shaped workspace with no project is the hazard
+                // `shouldApplyOnFreshStart` exists to avoid: `{projectPath}` falls back to
+                // ~/BossProjects, so Claude Code here would start an agent in a directory
+                // nobody chose. Not a new risk - the split-template card had it too - but
+                // the home screen is now what a fresh launch opens on, so it is the click
+                // most likely to be made first. Say so instead of doing it.
+                if (workspace.requiresProject() &&
+                    windowProjectState.selectedProject.value.path
+                        .isEmpty()
+                ) {
+                    StatusMessageManager.showMessage(
+                        "Open a project first - \"${workspace.name}\" builds its tabs from the project you are in",
+                    )
+                    return@onEach
                 }
+
+                // Preserve, load, apply: the same three steps the top bar's switch takes,
+                // so switching away and back keeps the tabs that were open.
+                val currentWorkspace = workspaceManager.currentWorkspace.value
+                if (currentWorkspace != null && currentWorkspace.id.isNotEmpty()) {
+                    splitViewState.preserveCurrentState(currentWorkspace.id, currentWorkspace.name)
+                }
+                workspaceManager.loadWorkspace(workspace)
+                applyWorkspace(workspace, splitViewState, windowProjectState)
             }.launchIn(this)
 
         // Handle settings window events from the home screen.

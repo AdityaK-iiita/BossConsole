@@ -87,6 +87,15 @@ internal class BossAppState(
     var projectToOpen by mutableStateOf<Project?>(null)
     var showShortcutHelpDialog by mutableStateOf(false)
 
+    /**
+     * "Which workspace do you want?", raised when a project is selected and the default
+     * workspace setting is `ask` - which is what a fresh install has.
+     *
+     * Null when nothing is pending. Window-scoped, like the project it follows from:
+     * project selection is per window, so two windows can be asked independently.
+     */
+    var pendingWorkspacePrompt by mutableStateOf<String?>(null)
+
     /** Settings window visibility, deep-link section and raise-requests. See [SettingsWindowState]. */
     val settingsWindow = SettingsWindowState()
 
@@ -156,6 +165,21 @@ internal class BossAppState(
     // Track if workspace restoration has completed (for first window only)
     // New windows don't restore Last Session, so start as complete
     var workspaceRestorationComplete by mutableStateOf(!isFirstWindow)
+
+    /**
+     * The project path startup restored from Last Session, if any.
+     *
+     * Selecting a project is what triggers the default-workspace apply (or the prompt for
+     * one), and a restore *selects a project* - `applyWorkspace(restoreProject = true)`
+     * calls `selectProject` with the path the saved layout recorded. Without this, every
+     * launch that restored a project would re-apply a workspace over the layout that was
+     * just restored, and now would put a dialog in front of it as well.
+     *
+     * Recorded before the restore's `applyWorkspace`, so it is set by the time the
+     * selection can be observed, and consumed by the first observation that matches - a
+     * later, deliberate re-selection of the same project is a real choice and is prompted.
+     */
+    var restoredProjectPath by mutableStateOf<String?>(null)
 
     // Track if handlers have been marked ready (prevents race condition between workspace load and timeout)
     // Uses atomic flag to ensure handler marking happens exactly once

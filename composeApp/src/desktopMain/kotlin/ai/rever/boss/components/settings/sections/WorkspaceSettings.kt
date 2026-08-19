@@ -6,6 +6,7 @@ import ai.rever.boss.components.settings.shared.SettingsTheme.BorderColor
 import ai.rever.boss.components.settings.shared.SettingsTheme.TextPrimary
 import ai.rever.boss.components.settings.shared.SettingsTheme.TextSecondary
 import ai.rever.boss.components.workspaces.PredefinedWorkspaces
+import ai.rever.boss.components.workspaces.WorkspaceSettings
 import ai.rever.boss.components.workspaces.WorkspaceSettingsManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -33,11 +34,20 @@ fun WorkspaceSettings() {
 
     val workspaceOptions =
         buildList {
+            // Order matters: this is the list a first-run user reads top-down, and the two
+            // "no layout applied" answers belong together above the layouts themselves.
             add(
                 WorkspaceOption(
-                    id = "none",
+                    id = WorkspaceSettings.ASK_WORKSPACE_ID,
+                    name = "Ask",
+                    description = "Start with no workspace, then ask which one when a project is selected",
+                ),
+            )
+            add(
+                WorkspaceOption(
+                    id = WorkspaceSettings.NO_WORKSPACE_ID,
                     name = "None",
-                    description = "Don't auto-apply workspace when project is selected",
+                    description = "Never apply a workspace, and never ask",
                 ),
             )
             PredefinedWorkspaces.allWorkspaces.forEach { workspace ->

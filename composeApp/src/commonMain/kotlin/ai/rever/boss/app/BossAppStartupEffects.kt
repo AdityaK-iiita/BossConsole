@@ -10,11 +10,13 @@ import ai.rever.boss.components.wizard.plugin.PluginWizardIntegration
 import ai.rever.boss.components.workspaces.LAST_SESSION_ID
 import ai.rever.boss.components.workspaces.LAST_SESSION_NAME
 import ai.rever.boss.components.workspaces.LayoutWorkspace
+import ai.rever.boss.components.workspaces.ProjectSelectionWorkspace
 import ai.rever.boss.components.workspaces.WorkspaceSettingsManager
 import ai.rever.boss.components.workspaces.applyWorkspace
 import ai.rever.boss.components.workspaces.asLastSession
 import ai.rever.boss.components.workspaces.extractCurrentWorkspace
 import ai.rever.boss.components.workspaces.requiresProject
+import ai.rever.boss.components.workspaces.resolveOnProjectSelection
 import ai.rever.boss.components.workspaces.workspaceManager
 import ai.rever.boss.consumePendingInitialProject
 import ai.rever.boss.consumePendingInitialTab
@@ -326,24 +328,48 @@ internal fun BossAppStartupEffects(state: BossAppState) {
         }
     }
 
-    // Apply default workspace when project is selected
+    // Decide what a newly selected project does to this window's layout: apply the
+    // configured workspace, ask which one, or leave it alone.
     LaunchedEffect(selectedProject.path) {
-        if (selectedProject.path.isNotEmpty()) {
-            val defaultWorkspace = WorkspaceSettingsManager.getDefaultWorkspace()
-            // A workspace that needs no project has nothing to re-derive from a new one, so
-            // re-applying it would only clearAllPanels over whatever the user has open. That
-            // is new since the fresh-start apply: a Windows install now comes up ON the
-            // browser workspace, browses somewhere, and selecting a project would have
-            // discarded the page. Project-shaped workspaces still re-apply, which is the
-            // point of this effect - their tabs are built from {projectPath}.
-            val alreadyApplied =
-                defaultWorkspace != null &&
-                    !defaultWorkspace.requiresProject() &&
-                    workspaceManager.currentWorkspace.value?.id == defaultWorkspace.id
-            if (defaultWorkspace != null && !alreadyApplied) {
-                // Apply the workspace
-                applyWorkspace(defaultWorkspace, splitViewState, windowProjectState)
-                workspaceManager.loadWorkspace(defaultWorkspace)
+        val path = selectedProject.path
+        if (path.isEmpty()) return@LaunchedEffect
+
+        // A project the restore selected is not a project the user just picked. Last
+        // Session carries its own layout, and both of the branches below would discard
+        // it - the apply by clearing panels, the prompt by covering it with a question
+        // nobody asked. See isUserProjectSelection.
+        if (!isUserProjectSelection(path, state.restoredProjectPath)) {
+            // Consumed, so re-opening the same project later still counts as a choice.
+            state.restoredProjectPath = null
+            return@LaunchedEffect
+        }
+
+        when (val choice = WorkspaceSettingsManager.currentSettings.value.resolveOnProjectSelection()) {
+            // Named rather than folded into an else, so adding a fourth mode has to
+            // decide what it does here instead of silently doing nothing.
+            is ProjectSelectionWorkspace.None -> {
+            }
+
+            is ProjectSelectionWorkspace.Ask -> {
+                // The prompt names the project so it reads as a consequence of what was
+                // just done, rather than an unexplained dialog at startup.
+                state.pendingWorkspacePrompt = selectedProject.name
+            }
+
+            is ProjectSelectionWorkspace.Apply -> {
+                // A workspace that needs no project has nothing to re-derive from a new one, so
+                // re-applying it would only clearAllPanels over whatever the user has open. That
+                // is new since the fresh-start apply: a browser-only install comes up ON the
+                // browser workspace, browses somewhere, and selecting a project would have
+                // discarded the page. Project-shaped workspaces still re-apply, which is the
+                // point of this effect - their tabs are built from {projectPath}.
+                val alreadyApplied =
+                    !choice.workspace.requiresProject() &&
+                        workspaceManager.currentWorkspace.value?.id == choice.workspace.id
+                if (!alreadyApplied) {
+                    applyWorkspace(choice.workspace, splitViewState, windowProjectState)
+                    workspaceManager.loadWorkspace(choice.workspace)
+                }
             }
         }
     }
@@ -596,6 +622,10 @@ internal fun BossAppStartupEffects(state: BossAppState) {
                                 }
                             // Apply the last session workspace FIRST
                             workspaceManager.loadWorkspace(configWithId)
+                            // Before applyWorkspace, which is what selects the recorded
+                            // project: the effect watching selectedProject.path has to be
+                            // able to tell this apart from the user picking a project.
+                            state.restoredProjectPath = configWithId.projectPath
                             // A failed restore must not abort this collector: the
                             // handler-marking below is the only path left once
                             // loadWorkspace has set currentWorkspace — the fresh-install

@@ -35,8 +35,6 @@ import ai.rever.boss.components.workspaces.PredefinedWorkspaces
 import ai.rever.boss.components.workspaces.TabConfig
 import ai.rever.boss.components.workspaces.applyWorkspace
 import ai.rever.boss.components.workspaces.workspaceManager
-import ai.rever.boss.dashboard.SplitTemplate
-import ai.rever.boss.dashboard.SplitTemplatesManager
 import ai.rever.boss.icons.FileIcons
 import ai.rever.boss.keymap.KeymapSettingsManager
 import ai.rever.boss.keymap.model.TabSwitchMode

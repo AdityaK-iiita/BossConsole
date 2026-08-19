@@ -11,7 +11,7 @@
     <ID>ComplexCondition:NewTabDialog.kt$lowerTrimmed.startsWith("http://") || lowerTrimmed.startsWith("https://") || lowerTrimmed.startsWith("file://") || lowerTrimmed.startsWith("javascript:") || lowerTrimmed.startsWith("chrome://")</ID>
     <ID>ComplexCondition:PasskeyBrowserScreen.kt$link != null &amp;&amp; ( link.contains("auth/verify") || link.contains("passkey/registered") || link.contains("passkey/authenticated") )</ID>
     <ID>ComplexCondition:PluginInstallService.kt$PluginInstallService$name.endsWith(".jar") &amp;&amp; !name.contains("-sources", ignoreCase = true) &amp;&amp; !name.contains("-javadoc", ignoreCase = true) &amp;&amp; !name.contains("-test", ignoreCase = true)</ID>
-    <ID>ComplexCondition:SplitTemplatesManager.kt$SplitTemplatesManager$exitCode != 0 || ( !url.startsWith("git@") &amp;&amp; !url.startsWith("https://") &amp;&amp; !url.startsWith("http://") &amp;&amp; !url.startsWith("ssh://") )</ID>
+    <ID>ComplexCondition:WorkspacePlaceholders.kt$WorkspacePlaceholders$exitCode != 0 || ( !url.startsWith("git@") &amp;&amp; !url.startsWith("https://") &amp;&amp; !url.startsWith("http://") &amp;&amp; !url.startsWith("ssh://") )</ID>
     <ID>ComplexCondition:SplitView.kt$SplitViewState$panel.tabsComponent.tabsState.value.tabs.any { tab -&gt; (tab is EditorTabInfo &amp;&amp; tab.filePath == filePath) || (tab is FluckTabInfo &amp;&amp; tab.currentUrl == fileUrl) }</ID>
     <ID>ComplexCondition:UpdateManager.kt$UpdateManager$current is UpdateState.Downloading || current is UpdateState.ReadyToInstall || current is UpdateState.Installing || current is UpdateState.RestartRequired</ID>
     <ID>ConstructorParameterNaming:DefaultPlugin.kt$DefaultPlugin$private val _windowId: String? = null</ID>
@@ -152,7 +152,7 @@
     <ID>CyclomaticComplexMethod:WizardComponents.kt$@Composable fun CheckboxCard( title: String, description: String, icon: ImageVector? = null, isChecked: Boolean, onCheckedChange: (Boolean) -&gt; Unit, enabled: Boolean = true, modifier: Modifier = Modifier, )</ID>
     <ID>CyclomaticComplexMethod:WorkspaceApplier.kt$private fun createTabFromWorkspaceConfig( tabConfig: TabConfig, projectPath: String, splitViewState: SplitViewState, ): TabInfo?</ID>
     <ID>CyclomaticComplexMethod:WorkspaceApplier.kt$private suspend fun applyWorkspaceNode( node: SplitConfig, splitViewState: SplitViewState, currentPanelId: String, projectPath: String, )</ID>
-    <ID>CyclomaticComplexMethod:WorkspaceButton.kt$@Composable fun WorkspaceButton( onOpenWorkspace: (LayoutWorkspace) -&gt; Unit, workspaceManager: WorkspaceManager = remember { WorkspaceManager() }, getCurrentWorkspace: (() -&gt; LayoutWorkspace)? = null, onShowTopOfMind: (() -&gt; Unit)? = null, )</ID>
+    <ID>CyclomaticComplexMethod:WorkspaceButton.kt$@Composable fun WorkspaceButton( onOpenWorkspace: (LayoutWorkspace) -&gt; Unit, workspaceManager: WorkspaceManager, getCurrentWorkspace: (() -&gt; LayoutWorkspace)? = null, onShowTopOfMind: (() -&gt; Unit)? = null, )</ID>
     <ID>CyclomaticComplexMethod:WorkspaceSelectionDialog.kt$@Composable private fun WorkspaceSelectionItem( workspace: ai.rever.boss.components.workspaces.LayoutWorkspace, isSelected: Boolean, selectedPanelId: String?, onToggle: () -&gt; Unit, onPanelSelected: (String?) -&gt; Unit, )</ID>
     <ID>CyclomaticComplexMethod:main.kt$fun main(args: Array&lt;String&gt;)</ID>
     <ID>CyclomaticComplexMethod:main.kt$private fun extractPty4jNatives(targetDir: File)</ID>
@@ -390,7 +390,6 @@
     <ID>LongMethod:SidePanel.kt$@Composable fun BossDraggableComponent.SidePanel( panel: Panel, panelComponentStore: PanelComponentStore, )</ID>
     <ID>LongMethod:SidebarCustomizeMenu.kt$@Composable fun BossDraggableComponent.SidebarCustomizeMenu( /** Slot the button visually belongs to; controls hint direction &amp; drag overlay rendering. */ slot: Panel = left.top.bottom, modifier: Modifier = Modifier, )</ID>
     <ID>LongMethod:SingleInstanceManager.kt$SingleInstanceManager$private fun startServer()</ID>
-    <ID>LongMethod:SplitTemplateCard.kt$@Composable fun SplitTemplateCard( template: SplitTemplate, onClick: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>LongMethod:SplitView.kt$@Composable private fun PanelDropZoneOverlay( panelId: String, dropTarget: TabDropTarget?, )</ID>
     <ID>LongMethod:SplitView.kt$@Composable private fun RenderSplitNode( node: SplitNode, splitViewState: SplitViewState, tabDragComponent: TabDraggableComponent? = null, onTabDropResult: (TabDropResult) -&gt; Unit = {}, )</ID>
     <ID>LongMethod:SplitView.kt$SplitViewState$fun openTerminalInActivePanel( command: String? = null, workingDirectory: String? = null, )</ID>
@@ -417,7 +416,7 @@
     <ID>LongMethod:WizardComponents.kt$@Composable fun SelectionCard( title: String, description: String, icon: ImageVector? = null, isSelected: Boolean, onClick: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>LongMethod:WizardComponents.kt$@Composable fun WizardStepIndicator( currentStep: Int, totalSteps: Int, modifier: Modifier = Modifier, )</ID>
     <ID>LongMethod:WorkspaceApplier.kt$private suspend fun applyWorkspaceNode( node: SplitConfig, splitViewState: SplitViewState, currentPanelId: String, projectPath: String, )</ID>
-    <ID>LongMethod:WorkspaceButton.kt$@Composable fun WorkspaceButton( onOpenWorkspace: (LayoutWorkspace) -&gt; Unit, workspaceManager: WorkspaceManager = remember { WorkspaceManager() }, getCurrentWorkspace: (() -&gt; LayoutWorkspace)? = null, onShowTopOfMind: (() -&gt; Unit)? = null, )</ID>
+    <ID>LongMethod:WorkspaceButton.kt$@Composable fun WorkspaceButton( onOpenWorkspace: (LayoutWorkspace) -&gt; Unit, workspaceManager: WorkspaceManager, getCurrentWorkspace: (() -&gt; LayoutWorkspace)? = null, onShowTopOfMind: (() -&gt; Unit)? = null, )</ID>
     <ID>LongMethod:WorkspaceExtractor.kt$private fun extractSplitConfig(node: SplitNode): SplitConfig</ID>
     <ID>LongMethod:WorkspaceSelectionDialog.kt$@Composable fun WorkspaceSelectionDialog( title: String, workspaces: List&lt;ai.rever.boss.components.workspaces.LayoutWorkspace&gt;, preselectedWorkspaces: Map&lt;String, String?&gt; = emptyMap(), onDismiss: () -&gt; Unit, onConfirm: (workspacePanelMap: Map&lt;String, String?&gt;) -&gt; Unit, )</ID>
     <ID>LongMethod:WorkspaceSelectionDialog.kt$@Composable private fun WorkspaceSelectionItem( workspace: ai.rever.boss.components.workspaces.LayoutWorkspace, isSelected: Boolean, selectedPanelId: String?, onToggle: () -&gt; Unit, onPanelSelected: (String?) -&gt; Unit, )</ID>
@@ -594,7 +593,6 @@
     <ID>MaxLineLength:CrossDeviceBrowserManager.kt$CrossDeviceBrowserManager$logger.debug(LogCategory.BROWSER, "Ready to display WebAuthn in embedded browser", mapOf("sessionId" to sessionId))</ID>
     <ID>MaxLineLength:CrossDeviceBrowserManager.kt$CrossDeviceBrowserManager$logger.warn(LogCategory.BROWSER, "Failed to initialize WebAuthn - using system browser fallback", error = e)</ID>
     <ID>MaxLineLength:DashboardEventBus.kt$DashboardEventBus$private</ID>
-    <ID>MaxLineLength:DashboardEventBus.kt$DashboardEventBus$val applySplitTemplateEvents: SharedFlow&lt;DashboardApplySplitTemplateEvent&gt; = _applySplitTemplateEvents.asSharedFlow()</ID>
     <ID>MaxLineLength:DeepLinkHandler.kt$DeepLinkHandler$logger.info(LogCategory.SYSTEM, "Received deep link (macOS)", mapOf("uri" to LogSanitizer.maskUriParams(uri)))</ID>
     <ID>MaxLineLength:DeepLinkHandler.kt$DeepLinkHandler$logger.info(LogCategory.SYSTEM, "Received deep link from command line", mapOf("uri" to LogSanitizer.maskUriParams(url)))</ID>
     <ID>MaxLineLength:DeepLinkHandler.kt$DeepLinkHandler$logger.info(LogCategory.SYSTEM, "Received deep link", mapOf("uri" to LogSanitizer.maskUriParams(uri)))</ID>
@@ -1121,7 +1119,7 @@
     <ID>ReturnCount:SessionManager.kt$SessionManager$suspend fun loadSession(): Result&lt;UserInfo?&gt;</ID>
     <ID>ReturnCount:ShortcutTestRunner.kt$ShortcutTestRunner$private fun validateKeyName(keyName: String): Pair&lt;Boolean, String&gt;</ID>
     <ID>ReturnCount:ShortcutTestRunner.kt$ShortcutTestRunner$suspend fun testShortcut(binding: KeyBinding): ShortcutTestResult</ID>
-    <ID>ReturnCount:SplitTemplatesManager.kt$SplitTemplatesManager$private fun getGitRemoteUrl(projectPath: String): String</ID>
+    <ID>ReturnCount:WorkspacePlaceholders.kt$WorkspacePlaceholders$private fun getGitRemoteUrl(projectPath: String): String</ID>
     <ID>ReturnCount:SplitView.kt$SplitViewState$fun openUrlInActivePanel( url: String, title: String, forceNewTab: Boolean = false, )</ID>
     <ID>ReturnCount:SplitView.kt$SplitViewState$fun setActivePanel(panelId: String)</ID>
     <ID>ReturnCount:StoreVersionInstaller.kt$StoreVersionInstaller$private suspend fun activate( request: StoreVersionRequest, target: File, unload: suspend (String) -&gt; Result&lt;Unit&gt;, load: suspend (String) -&gt; Result&lt;Boolean&gt;, ): Result&lt;String&gt;</ID>
@@ -1325,7 +1323,7 @@
     <ID>TooGenericExceptionCaught:ShortcutLifecycleManager.kt$ShortcutLifecycleManager$e: Exception</ID>
     <ID>TooGenericExceptionCaught:SidebarVisibilitySettingsManager.kt$SidebarVisibilitySettingsManager$e: Exception</ID>
     <ID>TooGenericExceptionCaught:SingleInstanceManager.kt$SingleInstanceManager$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:SplitTemplatesManager.kt$SplitTemplatesManager$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:WorkspacePlaceholders.kt$WorkspacePlaceholders$e: Exception</ID>
     <ID>TooGenericExceptionCaught:SupabaseConfig.kt$SupabaseConfig$e: Exception</ID>
     <ID>TooGenericExceptionCaught:SupabaseDataProviderImpl.kt$SupabaseDataProviderImpl$e: Exception</ID>
     <ID>TooGenericExceptionCaught:SupabasePasskeyService.kt$SupabasePasskeyService$e: Exception</ID>
@@ -1416,7 +1414,6 @@
     <ID>TooManyFunctions:SecretServiceBridge.kt$SecretServiceBridge : SecretServiceCoroutineImplBase</ID>
     <ID>TooManyFunctions:SettingsComponents.kt$ai.rever.boss.components.settings.shared.SettingsComponents.kt</ID>
     <ID>TooManyFunctions:ShortcutLifecycleManager.kt$ShortcutLifecycleManager</ID>
-    <ID>TooManyFunctions:SplitTemplatesManager.kt$SplitTemplatesManager</ID>
     <ID>TooManyFunctions:SplitView.kt$SplitViewState</ID>
     <ID>TooManyFunctions:SplitViewOperationsImpl.kt$SplitViewOperationsImpl : SplitViewOperations</ID>
     <ID>TooManyFunctions:TabDraggableComponent.kt$TabDraggableComponent</ID>

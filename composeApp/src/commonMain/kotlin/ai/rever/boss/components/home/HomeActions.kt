@@ -3,7 +3,6 @@ package ai.rever.boss.components.home
 import ai.rever.boss.components.bars.horizontal.StatusMessageManager
 import ai.rever.boss.components.events.DashboardEventBus
 import ai.rever.boss.components.events.PanelEventBus
-import ai.rever.boss.dashboard.SplitTemplate
 import ai.rever.boss.plugin.api.PanelId
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
@@ -60,7 +59,7 @@ internal class HomeActions(
 
     fun openUrl(url: String) = emit { DashboardEventBus.openUrlInNewTab(url, it) }
 
-    fun applySplitTemplate(template: SplitTemplate) = emit { DashboardEventBus.applySplitTemplate(template, it) }
+    fun applyWorkspace(workspaceId: String) = emit { DashboardEventBus.applyWorkspace(workspaceId, it) }
 
     fun openTabType(
         typeId: String,

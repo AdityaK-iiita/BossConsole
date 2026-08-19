@@ -345,12 +345,14 @@ object PredefinedWorkspaces {
                     ),
             ),
             // Browser only: a single browser panel on the BOSS home page.
-            // The default on Windows, where the terminal-first layouts are a poor
-            // first run (see defaultWorkspaceIdFor in WorkspaceSettingsManager.kt).
+            // Was the Windows default until the default became "ask" everywhere
+            // (see WorkspaceSettings.ASK_WORKSPACE_ID); still the one predefined
+            // workspace that stands without a project, which is what lets it be
+            // applied on a fresh start at all.
             //
             // Appended rather than prepended: this list is the order of the Settings
-            // picker and the workspace menu on every platform, and one platform's
-            // default is not a reason to reshuffle what everyone else sees.
+            // picker, the workspace menu and the home screen's cards, and it is not
+            // worth reshuffling what everyone sees.
             //
             // "Browser Only", not "Browser": WorkspaceManager identifies predefined
             // workspaces by NAME (WorkspaceManager.kt:63 drops a saved workspace whose

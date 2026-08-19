@@ -30,6 +30,7 @@ import ai.rever.boss.components.windows.SettingsWindow
 import ai.rever.boss.components.wizard.plugin.PluginWizardIntegration
 import ai.rever.boss.components.wizard.plugin.PluginWizardWindow
 import ai.rever.boss.components.wizard.plugin.rememberPluginInstallWizardState
+import ai.rever.boss.components.workspaces.SelectWorkspaceDialog
 import ai.rever.boss.components.workspaces.applyWorkspace
 import ai.rever.boss.components.workspaces.workspaceManager
 import ai.rever.boss.dashboard.DashboardStatsManager
@@ -327,6 +328,38 @@ internal fun BossAppDialogs(state: BossAppState) {
             projectPath =
                 windowProjectState.selectedProject.value.path
                     .ifEmpty { null },
+        )
+    }
+
+    // "Which workspace do you want?" - raised by the project-selection effect when the
+    // default workspace setting is `ask`, the default on a fresh install.
+    state.pendingWorkspacePrompt?.let { projectName ->
+        val workspaces by workspaceManager.workspaces.collectAsState()
+        SelectWorkspaceDialog(
+            projectName = projectName,
+            // The same list the top bar's workspace button and the app menu show, saved
+            // workspaces included. Reading PredefinedWorkspaces here instead would offer a
+            // different set than the rest of the app does.
+            workspaces = workspaces,
+            onDismiss = {
+                state.pendingWorkspacePrompt = null
+                state.focusRequester.requestFocus()
+            },
+            onSelect = { workspace ->
+                state.pendingWorkspacePrompt = null
+                coroutineScope.launch {
+                    // Preserve, load, apply: the same three steps the top bar's workspace
+                    // switch takes, so a workspace opened from here can be switched away
+                    // from and back with its tabs intact.
+                    val currentWorkspace = workspaceManager.currentWorkspace.value
+                    if (currentWorkspace != null && currentWorkspace.id.isNotEmpty()) {
+                        splitViewState.preserveCurrentState(currentWorkspace.id, currentWorkspace.name)
+                    }
+                    workspaceManager.loadWorkspace(workspace)
+                    applyWorkspace(workspace, splitViewState, windowProjectState)
+                }
+                state.focusRequester.requestFocus()
+            },
         )
     }
 

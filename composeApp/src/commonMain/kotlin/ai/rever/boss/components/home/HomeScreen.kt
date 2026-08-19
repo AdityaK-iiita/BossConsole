@@ -3,15 +3,15 @@ package ai.rever.boss.components.home
 import ai.rever.boss.components.dashboard.cards.BrowserPageCard
 import ai.rever.boss.components.dashboard.cards.FileCard
 import ai.rever.boss.components.dashboard.cards.ProjectCard
-import ai.rever.boss.components.dashboard.cards.SplitTemplateCard
+import ai.rever.boss.components.dashboard.cards.WorkspaceCard
 import ai.rever.boss.components.dashboard.sections.DashboardSection
 import ai.rever.boss.components.plugin.panels.left_top.ProjectState
+import ai.rever.boss.components.workspaces.LayoutWorkspace
+import ai.rever.boss.components.workspaces.workspaceManager
 import ai.rever.boss.dashboard.RecentBrowserPage
 import ai.rever.boss.dashboard.RecentBrowserPagesManager
 import ai.rever.boss.dashboard.RecentFile
 import ai.rever.boss.dashboard.RecentFilesManager
-import ai.rever.boss.dashboard.SplitTemplate
-import ai.rever.boss.dashboard.SplitTemplatesManager
 import ai.rever.boss.keymap.KeymapSettingsManager
 import ai.rever.boss.keymap.model.KeyBinding
 import ai.rever.boss.keymap.model.KeymapActions
@@ -76,7 +76,10 @@ fun HomeScreen(modifier: Modifier = Modifier) {
     val dismissed by RecentBrowserPagesManager.dismissedSuggestions.collectAsState()
     val suggestions =
         remember(recentPages, dismissed) { RecentBrowserPagesManager.getSuggestions(SUGGESTION_LIMIT) }
-    val splitTemplates by SplitTemplatesManager.allTemplates.collectAsState()
+    // The same WorkspaceManager the top bar's workspace button, the app menu and the
+    // default-workspace setting read. The home screen used to list SplitTemplatesManager
+    // instead, a second hand-maintained copy of the same layouts (now deleted).
+    val workspaces by workspaceManager.workspaces.collectAsState()
 
     var projectToOpen by remember { mutableStateOf<Project?>(null) }
     var projectToRemove by remember { mutableStateOf<Project?>(null) }
@@ -110,7 +113,7 @@ fun HomeScreen(modifier: Modifier = Modifier) {
 
             ToolsSection(actions = actions)
 
-            WorkspaceLayoutsSection(templates = splitTemplates, actions = actions)
+            WorkspaceLayoutsSection(workspaces = workspaces, actions = actions)
 
             RecentFilesSection(files = recentFiles, actions = actions)
         }
@@ -189,16 +192,19 @@ private fun ToolsSection(actions: HomeActions) {
 
 @Composable
 private fun WorkspaceLayoutsSection(
-    templates: List<SplitTemplate>,
+    workspaces: List<LayoutWorkspace>,
     actions: HomeActions,
 ) {
-    if (templates.isEmpty()) return
+    if (workspaces.isEmpty()) return
     DashboardSection(title = "Workspace layouts", subtitle = "Open a whole arrangement at once") {
         CardStrip {
-            templates.forEach { template ->
-                SplitTemplateCard(
-                    template = template,
-                    onClick = { actions.applySplitTemplate(template) },
+            workspaces.forEach { workspace ->
+                WorkspaceCard(
+                    workspace = workspace,
+                    // By id, not by value: the event crosses a process boundary in kernel
+                    // mode, and the handler re-reads the manager so a workspace edited
+                    // between render and click applies as it is now.
+                    onClick = { actions.applyWorkspace(workspace.id) },
                 )
             }
         }

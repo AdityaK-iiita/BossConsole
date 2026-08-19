@@ -5,7 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Verifies [SplitTemplatesManager.substituteProjectPath] — the {projectPath}
+ * Verifies [WorkspacePlaceholders.substituteProjectPath] — the {projectPath}
  * substitution that decides raw vs shell-quoted. The expected quoted form is
  * computed via the platform-aware [CommandProcessor.quotePath] (POSIX single-quote
  * literal on macOS/Linux; PowerShell single-quote literal on Windows), so the
@@ -20,11 +20,11 @@ class SubstituteProjectPathTest {
         // workingDirectory / filePath / url path: must stay verbatim (not shell-parsed).
         assertEquals(
             spaced,
-            SplitTemplatesManager.substituteProjectPath("{projectPath}", spaced, quote = false),
+            WorkspacePlaceholders.substituteProjectPath("{projectPath}", spaced, quote = false),
         )
         assertEquals(
             "$spaced/README.md",
-            SplitTemplatesManager.substituteProjectPath("{projectPath}/README.md", spaced, quote = false),
+            WorkspacePlaceholders.substituteProjectPath("{projectPath}/README.md", spaced, quote = false),
         )
     }
 
@@ -32,7 +32,7 @@ class SubstituteProjectPathTest {
     fun quotesBareOccurrenceInCommand() {
         assertEquals(
             "cd $quoted && clear && claude --dangerously-skip-permissions",
-            SplitTemplatesManager.substituteProjectPath(
+            WorkspacePlaceholders.substituteProjectPath(
                 "cd {projectPath} && clear && claude --dangerously-skip-permissions",
                 spaced,
                 quote = true,
@@ -45,7 +45,7 @@ class SubstituteProjectPathTest {
         // A user who worked around the bug with cd "{projectPath}" must NOT get cd "'…'".
         assertEquals(
             "cd \"$spaced\"",
-            SplitTemplatesManager.substituteProjectPath("cd \"{projectPath}\"", spaced, quote = true),
+            WorkspacePlaceholders.substituteProjectPath("cd \"{projectPath}\"", spaced, quote = true),
         )
     }
 
@@ -53,7 +53,7 @@ class SubstituteProjectPathTest {
     fun leavesAlreadySingleQuotedTemplateRaw() {
         assertEquals(
             "cd '$spaced'",
-            SplitTemplatesManager.substituteProjectPath("cd '{projectPath}'", spaced, quote = true),
+            WorkspacePlaceholders.substituteProjectPath("cd '{projectPath}'", spaced, quote = true),
         )
     }
 
@@ -63,7 +63,7 @@ class SubstituteProjectPathTest {
         val plain = "/Users/foo/bar"
         assertEquals(
             "cd '$plain'",
-            SplitTemplatesManager.substituteProjectPath("cd {projectPath}", plain, quote = true),
+            WorkspacePlaceholders.substituteProjectPath("cd {projectPath}", plain, quote = true),
         )
     }
 
@@ -87,12 +87,12 @@ class SubstituteProjectPathTest {
         for (absent in listOf(null, "", "   ")) {
             assertEquals(
                 "https://google.com",
-                SplitTemplatesManager.processPlaceholders("{gitRemoteUrl}", absent),
+                WorkspacePlaceholders.processPlaceholders("{gitRemoteUrl}", absent),
                 "projectPath=${absent.orEmpty().ifEmpty { "<blank>" }}",
             )
             assertEquals(
                 "",
-                SplitTemplatesManager.processPlaceholders("{claudeContinueFlag}", absent),
+                WorkspacePlaceholders.processPlaceholders("{claudeContinueFlag}", absent),
                 "projectPath=${absent.orEmpty().ifEmpty { "<blank>" }}",
             )
         }
