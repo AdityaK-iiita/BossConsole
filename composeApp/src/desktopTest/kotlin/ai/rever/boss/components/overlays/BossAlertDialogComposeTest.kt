@@ -2,12 +2,15 @@ package ai.rever.boss.components.overlays
 
 import ai.rever.boss.plugin.ui.BossAlertDialog
 import ai.rever.boss.plugin.ui.BossOverlayHost
+import androidx.compose.foundation.layout.Column
 import androidx.compose.material.Text
 import androidx.compose.material.TextButton
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.dp
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -120,5 +123,30 @@ class BossAlertDialogComposeTest {
         rule.onNodeWithText("Discard").assertIsDisplayed()
         rule.onNodeWithText("Keep editing").performClick()
         assertTrue(clicks == listOf("cancel"), "expected only the clicked button to fire, got $clicks")
+    }
+
+    @Test
+    fun `a body taller than the window does not squeeze the confirm button`() {
+        // Raised in review of BossConsole#216: the card only gives its body the flexible space when
+        // its height is bounded, and this file is the only place that exercises the LIGHTWEIGHT
+        // path. If desktop's Dialog window hands its content a screen-bounded height, that change
+        // is not inert here - every host dialog with a long body starts scrolling it, which is
+        // probably an improvement but should be a known one. Either way the property that must hold
+        // is the same as on the scrimmed path: the actions keep their height.
+        rule.setContent {
+            BossAlertDialog(
+                onDismissRequest = {},
+                title = { Text("Reset Browser") },
+                text = { Column { repeat(40) { Text("line $it of a long body") } } },
+                dismissButton = { TextButton(onClick = {}) { Text("Cancel") } },
+                confirmButton = { TextButton(onClick = {}) { Text("Reset") } },
+            )
+        }
+
+        val confirm = rule.onNodeWithText("Reset").getUnclippedBoundsInRoot()
+        assertTrue(
+            (confirm.bottom - confirm.top) > 0.dp,
+            "the confirm button measured ${confirm.bottom - confirm.top} tall under a 40-line body",
+        )
     }
 }

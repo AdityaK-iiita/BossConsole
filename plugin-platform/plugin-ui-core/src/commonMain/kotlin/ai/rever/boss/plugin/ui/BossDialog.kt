@@ -1,5 +1,6 @@
 package ai.rever.boss.plugin.ui
 
+import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -9,12 +10,17 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.rememberScrollbarAdapter
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.LocalContentColor
 import androidx.compose.material.ProvideTextStyle
 import androidx.compose.material.Surface
@@ -279,9 +285,6 @@ internal fun ScrimmedModalContent(
 // Alert dialog
 // ---------------------------------------------------------------------------
 
-/** Width of a BOSS alert card, matching the house confirmation dialog. */
-private val AlertWidth: Dp = 400.dp
-
 /**
  * A title/text/buttons dialog in the BOSS design system, layered above the browser surface.
  *
@@ -297,6 +300,12 @@ private val AlertWidth: Dp = 400.dp
  *
  * @param confirmButton The primary action. Rendered last, i.e. rightmost.
  * @param dismissButton The secondary action, rendered to the left of [confirmButton].
+ * @param text The body. **When the card's parent bounds its height, the body is placed in a scroll
+ * container and therefore measured with an UNBOUNDED height** — that is the bounded-parent branch,
+ * not the unbounded one, and it is the branch most alerts take. A composable that refuses an
+ * unbounded main axis — a `LazyColumn`, a `LazyVerticalGrid`, a nested `verticalScroll` — will not
+ * lay out there unless it caps itself, so give any such content a `Modifier.heightIn(max = …)`.
+ * This is the one thing about this card a caller has to know.
  * @param shape Card shape; null takes the design system's dialog radius.
  * @param backgroundColor Card fill; [Color.Unspecified] takes the theme's panel color.
  * @param contentColor Default content color; [Color.Unspecified] takes the theme's primary text.
@@ -343,6 +352,13 @@ fun BossAlertDialog(
  *
  * Mirrors Material 2's `buttons` overload. Use it when the actions are not a confirm/dismiss pair:
  * three buttons, a progress row, or no buttons at all.
+ *
+ * @param text The body. **When the card's parent bounds its height, the body is placed in a scroll
+ * container and therefore measured with an UNBOUNDED height** — that is the bounded-parent branch,
+ * not the unbounded one, and it is the branch most alerts take. A composable that refuses an
+ * unbounded main axis — a `LazyColumn`, a `LazyVerticalGrid`, a nested `verticalScroll` — will not
+ * lay out there unless it caps itself, so give any such content a `Modifier.heightIn(max = …)`.
+ * This is the one thing about this card a caller has to know.
  */
 @Composable
 fun BossAlertDialog(
@@ -356,53 +372,16 @@ fun BossAlertDialog(
     contentColor: Color = Color.Unspecified,
     properties: DialogProperties = DialogProperties(),
 ) {
-    val colors = BossTheme.colors
-    val space = BossTheme.space
     BossDialog(onDismissRequest = onDismissRequest, properties = properties) {
-        // [AlertWidth] is what an alert WANTS, not what it must have.
-        //
-        // `.width(AlertWidth)` set the minimum as well as the maximum, so in the scrimmed
-        // in-window path — where this Surface is measured against the app window rather than
-        // against a dialog window of its own — a window narrower than 400dp got a card it could
-        // not fit, clipped at the edge. Reported against the Atlas plugin, whose panel slot is
-        // routinely narrower than that: a Row of actions inside a card that cannot shrink is
-        // measured first child to last, so the last one — the primary — was squeezed to zero
-        // width on a consent surface. Measured at 240dp, not inferred.
-        //
-        // BoxWithConstraints rather than `widthIn(max = AlertWidth)`: with only a maximum, a
-        // Surface wraps its content, so every short alert in the app would suddenly be narrower
-        // than 400dp. Taking the smaller of what we want and what there is leaves the wide case
-        // byte-identical and changes only the case that was broken.
-        BoxWithConstraints(contentAlignment = Alignment.Center) {
-            val available = (maxWidth - space.lg * 2).coerceAtLeast(0.dp)
-            Surface(
-                modifier =
-                    modifier
-                        .width(AlertWidth.coerceAtMost(available))
-                        .wrapContentHeight(),
-                shape = shape ?: BossTheme.radius.dialogShape,
-                color = backgroundColor.takeOrElse { colors.panel },
-                contentColor = contentColor.takeOrElse { colors.textPrimary },
-            ) {
-                Column(modifier = Modifier.padding(space.xl)) {
-                    if (title != null) {
-                        CompositionLocalProvider(LocalContentColor provides colors.textPrimary) {
-                            ProvideTextStyle(BossTheme.type.title, title)
-                        }
-                    }
-                    if (title != null && text != null) {
-                        Spacer(Modifier.height(space.md))
-                    }
-                    if (text != null) {
-                        CompositionLocalProvider(LocalContentColor provides colors.textSecondary) {
-                            ProvideTextStyle(BossTheme.type.body, text)
-                        }
-                    }
-                    Spacer(Modifier.height(space.xl))
-                    buttons()
-                }
-            }
-        }
+        BossAlertCard(
+            buttons = buttons,
+            modifier = modifier,
+            title = title,
+            text = text,
+            shape = shape,
+            backgroundColor = backgroundColor,
+            contentColor = contentColor,
+        )
     }
 }
 
