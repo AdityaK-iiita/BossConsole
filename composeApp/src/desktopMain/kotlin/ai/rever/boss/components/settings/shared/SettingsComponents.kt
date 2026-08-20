@@ -1,5 +1,8 @@
 package ai.rever.boss.components.settings.shared
 
+import ai.rever.boss.components.settings.search.LocalSettingsGroup
+import ai.rever.boss.components.settings.search.settingsRowSurface
+import ai.rever.boss.components.settings.search.settingsSearchTarget
 import ai.rever.boss.components.settings.shared.SettingsTheme.AccentColor
 import ai.rever.boss.components.settings.shared.SettingsTheme.BackgroundColor
 import ai.rever.boss.components.settings.shared.SettingsTheme.BorderColor
@@ -56,25 +59,39 @@ fun SettingsSection(
     Column(
         modifier = modifier.fillMaxWidth(),
     ) {
-        Text(
-            text = title,
-            color = TextPrimary,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
-        if (description != null) {
+        // Two things about where this target sits, both load-bearing.
+        //
+        // It is OUTSIDE the CompositionLocalProvider below: a group header is indexed as
+        // (group = null, label = title), so a target inside the provider would read this section's
+        // own title as its enclosing group and could never match its own entry - the header would
+        // simply never be findable.
+        //
+        // And it wraps the heading only, not the whole group. On the outer Column it would wash
+        // every row in the section along with the title, which reads as "all of this matched"
+        // rather than "this heading is what you asked for".
+        Column(modifier = Modifier.fillMaxWidth().settingsSearchTarget(title)) {
             Text(
-                text = description,
-                color = TextSecondary,
-                fontSize = 13.sp,
-                modifier = Modifier.padding(top = 4.dp),
+                text = title,
+                color = TextPrimary,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
             )
+            if (description != null) {
+                Text(
+                    text = description,
+                    color = TextSecondary,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
         }
         Spacer(modifier = Modifier.height(12.dp))
-        Column(
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            content = content,
-        )
+        CompositionLocalProvider(LocalSettingsGroup provides title) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                content = content,
+            )
+        }
     }
 }
 
@@ -95,7 +112,7 @@ fun SettingsToggle(
             modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(6.dp))
-                .background(SurfaceColor)
+                .settingsRowSurface(label)
                 .clickable(enabled = enabled) { onCheckedChange(!checked) }
                 .padding(horizontal = 12.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -155,7 +172,7 @@ fun SettingsSlider(
             modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(6.dp))
-                .background(SurfaceColor)
+                .settingsRowSurface(label)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
         Row(
@@ -226,7 +243,7 @@ fun SettingsNumberInput(
             modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(6.dp))
-                .background(SurfaceColor)
+                .settingsRowSurface(label)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
         Row(
@@ -298,7 +315,7 @@ fun SettingsLongInput(
             modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(6.dp))
-                .background(SurfaceColor)
+                .settingsRowSurface(label)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
         Row(
@@ -368,7 +385,7 @@ fun SettingsTextField(
             modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(6.dp))
-                .background(SurfaceColor)
+                .settingsRowSurface(label)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
         Text(
@@ -444,7 +461,7 @@ fun SettingsTextArea(
             modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(6.dp))
-                .background(SurfaceColor)
+                .settingsRowSurface(label)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
         Text(text = label, color = if (enabled) TextPrimary else TextMuted, fontSize = 13.sp)
@@ -506,7 +523,7 @@ fun SettingsDropdown(
             modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(6.dp))
-                .background(SurfaceColor)
+                .settingsRowSurface(label)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
         Row(
@@ -598,7 +615,7 @@ fun SettingsSectionedDropdown(
             modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(6.dp))
-                .background(SurfaceColor)
+                .settingsRowSurface(label)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
         Row(
@@ -712,7 +729,7 @@ fun ColorSetting(
             modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(6.dp))
-                .background(SurfaceColor)
+                .settingsRowSurface(label)
                 .clickable(enabled = enabled) { showColorPicker = true }
                 .padding(horizontal = 12.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -797,7 +814,7 @@ fun SettingsFilePicker(
             modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(6.dp))
-                .background(SurfaceColor)
+                .settingsRowSurface(label)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
         Text(
@@ -906,7 +923,7 @@ fun SettingsInfoRow(
             modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(6.dp))
-                .background(SurfaceColor)
+                .settingsRowSurface(label)
                 .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -953,7 +970,7 @@ fun SettingsButtonRow(
             modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(6.dp))
-                .background(SurfaceColor)
+                .settingsRowSurface(label)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,

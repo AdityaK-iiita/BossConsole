@@ -3,6 +3,14 @@ package ai.rever.boss.components.windows
 import BossTheme
 import ai.rever.boss.components.plugin.registries.SettingsPageRegistryImpl
 import ai.rever.boss.components.settings.keymap.EditableKeymapSettings
+import ai.rever.boss.components.settings.search.LocalSettingsHighlight
+import ai.rever.boss.components.settings.search.SettingsHighlight
+import ai.rever.boss.components.settings.search.SettingsSearchHit
+import ai.rever.boss.components.settings.search.SettingsSearchIndex
+import ai.rever.boss.components.settings.search.SettingsSearchMatcher
+import ai.rever.boss.components.settings.search.SettingsSearchState
+import ai.rever.boss.components.settings.search.handleSettingsSearchKey
+import ai.rever.boss.components.settings.search.pluginPageEntry
 import ai.rever.boss.components.settings.sections.*
 import ai.rever.boss.components.settings.shared.SettingsTheme.AccentColor
 import ai.rever.boss.components.settings.shared.SettingsTheme.BackgroundColor
@@ -37,6 +45,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -64,11 +73,16 @@ actual fun SettingsWindow(
             size = DisplayUtils.calculateSettingsWindowSize(),
             position = WindowPosition.Aligned(Alignment.Center),
         )
+    // Owned here rather than in SettingsContent because the key handler below is a Window
+    // parameter: it is the only place Cmd+F fires whatever holds focus inside.
+    val searchState = remember { SettingsSearchState() }
+
     Window(
         onCloseRequest = onClose,
         title = "BOSS Settings",
         state = windowState,
         icon = BossWindowIcon.painter,
+        onPreviewKeyEvent = { event -> handleSettingsSearchKey(event, searchState) },
     ) {
         ApplyBossWindowIcon(window)
 
@@ -106,7 +120,11 @@ actual fun SettingsWindow(
         // not dismissed by focus moving within the same application - keep floating above it.
         CompositionLocalProvider(LocalHeavyweightOverlays provides false) {
             BossTheme {
-                SettingsContent(initialSection = initialSection, sectionRequest = sectionRequest)
+                SettingsContent(
+                    initialSection = initialSection,
+                    sectionRequest = sectionRequest,
+                    searchState = searchState,
+                )
             }
         }
     }
@@ -116,6 +134,7 @@ actual fun SettingsWindow(
 private fun SettingsContent(
     initialSection: String? = null,
     sectionRequest: Int = 0,
+    searchState: SettingsSearchState = remember { SettingsSearchState() },
 ) {
     var selectedSection by remember { mutableStateOf(initialSectionFor(initialSection, visiblePageIds())) }
     var showResetConfirmation by remember { mutableStateOf(false) }
@@ -129,6 +148,58 @@ private fun SettingsContent(
             SettingsPageRegistryImpl.visiblePages()
         }
     var selectedPluginPageId by remember { mutableStateOf(initialPluginPageFor(initialSection, visiblePageIds())) }
+
+    // --- Search ---------------------------------------------------------------------------------
+
+    // What the search can find. Plugin pages are merged in here rather than declared in the index,
+    // which is what keeps results honest about RBAC and plugin lifecycle for free: a page the user
+    // cannot see is not in `pluginPages`, so it is not searchable either.
+    val searchEntries =
+        remember(pluginPages) {
+            SettingsSearchIndex.builtIn +
+                pluginPages.map { pluginPageEntry(it.pageId, it.displayName, it.description) }
+        }
+    val hits =
+        remember(searchState.query, searchEntries) {
+            SettingsSearchMatcher.search(searchState.query, searchEntries)
+        }
+    searchState.hits = hits
+
+    var highlight by remember { mutableStateOf<SettingsHighlight?>(null) }
+    var highlightNonce by remember { mutableStateOf(0) }
+    val searchFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(searchState.focusTick) {
+        // Guarded: the field is only in the tree once, but requestFocus throws if it is not
+        // attached yet, and this effect also runs once on first composition.
+        runCatching { searchFocusRequester.requestFocus() }
+    }
+
+    val applyHit: (SettingsSearchHit) -> Unit = { hit ->
+        val entry = hit.entry
+        when {
+            entry.pluginPageId != null -> {
+                selectedPluginPageId = entry.pluginPageId
+                highlight = null
+            }
+
+            entry.section != null -> {
+                selectedPluginPageId = null
+                selectedSection = entry.section
+                // A delegated section has no host control to point at, so pointing at nothing is
+                // the honest outcome - better than leaving a stale highlight from the last pick
+                // armed on a page it does not belong to.
+                highlight =
+                    if (entry.highlightable) {
+                        highlightNonce += 1
+                        SettingsHighlight(group = entry.group, label = entry.label, nonce = highlightNonce)
+                    } else {
+                        null
+                    }
+            }
+        }
+    }
+    searchState.onPick = applyHit
 
     // Apply a deep link that arrives while this window is ALREADY open.
     //
@@ -178,10 +249,22 @@ private fun SettingsContent(
                 onSectionChange = {
                     selectedPluginPageId = null
                     selectedSection = it
+                    // Picking a section by hand is a different intent from following a search hit;
+                    // leaving the wash armed would flash a control the user did not ask for.
+                    highlight = null
                 },
                 pluginPages = pluginPages,
                 selectedPluginPageId = selectedPluginPageId,
-                onPluginPageChange = { selectedPluginPageId = it },
+                onPluginPageChange = {
+                    selectedPluginPageId = it
+                    highlight = null
+                },
+                query = searchState.query,
+                onQueryChange = searchState::updateQuery,
+                hits = hits,
+                selectedHitIndex = searchState.selectedIndex,
+                onHitPicked = applyHit,
+                searchFocusRequester = searchFocusRequester,
             )
 
             // Divider
@@ -209,16 +292,18 @@ private fun SettingsContent(
                             .fillMaxWidth(),
                 ) {
                     val pluginPage = selectedPluginPageId?.let { id -> pluginPages.firstOrNull { it.pageId == id } }
-                    if (pluginPage != null) {
-                        PluginSettingsPageArea(
-                            page = pluginPage,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    } else {
-                        SettingsContentArea(
-                            section = selectedSection,
-                            modifier = Modifier.fillMaxSize(),
-                        )
+                    CompositionLocalProvider(LocalSettingsHighlight provides highlight) {
+                        if (pluginPage != null) {
+                            PluginSettingsPageArea(
+                                page = pluginPage,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        } else {
+                            SettingsContentArea(
+                                section = selectedSection,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
                     }
                 }
 
@@ -426,7 +511,11 @@ private fun SettingsContentArea(
     section: SettingsSection,
     modifier: Modifier = Modifier,
 ) {
-    val scrollState = rememberScrollState()
+    // Keyed on the section. Unkeyed, one scroll position was shared by every page, so leaving
+    // Security scrolled to the bottom and clicking Sidebar landed you at the bottom of a short
+    // page. Search makes that worse rather than merely odd: a hit near the top of a section would
+    // be scrolled past before its own bring-into-view ran, so the jump looked like it had failed.
+    val scrollState = key(section) { rememberScrollState() }
 
     // Sections that embed external panels or use LazyColumn (can't nest in verticalScroll)
     val embeddedPanelSections =

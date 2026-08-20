@@ -1,9 +1,12 @@
 package ai.rever.boss.components.settings.sidebar
 
+import ai.rever.boss.components.settings.search.SettingsSearchHit
+import ai.rever.boss.components.settings.search.SettingsSearchResults
 import ai.rever.boss.components.settings.shared.SettingsTheme.AccentColor
 import ai.rever.boss.components.settings.shared.SettingsTheme.SurfaceColor
 import ai.rever.boss.components.settings.shared.SettingsTheme.TextPrimary
 import ai.rever.boss.components.settings.shared.SettingsTheme.TextSecondary
+import ai.rever.boss.plugin.search.BossSearchBar
 import ai.rever.boss.plugin.ui.BossThemes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -19,6 +22,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -144,17 +149,69 @@ fun SettingsSidebar(
     pluginPages: List<ai.rever.boss.plugin.api.SettingsPageProvider> = emptyList(),
     selectedPluginPageId: String? = null,
     onPluginPageChange: (String) -> Unit = {},
+    query: String = "",
+    onQueryChange: (String) -> Unit = {},
+    hits: List<SettingsSearchHit> = emptyList(),
+    selectedHitIndex: Int = 0,
+    onHitPicked: (SettingsSearchHit) -> Unit = {},
+    searchFocusRequester: FocusRequester? = null,
 ) {
-    val scrollState = rememberScrollState()
-
     Column(
         modifier =
             Modifier
                 .width(NavRailWidth)
                 .fillMaxHeight()
-                .background(SurfaceColor)
+                .background(SurfaceColor),
+    ) {
+        // Pinned above the list rather than scrolled with it: the field is how you get out of a
+        // long result list, so it must not be the thing that scrolls away.
+        BossSearchBar(
+            query = query,
+            onQueryChange = onQueryChange,
+            placeholder = "Search settings",
+            modifier =
+                Modifier
+                    .padding(horizontal = 8.dp, vertical = 8.dp)
+                    .then(searchFocusRequester?.let { Modifier.focusRequester(it) } ?: Modifier),
+        )
+
+        if (query.isNotBlank()) {
+            SettingsSearchResults(
+                hits = hits,
+                selectedIndex = selectedHitIndex,
+                onPick = onHitPicked,
+                modifier = Modifier.weight(1f),
+            )
+        } else {
+            SectionRail(
+                selectedSection = selectedSection,
+                onSectionChange = onSectionChange,
+                pluginPages = pluginPages,
+                selectedPluginPageId = selectedPluginPageId,
+                onPluginPageChange = onPluginPageChange,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+/** The nav rail as it has always been: every section, then plugin pages under a divider. */
+@Composable
+private fun SectionRail(
+    selectedSection: SettingsSection,
+    onSectionChange: (SettingsSection) -> Unit,
+    pluginPages: List<ai.rever.boss.plugin.api.SettingsPageProvider>,
+    selectedPluginPageId: String?,
+    onPluginPageChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val scrollState = rememberScrollState()
+
+    Column(
+        modifier =
+            modifier
                 .verticalScroll(scrollState)
-                .padding(vertical = 8.dp),
+                .padding(bottom = 8.dp),
     ) {
         SettingsSection.entries.forEach { section ->
             val isSelected = selectedPluginPageId == null && section == selectedSection

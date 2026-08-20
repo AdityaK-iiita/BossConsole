@@ -1,5 +1,7 @@
 package ai.rever.boss.components.settings.keymap
 
+import ai.rever.boss.components.settings.search.LocalSettingsHighlight
+import ai.rever.boss.components.settings.search.settingsSearchTarget
 import ai.rever.boss.keymap.KeymapSettingsManager
 import ai.rever.boss.keymap.handler.KeymapValidator
 import ai.rever.boss.keymap.lifecycle.ShortcutLifecycleManager
@@ -14,6 +16,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.*
@@ -110,7 +113,27 @@ fun EditableKeymapSettings() {
         }
 
     // Make entire content scrollable by putting everything in LazyColumn
+    val listState = rememberLazyListState()
+
+    // Bring the tab-switching item into range when Settings search points at this page.
+    //
+    // The chips ask to be brought into view themselves, which is enough everywhere else in Settings
+    // but not inside a LazyColumn: an item that is not composed cannot be scrolled to, so a search
+    // hit did nothing whenever the page was already scrolled down its shortcut list. Scrolling to
+    // the item composes it, and the chip's own request then does the precise part.
+    //
+    // Triggered by the presence of a highlight rather than by matching its label, because every
+    // highlightable target on this page lives in that one item - and this page only composes when
+    // Shortcuts is the selected section, so a highlight meant for anywhere else cannot reach here.
+    val highlight = LocalSettingsHighlight.current
+    LaunchedEffect(highlight?.nonce) {
+        if (highlight != null) {
+            listState.animateScrollToItem(TAB_SWITCH_ITEM_INDEX)
+        }
+    }
+
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -406,6 +429,20 @@ fun EditableKeymapSettings() {
 /**
  * Category header for grouping shortcuts.
  */
+
+/**
+ * Where [TabSwitchModeSelector] sits in the page's `LazyColumn`.
+ *
+ * Counted from the four unconditional items above it: the shortcuts-count row, the conflict notice,
+ * the test-shortcuts card and the preset selector. A number rather than a key because
+ * `LazyListState` can only scroll by index, and the key-to-index map is not public.
+ *
+ * `EditableKeymapSettingsScrollTest` pins it by asserting the chip actually reaches the screen in a
+ * viewport too short to have composed it otherwise, so inserting an item above fails a test rather
+ * than silently scrolling to the wrong row.
+ */
+internal const val TAB_SWITCH_ITEM_INDEX = 4
+
 @Composable
 private fun TabSwitchModeSelector(
     selected: TabSwitchMode,
@@ -466,7 +503,11 @@ private fun TabSwitchModeChip(
                 .clip(RoundedCornerShape(6.dp))
                 .background(
                     if (isSelected) BossTheme.colors.signal.copy(alpha = 0.15f) else BossTheme.colors.ink,
-                ).border(
+                )
+                // After the chip's own fill, so the search wash paints over it rather than under,
+                // and inside the clip above so it takes the rounded corners.
+                .settingsSearchTarget(label)
+                .border(
                     width = 1.dp,
                     color = if (isSelected) BossTheme.colors.signal else BossTheme.colors.line,
                     shape = RoundedCornerShape(6.dp),
