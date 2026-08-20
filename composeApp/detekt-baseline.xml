@@ -98,7 +98,7 @@
     <ID>CyclomaticComplexMethod:Fluck.kt$@Composable fun BrowserErrorView( error: Throwable, url: String, retryCount: Int = 0, maxRetries: Int = 3, onRetry: (() -&gt; Unit)? = null, onReset: (() -&gt; Unit)? = null, onResetBrowser: (() -&gt; Unit)? = null, onRetryEngine: (() -&gt; Unit)? = null, )</ID>
     <ID>CyclomaticComplexMethod:Fluck.kt$FluckTabComponent$@Composable override fun Content()</ID>
     <ID>CyclomaticComplexMethod:FluckBrowserSettings.kt$@Composable fun FluckBrowserSettings()</ID>
-    <ID>CyclomaticComplexMethod:FluckEngine.kt$FluckEngine$fun setupKeyboardInterceptor( browser: com.teamdev.jxbrowser.browser.Browser, ownerWindowId: String? = null, )</ID>
+    <ID>CyclomaticComplexMethod:FluckEngine.kt$FluckEngine$fun setupKeyboardInterceptor( browser: com.teamdev.jxbrowser.browser.Browser, ownerWindowId: String? = null, zoomTarget: BrowserHandle? = null, )</ID>
     <ID>CyclomaticComplexMethod:FluckEngine.kt$FluckEngine$private fun classifyError(e: Throwable): EngineInitError</ID>
     <ID>CyclomaticComplexMethod:FluckEngine.kt$FluckEngine$private fun createEngineInstance( chromiumDir: java.nio.file.Path, profileDirPath: java.nio.file.Path, ): Engine</ID>
     <ID>CyclomaticComplexMethod:FluckEngine.kt$FluckEngine$private fun killStaleChromiumProcesses()</ID>
@@ -282,7 +282,7 @@
     <ID>LongMethod:Fluck.kt$FluckTabComponent$@Composable override fun Content()</ID>
     <ID>LongMethod:FluckBrowserSettings.kt$@Composable fun FluckBrowserSettings()</ID>
     <ID>LongMethod:FluckEngine.kt$FluckEngine$fun setupBrowserDownloadHandler(browser: com.teamdev.jxbrowser.browser.Browser)</ID>
-    <ID>LongMethod:FluckEngine.kt$FluckEngine$fun setupKeyboardInterceptor( browser: com.teamdev.jxbrowser.browser.Browser, ownerWindowId: String? = null, )</ID>
+    <ID>LongMethod:FluckEngine.kt$FluckEngine$fun setupKeyboardInterceptor( browser: com.teamdev.jxbrowser.browser.Browser, ownerWindowId: String? = null, zoomTarget: BrowserHandle? = null, )</ID>
     <ID>LongMethod:FluckEngine.kt$FluckEngine$private fun createEngineInstance( chromiumDir: java.nio.file.Path, profileDirPath: java.nio.file.Path, ): Engine</ID>
     <ID>LongMethod:FluckEngine.kt$FluckEngine$private fun killStaleChromiumProcesses()</ID>
     <ID>LongMethod:FluckEngine.kt$FluckEngine$suspend fun resetBrowserProfile(): ResetResult</ID>

@@ -12,8 +12,6 @@ import ai.rever.boss.components.plugin.PluginUpdateBridge
 import ai.rever.boss.components.plugin.StoreVersionLookup
 import ai.rever.boss.components.plugin.StoreVersionPrompt
 import ai.rever.boss.components.plugin.UpdateCheckOutcome
-import ai.rever.boss.components.plugin.tab_types.fluck.FluckTabComponent
-import ai.rever.boss.components.plugin.tab_types.fluck.FluckTabInfo
 import ai.rever.boss.components.sidebar.SidebarVisibilitySettings
 import ai.rever.boss.components.sidebar.SidebarVisibilitySettingsManager
 import ai.rever.boss.components.window_panel.NavigationDirection
@@ -23,6 +21,7 @@ import ai.rever.boss.components.workspaces.applyWorkspace
 import ai.rever.boss.components.workspaces.extractCurrentWorkspace
 import ai.rever.boss.components.workspaces.workspaceManager
 import ai.rever.boss.focusmode.FocusModeSettingsManager
+import ai.rever.boss.plugin.browser.ActiveBrowserRegistry
 import ai.rever.boss.plugin.tab.terminal.TerminalTabInfo
 import ai.rever.boss.plugin.tab.terminal.TerminalTabType
 import ai.rever.boss.project.DefaultWorkingDirectory
@@ -190,16 +189,25 @@ internal fun BossAppMenuActionEffects(
             }.launchIn(this)
     }
 
-    // Listen for zoom menu actions
+    // Listen for zoom menu actions.
+    //
+    // These act on the browser ActiveBrowserRegistry names for this window, not on a tab component
+    // the host can type-test. The live fluck tab is the dynamic plugin's FluckBrowserTabComponent,
+    // which implements ai.rever.boss.plugin.api.TabComponentWithUI directly and is not the built-in
+    // FluckTabComponent (dead since registerFluck() was disabled, and its zoom methods are no-op
+    // stubs anyway) - so `activeTab is FluckTabComponent` was a branch that could never be taken,
+    // which is why Zoom In / Zoom Out / Actual Size / Reload did nothing on every platform.
+    //
+    // splitViewState.activePanelId is deliberately no longer consulted: the registry already
+    // encodes it, because BrowserHandleImpl.Content reads LocalIsPanelActive, which
+    // BossMainWindowPanel provides as `panelId == activePanelId`. The registry additionally ranks a
+    // sidebar-slot browser below one in the main content area, which activePanelId alone cannot
+    // express. Asking both would be two answers to one question.
     LaunchedEffect(windowId) {
         MenuActionsHandler.zoomInEvents
             .onEach { eventWindowId ->
                 if (eventWindowId == windowId) {
-                    val activeTabsComponent = splitViewState.getPanelTabsComponent(splitViewState.activePanelId)
-                    val activeTab = activeTabsComponent?.getActiveComponent()
-                    if (activeTab is FluckTabComponent) {
-                        activeTab.zoomIn()
-                    }
+                    ActiveBrowserRegistry.activeIn(windowId)?.zoomIn()
                 }
             }.launchIn(this)
     }
@@ -208,11 +216,7 @@ internal fun BossAppMenuActionEffects(
         MenuActionsHandler.zoomOutEvents
             .onEach { eventWindowId ->
                 if (eventWindowId == windowId) {
-                    val activeTabsComponent = splitViewState.getPanelTabsComponent(splitViewState.activePanelId)
-                    val activeTab = activeTabsComponent?.getActiveComponent()
-                    if (activeTab is FluckTabComponent) {
-                        activeTab.zoomOut()
-                    }
+                    ActiveBrowserRegistry.activeIn(windowId)?.zoomOut()
                 }
             }.launchIn(this)
     }
@@ -221,11 +225,7 @@ internal fun BossAppMenuActionEffects(
         MenuActionsHandler.actualSizeEvents
             .onEach { eventWindowId ->
                 if (eventWindowId == windowId) {
-                    val activeTabsComponent = splitViewState.getPanelTabsComponent(splitViewState.activePanelId)
-                    val activeTab = activeTabsComponent?.getActiveComponent()
-                    if (activeTab is FluckTabComponent) {
-                        activeTab.actualSize()
-                    }
+                    ActiveBrowserRegistry.activeIn(windowId)?.resetZoom()
                 }
             }.launchIn(this)
     }
@@ -383,19 +383,14 @@ internal fun BossAppMenuActionEffects(
             }.launchIn(this)
     }
 
-    // Handle Browser Reload menu events
+    // Handle Browser Reload menu events. Same registry lookup, and for the same reason, as the
+    // zoom handlers above; the old double gate on FluckTabInfo *and* FluckTabComponent was two
+    // tests where the second could never pass.
     LaunchedEffect(windowId) {
         MenuActionsHandler.reloadBrowserEvents
             .onEach { eventWindowId ->
                 if (eventWindowId == windowId) {
-                    val activeTabsComp = splitViewState.getPanelTabsComponent(splitViewState.activePanelId)
-                    val activeTab = activeTabsComp?.tabsState?.value?.activeTab
-                    if (activeTab is FluckTabInfo) {
-                        val activeTabComponent = activeTabsComp.getActiveComponent()
-                        if (activeTabComponent is FluckTabComponent) {
-                            activeTabComponent.reload()
-                        }
-                    }
+                    ActiveBrowserRegistry.activeIn(windowId)?.reload()
                 }
             }.launchIn(this)
     }

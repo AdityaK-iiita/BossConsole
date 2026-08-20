@@ -1139,8 +1139,10 @@ internal class BrowserHandleImpl(
         // find chord.
         BrowserFindController.register(browser, browserLock)
 
-        // Setup keyboard interceptor for menu shortcuts
-        FluckEngine.setupKeyboardInterceptor(browser, ownerWindowId)
+        // Setup keyboard interceptor for menu shortcuts. Passing `this` mid-construction is safe:
+        // the interceptor only captures it in a callback lambda, which JxBrowser cannot invoke
+        // until a key reaches a browser that is by then fully built.
+        FluckEngine.setupKeyboardInterceptor(browser, ownerWindowId, zoomTarget = this)
 
         // Let a click in the page close any Swing popup menu open over it
         FluckEngine.setupSwingPopupDismissOnPageClick(browser)
@@ -2527,6 +2529,44 @@ internal class BrowserHandleImpl(
             onDispose {}
         }
 
+        // Read here rather than at their first use further down: the registration effect below and
+        // the find-bar effect both need them, and a CompositionLocal read has no ordering
+        // constraint. The comment explaining what they mean lives with the find-bar effect.
+        val isPanelActive = LocalIsPanelActive.current
+        val inMainPanel = LocalInMainWindowPanel.current
+
+        // Which browser the View menu's Zoom In / Zoom Out / Actual Size / Reload act on in this
+        // window. Registered from here rather than from the tab component because the tab
+        // component is a DYNAMIC plugin's class (fluck-browser's FluckBrowserTabComponent): the
+        // host cannot name its type, which is exactly why the `is FluckTabComponent` test in
+        // BossAppMenuActionEffects was always false and those four menu items did nothing.
+        //
+        // Its own effect rather than a key on the currentWindowId effect above: that one is
+        // deliberately about telemetry attribution and must not fire when only panel activation
+        // changed, whereas this one must - clicking into the other half of a split changes nothing
+        // else here.
+        //
+        // Keyed on all three inputs, so a tab moved to another window re-registers under the new
+        // one; a tab hidden and re-shown leaves and re-enters composition, and the fresh
+        // registration's higher sequence is what makes "most recently shown wins" true without a
+        // separate hook; and a split whose active panel changed re-registers both surfaces with
+        // current flags.
+        DisposableEffect(hostWindowId, isPanelActive, inMainPanel) {
+            val registrationWindowId = hostWindowId
+            val token =
+                if (registrationWindowId != null) {
+                    ActiveBrowserRegistry.register(
+                        handle = this@BrowserHandleImpl,
+                        windowId = registrationWindowId,
+                        inMainPanel = inMainPanel,
+                        panelActive = isPanelActive,
+                    )
+                } else {
+                    null
+                }
+            onDispose { ActiveBrowserRegistry.unregister(id, token) }
+        }
+
         // Track last navigation time for debouncing mouse button navigation
         var lastNavigationTime by remember { mutableStateOf(0L) }
 
@@ -2719,8 +2759,9 @@ internal class BrowserHandleImpl(
         // and claims only if nothing better did, which makes the winner deterministic. The
         // non-preferred branch still gets served, a beat later, so a sidebar-only browser is not
         // cut off.
-        val isPanelActive = LocalIsPanelActive.current
-        val inMainPanel = LocalInMainWindowPanel.current
+        //
+        // isPanelActive and inMainPanel are read further up, where the registry registration also
+        // needs them.
         LaunchedEffect(browser, hostWindowId, isPanelActive, inMainPanel) {
             if (hostWindowId == null || !isPanelActive) return@LaunchedEffect
             MenuActionsHandler.browserFindEvents.collect { eventWindowId ->
@@ -2904,6 +2945,11 @@ internal class BrowserHandleImpl(
         // Release find-in-page state and its timers before closing the browser: a debounce that
         // fires afterwards would search a closed object.
         BrowserFindController.dispose(browser)
+
+        // Unconditional, unlike the composition's token-guarded removal: the handle is gone, so
+        // there is no successor registration this could delete. Covers a handle disposed out from
+        // under a surface that is still composed - an engine generation bump does exactly that.
+        ActiveBrowserRegistry.unregister(id)
 
         // Close browser
         if (!browser.isClosed) {
