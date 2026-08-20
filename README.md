@@ -265,7 +265,7 @@ Scoped deliberately: this covers the **Docker and Kubernetes plugins only**, bec
 | **[Top of Mind](https://github.com/risa-labs-inc/boss-plugin-topofmind)** | Quick access to frequently used items |
 | **[Admin Role Management](https://github.com/risa-labs-inc/boss-plugin-admin-role-management) / [Role Creation](https://github.com/risa-labs-inc/boss-plugin-role-creation)** | Manage roles and permissions; build custom roles (admin) |
 
-*…and more in [boss-plugins](https://github.com/risa-labs-inc/boss-plugins), including analytics, atlas (chat about the current page), and hardware integrations.*
+*…and more in [boss-plugins](https://github.com/risa-labs-inc/boss-plugins), including analytics, fluck-agent (chat about the current page), and hardware integrations.*
 
 ---
 
