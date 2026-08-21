@@ -70,3 +70,20 @@ fun classifyCrash(
  * carve-outs are worthless unless they agree - and for one round they did not.
  */
 internal fun Throwable.hasUncontainableCause(): Boolean = chainOfCauses().any { isUncontainable(it) }
+
+/**
+ * Fatal to the *process*, as opposed to merely uncontainable by a repaint.
+ *
+ * A strict subset of [hasUncontainableCause], and the distinction earns its keep
+ * in [decideWindowExceptionRoute]. Both an [OutOfMemoryError] and a
+ * [StackOverflowError] are uncontainable there, but for different reasons and
+ * with different remedies: after an OOM the heap is gone and every recovery path
+ * — a status message, a coroutine, a repaint of every window — allocates on a
+ * heap that has nothing left, so there is nothing to do but escalate. After a
+ * stack overflow the stack has already unwound and the process is healthy; the
+ * only thing you must not do is re-enter whatever recursed. Quarantining the
+ * plugin that recursed does exactly that, and keeps the session.
+ *
+ * Kept narrow on purpose. Anything added here becomes a reason to end the app.
+ */
+internal fun Throwable.hasFatalCause(): Boolean = chainOfCauses().any { it is OutOfMemoryError }

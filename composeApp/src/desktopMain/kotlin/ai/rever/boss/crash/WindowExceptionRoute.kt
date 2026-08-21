@@ -16,6 +16,12 @@ enum class WindowExceptionRoute {
     /** Attributable to a plugin; the crash interceptor owns it. */
     PluginHandled,
 
+    /**
+     * Blamed on a plugin that has no boundary to hand it to. Quarantine that
+     * plugin and keep the app.
+     */
+    QuarantinePlugin,
+
     /** Contain: keep the window, recover the plugin panels, tell the user. */
     Contain,
 
@@ -37,19 +43,37 @@ enum class WindowExceptionRoute {
  *    it, and that carve-out is worthless unless this agrees: containing here
  *    would log, toast, and repaint every window, which under heap exhaustion is
  *    more allocation, three times, before the circuit breaker gives up.
- * 3. **Too many failures too fast** — the scene is not recovering, so stop
+ * 3. **Blamed on a plugin** ([blamedPluginId]) — quarantine it and keep the app.
+ *    This sits *below* the fatal check and *above* the uncontainable one, and
+ *    that placement is the whole point of the branch.
+ *
+ *    A `StackOverflowError` is uncontainable in the sense the boundary means:
+ *    you cannot recover by repainting, because the repaint re-enters whatever
+ *    recursed. But the stack has unwound by the time we get here — the *process*
+ *    is fine — and if we know which plugin did it we can remove that plugin
+ *    instead of repainting everything. Escalating was throwing away a session to
+ *    avoid a redraw we were not going to attempt anyway.
+ *
+ *    This is not hypothetical: `TerminalTabPluginAPIImpl.setPendingSidebarCommand`
+ *    recursed into itself, and BOSS exited. Every frame named the plugin; it just
+ *    had no boundary mounted, so [attributedPluginId] was null and nothing below
+ *    looked at the blame again.
+ * 4. **Too many failures too fast** — the scene is not recovering, so stop
  *    pretending. Note this consumes a slot in [policy], so it must be reached
  *    only for faults actually eligible for containment; that is why the
  *    uncontainable check sits above it rather than below.
- * 4. Otherwise contain.
+ * 5. Otherwise contain.
  */
 fun decideWindowExceptionRoute(
     throwable: Throwable,
     attributedPluginId: String?,
     policy: RenderCrashPolicy,
+    blamedPluginId: String? = null,
 ): WindowExceptionRoute =
     when {
         attributedPluginId != null -> WindowExceptionRoute.PluginHandled
+        throwable.hasFatalCause() -> WindowExceptionRoute.Escalate
+        blamedPluginId != null -> WindowExceptionRoute.QuarantinePlugin
         throwable.hasUncontainableCause() -> WindowExceptionRoute.Escalate
         !policy.recordFailureAndShouldContain() -> WindowExceptionRoute.Escalate
         else -> WindowExceptionRoute.Contain

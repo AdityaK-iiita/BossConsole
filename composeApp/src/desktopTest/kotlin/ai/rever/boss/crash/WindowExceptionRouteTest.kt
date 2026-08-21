@@ -108,4 +108,108 @@ class WindowExceptionRouteTest {
 
         assertEquals(WindowExceptionRoute.PluginHandled, route)
     }
+
+    // ---------------------------------------------------------------- blame
+
+    /**
+     * The case this branch exists for.
+     *
+     * `TerminalTabPluginAPIImpl.setPendingSidebarCommand` recursed into itself and
+     * threw StackOverflowError from a click. Every one of the ~1024 frames the JVM
+     * kept named the plugin, but terminal-tab had no boundary mounted, so
+     * attribution returned null and BOSS exited. The stack has unwound by the time
+     * we route; the process is fine, and there is a plugin to remove.
+     */
+    @Test
+    fun `a StackOverflowError blamed on a plugin is quarantined instead of ending the app`() {
+        val route =
+            decideWindowExceptionRoute(
+                StackOverflowError(),
+                attributedPluginId = null,
+                policy = policy(),
+                blamedPluginId = "ai.rever.boss.plugin.dynamic.terminaltab",
+            )
+
+        assertEquals(WindowExceptionRoute.QuarantinePlugin, route)
+    }
+
+    /**
+     * An OOM is fatal to the *process*, not merely uncontainable by a repaint.
+     * Blame changes nothing: every recovery path allocates, and there is no heap
+     * left to allocate from. This ordering is why hasFatalCause sits above the
+     * blame branch rather than below it.
+     */
+    @Test
+    fun `an OutOfMemoryError escalates even when a plugin is to blame`() {
+        val route =
+            decideWindowExceptionRoute(
+                OutOfMemoryError("Java heap space"),
+                attributedPluginId = null,
+                policy = policy(),
+                blamedPluginId = "some.plugin",
+            )
+
+        assertEquals(WindowExceptionRoute.Escalate, route)
+    }
+
+    @Test
+    fun `a wrapped OutOfMemoryError escalates even when a plugin is to blame`() {
+        val wrapped = java.lang.reflect.InvocationTargetException(OutOfMemoryError("heap"))
+
+        assertEquals(
+            WindowExceptionRoute.Escalate,
+            decideWindowExceptionRoute(wrapped, null, policy(), blamedPluginId = "some.plugin"),
+        )
+    }
+
+    /** A live boundary still wins: it can show a fallback, quarantining cannot. */
+    @Test
+    fun `an attributed crash prefers the boundary over quarantine`() {
+        val route =
+            decideWindowExceptionRoute(
+                StackOverflowError(),
+                attributedPluginId = "with.boundary",
+                policy = policy(),
+                blamedPluginId = "with.boundary",
+            )
+
+        assertEquals(WindowExceptionRoute.PluginHandled, route)
+    }
+
+    /** Nobody to blame leaves the previous behaviour exactly as it was. */
+    @Test
+    fun `an unblamed StackOverflowError still escalates`() {
+        assertEquals(
+            WindowExceptionRoute.Escalate,
+            decideWindowExceptionRoute(StackOverflowError(), null, policy(), blamedPluginId = null),
+        )
+    }
+
+    /**
+     * An ordinary fault with a name on it is quarantined rather than contained:
+     * containment is the narrowing loop for faults nobody can place, and running
+     * it when we already know the answer would rebuild every panel to rediscover
+     * it.
+     */
+    @Test
+    fun `a blamed ordinary fault is quarantined rather than contained`() {
+        assertEquals(
+            WindowExceptionRoute.QuarantinePlugin,
+            decideWindowExceptionRoute(IllegalStateException("boom"), null, policy(), "some.plugin"),
+        )
+    }
+
+    /** Quarantine must not consume containment budget - it is not a containment. */
+    @Test
+    fun `quarantining does not spend a containment slot`() {
+        val policy = policy()
+        repeat(5) { decideWindowExceptionRoute(StackOverflowError(), null, policy, "some.plugin") }
+
+        assertEquals(0, policy.recentFailureCount())
+        assertEquals(
+            WindowExceptionRoute.Contain,
+            decideWindowExceptionRoute(IllegalStateException("boom"), null, policy),
+            "a real containable fault should still have its full budget",
+        )
+    }
 }

@@ -12,6 +12,7 @@ import ai.rever.boss.crash.RenderCrashPolicy
 import ai.rever.boss.crash.RenderRecoveryToaster
 import ai.rever.boss.crash.WindowExceptionRoute
 import ai.rever.boss.crash.decideWindowExceptionRoute
+import ai.rever.boss.crash.hasFatalCause
 import ai.rever.boss.crash.noteRecoveryOutcome
 import ai.rever.boss.logging.GlobalLogCapture
 import ai.rever.boss.performance.PerformanceDataProviderImpl
@@ -72,6 +73,50 @@ private val logger = BossLogger.forComponent("Main")
  * is not just a `!=` against the last message.
  */
 private val renderRecoveryToaster = RenderRecoveryToaster()
+
+/**
+ * A fault we can pin on a plugin that has no boundary to hand it to.
+ *
+ * The gap this closes: [PluginCrashInterceptor.attributeToPlugin] only answers
+ * for plugins with a *mounted* error boundary, so a plugin with no UI on screen
+ * was unattributable — and an unattributable `StackOverflowError` escalated to
+ * ending the app. `TerminalTabPluginAPIImpl.setPendingSidebarCommand` recursed
+ * into itself from a click and took BOSS down that way, with all ~1024 surviving
+ * frames naming the plugin.
+ *
+ * Recorded through `recordCrash` rather than `recordRenderFault`: unlike
+ * [PluginRenderRecovery]'s narrowing loop, which quarantines a *suspect* and must
+ * not close somebody's tab on a guess, this is a plugin we can name — from the
+ * host's own execution-boundary tag, or from a stack made of nothing else.
+ *
+ * The window is kept. No repaint: nothing here rebuilt the scene, and repainting
+ * is what must not happen after a stack overflow.
+ */
+private fun quarantineBlamedPlugin(
+    pluginId: String,
+    throwable: Throwable,
+) {
+    logger.error(
+        LogCategory.UI,
+        "Render exception blamed on a plugin with no error boundary - quarantining it, window kept alive",
+        mapOf(
+            "pluginId" to pluginId,
+            "errorType" to throwable.javaClass.simpleName,
+        ),
+        throwable,
+    )
+    // Written to disk rather than raised as a dialog: the session survives, and a
+    // crash we recovered from has no business interrupting the user. Same
+    // reasoning as containRenderFault.
+    ai.rever.boss.crash.CrashHandler
+        .recordContained(throwable)
+    if (pluginId.isNotBlank()) {
+        // notify = true: this is the only message the user will get, and unlike a
+        // contained render fault there is a named plugin to put in it.
+        ai.rever.boss.plugin.sandbox.ui.PluginCrashRegistry
+            .recordCrash(pluginId, throwable)
+    }
+}
 
 /**
  * Keep the window, recover the plugin panels, and tell the user.
@@ -817,7 +862,17 @@ fun main(args: Array<String>) {
                         return WindowExceptionHandler { throwable ->
                             val pluginId =
                                 PluginCrashInterceptor.attributeToPlugin(throwable)
-                            when (decideWindowExceptionRoute(throwable, pluginId, renderCrashPolicy)) {
+                            // Not computed under an OOM. Blame walks the stack and
+                            // may call into the plugin manager, which allocates —
+                            // and a fatal heap is escalated regardless, so the
+                            // answer could not change the route anyway.
+                            val blamedPluginId =
+                                if (pluginId != null || throwable.hasFatalCause()) {
+                                    null
+                                } else {
+                                    PluginCrashInterceptor.blameFor(throwable)
+                                }
+                            when (decideWindowExceptionRoute(throwable, pluginId, renderCrashPolicy, blamedPluginId)) {
                                 WindowExceptionRoute.PluginHandled -> {
                                     logger.warn(
                                         LogCategory.SYSTEM,
@@ -828,6 +883,10 @@ fun main(args: Array<String>) {
                                         ),
                                     )
                                     PluginCrashInterceptor.tryHandle(pluginId.orEmpty(), throwable)
+                                }
+
+                                WindowExceptionRoute.QuarantinePlugin -> {
+                                    quarantineBlamedPlugin(blamedPluginId.orEmpty(), throwable)
                                 }
 
                                 WindowExceptionRoute.Contain -> {

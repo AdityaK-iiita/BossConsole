@@ -224,14 +224,65 @@ object PluginCrashInterceptor {
     }
 
     /**
-     * Attribute an exception to a plugin by inspecting the stack trace and thread name.
+     * Candidates to test a stack trace against: every plugin we know of, not just
+     * the ones with a mounted error boundary.
      *
-     * Checks for:
-     * 1. Thread name containing plugin sandbox identifier (`plugin-sandbox-<pluginId>`)
-     * 2. Stack frame class names matching registered plugin package prefixes
-     * 3. Stack frame classloaders resolved via cached plugin classloaders
+     * The loaded set comes from [KnownPlugins.ids], which the
+     * host installs — this module keeps no dependency on `plugin-loader`, the
+     * same reason [PluginExecutionBoundary] takes its resolver by injection.
+     */
+    private fun blameCandidates(): Set<String> = interceptors.keys + classLoaderToPluginId.values + KnownPlugins.ids()
+
+    /**
+     * Which plugin is *responsible* for [throwable], whether or not it has a live
+     * error boundary.
      *
-     * @return The plugin ID if attributed, null otherwise
+     * Distinct from [attributeToPlugin], which answers the narrower "which
+     * registered boundary should handle it" and is filtered to plugins that can
+     * actually render a fallback. Both questions are real and conflating them is
+     * what let a plugin take the host down:
+     *
+     * `TerminalTabPluginAPIImpl.setPendingSidebarCommand` recursed into itself and
+     * threw `StackOverflowError` from a click. Every one of the ~1024 frames the
+     * JVM kept was `ai.rever.boss.plugin.dynamic.terminaltab.*`, so the culprit was
+     * never in doubt — but terminal-tab had no boundary mounted at that moment, so
+     * [attributeToPlugin] returned null, `decideWindowExceptionRoute` fell through
+     * to the uncontainable check, and the app exited. A plugin with no UI on
+     * screen could kill the session precisely *because* it had no UI on screen.
+     *
+     * Same strategies, same order, minus the registration filter.
+     */
+    fun blameFor(
+        throwable: Throwable,
+        thread: Thread? = null,
+    ): String? {
+        // Exact: the host tagged this while calling into the plugin.
+        val tagged = PluginExecutionBoundary.attributionFor(throwable)
+        if (tagged != null) return tagged
+
+        val candidates = blameCandidates()
+        return if (candidates.isEmpty()) {
+            null
+        } else {
+            byThreadName(candidates, thread)
+                ?: byStackFrames(throwable, candidates)
+                ?: resolveByClassLoader(throwable) { true }
+        }
+    }
+
+    /**
+     * Which registered boundary should handle [throwable], or null.
+     *
+     * The narrow question, and the filter is the point of it: a boundary that is
+     * not mounted cannot render a fallback, so naming its plugin here would route
+     * the crash to nobody. [blameFor] answers the broader "who is responsible",
+     * which is what the window handler falls back on so that a plugin with no UI
+     * on screen can still be quarantined instead of ending the app.
+     *
+     * Strategies, in order: the execution-boundary tag, the sandbox thread name,
+     * stack-frame package prefixes, then defining classloaders.
+     *
+     * @return The plugin ID if attributed to a *mounted* boundary, null otherwise
      */
     fun attributeToPlugin(
         throwable: Throwable,
@@ -241,12 +292,7 @@ object PluginCrashInterceptor {
         //
         // Consulted first because it is the only exact source - the host tagged the
         // throwable while calling into the plugin, rather than inferring from frames
-        // that may already be gone. Without it the two attributions in this codebase
-        // could disagree about the same throwable: CrashHandler would say "plugin x"
-        // from the tag while this said "nobody", and the render router would then
-        // Contain or Escalate instead of handing it to the plugin's boundary. Two
-        // copies of one decision drifting apart is the failure this change set spent
-        // several rounds removing elsewhere.
+        // that may already be gone.
         //
         // Still filtered by `interceptors`: this function answers "which registered
         // boundary should handle it", and a tag naming a plugin with no live
@@ -256,64 +302,41 @@ object PluginCrashInterceptor {
             ?.takeIf { interceptors.containsKey(it) }
             ?.let { return it }
 
-        // Strategy 1: Check thread name for plugin sandbox threads
-        val threadName = thread?.name ?: Thread.currentThread().name
-        for (pluginId in interceptors.keys) {
-            if (threadName.contains("plugin-sandbox-$pluginId")) {
-                return pluginId
-            }
-        }
+        val mounted = interceptors.keys
+        return byThreadName(mounted, thread)
+            ?: byStackFrames(throwable, mounted)
+            ?: resolveByClassLoader(throwable) { interceptors.containsKey(it) }
+    }
 
-        // Strategy 2: Match stack trace class names against registered plugin package prefixes.
-        // Plugin classes follow the convention ai.rever.boss.plugin.dynamic.<shortId>.* where
-        // the pluginId is ai.rever.boss.plugin.dynamic.<shortId>. This is a fast string
-        // comparison that avoids class loading entirely.
-        try {
-            for (element in throwable.stackTrace) {
-                for (pluginId in interceptors.keys) {
-                    if (element.className.startsWith("$pluginId.")) {
-                        return pluginId
-                    }
-                }
+    /**
+     * Strategy 3, shared by [attributeToPlugin] and [blameFor].
+     *
+     * The slow path (O(stackFrames × classloaders), with `Class.forName` calls),
+     * so both callers reach it only after the cheap string comparisons have
+     * failed. [accept] is what differs between them: the narrow question filters
+     * to plugins with a live boundary, the broad one takes any plugin.
+     */
+    private fun resolveByClassLoader(
+        throwable: Throwable,
+        accept: (String) -> Boolean,
+    ): String? {
+        if (classLoaderToPluginId.isEmpty()) return null
+        logger.debug(
+            LogCategory.UI,
+            "Attribution falling through to strategy 3 (classloader resolution)",
+            mapOf(
+                "errorType" to throwable.javaClass.simpleName,
+                "stackDepth" to throwable.stackTrace.size,
+                "loaderCount" to classLoaderToPluginId.size,
+            ),
+        )
+        return runCatching {
+            throwable.stackTrace.firstNotNullOfOrNull { element ->
+                classLoaderToPluginId.entries
+                    .firstOrNull { (loader, pId) -> accept(pId) && definedBy(element.className, loader) }
+                    ?.value
             }
-        } catch (_: Throwable) {
-            // Don't let attribution itself crash
-        }
-
-        // Strategy 3: Resolve stack trace classes via cached plugin classloaders.
-        // This is the slow path (O(stackFrames × classloaders) with Class.forName calls).
-        // Strategies 1 and 2 should cover most cases; log when we fall through here.
-        if (classLoaderToPluginId.isNotEmpty()) {
-            logger.debug(
-                LogCategory.UI,
-                "Attribution falling through to strategy 3 (classloader resolution)",
-                mapOf(
-                    "errorType" to throwable.javaClass.simpleName,
-                    "stackDepth" to throwable.stackTrace.size,
-                    "loaderCount" to classLoaderToPluginId.size,
-                ),
-            )
-            try {
-                for (element in throwable.stackTrace) {
-                    for ((loader, pId) in classLoaderToPluginId) {
-                        if (!interceptors.containsKey(pId)) continue
-                        val clazz =
-                            try {
-                                Class.forName(element.className, false, loader)
-                            } catch (_: Throwable) {
-                                null
-                            }
-                        if (clazz != null && clazz.classLoader == loader) {
-                            return pId
-                        }
-                    }
-                }
-            } catch (_: Throwable) {
-                // Don't let attribution itself crash
-            }
-        }
-
-        return null
+        }.getOrNull() // Don't let attribution itself crash.
     }
 
     /**
@@ -345,3 +368,41 @@ object PluginCrashInterceptor {
         }
     }
 }
+
+// The three pure strategies live at file level rather than on the object. They
+// need only their arguments, and the object is at detekt's function ceiling -
+// which is a fair signal here, since none of these is part of its surface.
+
+/** Strategy 1: a sandbox thread names the plugin it was created for. */
+private fun byThreadName(
+    candidates: Set<String>,
+    thread: Thread?,
+): String? {
+    val name = thread?.name ?: Thread.currentThread().name
+    return candidates.firstOrNull { name.contains("plugin-sandbox-$it") }
+}
+
+/**
+ * Strategy 2: a frame's class sits under the plugin's package.
+ *
+ * The trailing dot is load-bearing - without it `dynamic.terminal` matches every
+ * frame of `dynamic.terminaltab` and blames the wrong plugin.
+ */
+private fun byStackFrames(
+    throwable: Throwable,
+    candidates: Set<String>,
+): String? =
+    runCatching {
+        throwable.stackTrace.firstNotNullOfOrNull { element ->
+            candidates.firstOrNull { element.className.startsWith("$it.") }
+        }
+    }.getOrNull() // Attribution must never be the thing that fails.
+
+/** Whether [loader] is the one that defined [className], not merely able to see it. */
+private fun definedBy(
+    className: String,
+    loader: ClassLoader,
+): Boolean =
+    runCatching {
+        Class.forName(className, false, loader).classLoader == loader
+    }.getOrDefault(false)

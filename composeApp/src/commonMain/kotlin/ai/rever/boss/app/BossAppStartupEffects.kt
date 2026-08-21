@@ -405,6 +405,17 @@ internal fun BossAppStartupEffects(state: BossAppState) {
         state.currentDefaultPlugin = plugin
         state.draggablePanelComponent.update()
 
+        // Teach crash attribution about plugins that have no UI on screen.
+        //
+        // Attribution used to consider only plugins with a *mounted* error
+        // boundary, so a plugin with nothing on screen could not be blamed for a
+        // crash it plainly caused - and an unattributable StackOverflowError
+        // escalates to ending the app. That is how a self-recursive method in
+        // terminal-tab took BOSS down from one click, with every surviving stack
+        // frame naming it. Read lazily, on the crash path only.
+        ai.rever.boss.plugin.sandbox.ui.KnownPlugins
+            .install { plugin.dynamicPluginManager.pluginStates.value.keys }
+
         // Initialize BookmarkAPIAccess so UI code can access bookmarks via the plugin system
         BookmarkAPIAccess.initialize(plugin)
 
