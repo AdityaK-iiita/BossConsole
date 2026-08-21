@@ -50,6 +50,17 @@ export interface AuthOptions {
    * For API-key auth this is checked against the key owner's CURRENT roles, so
    * revoking a role stops that key immediately rather than at key expiry.
    */
+  /**
+   * A permission the caller must hold, checked after authentication.
+   *
+   * NO ROUTE PASSES THIS TODAY. The five publish handlers did, until publishing
+   * grew a second way to be allowed (an organisation whose own publish policy
+   * admits you), which cannot be evaluated before the owning organisation is
+   * known - so that decision moved to services/publish-authz.ts, which calls
+   * `userHasPermission` below directly. Kept because it is the right shape for
+   * any route whose answer really is one permission, and because dropping it
+   * would leave `userHasPermission`'s 403-not-401 contract untested.
+   */
   requiredPermission?: string
 }
 

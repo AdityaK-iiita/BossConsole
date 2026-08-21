@@ -13,8 +13,12 @@ import {
   PublishFromGitHubMetadataResponseSchema,
   ErrorResponseSchema
 } from "../types/schemas.ts"
-import { getPlugin, createPlugin, setPluginTags, getPluginById, updatePlugin } from "../services/plugins.ts"
-import { resolvePublishOrg } from "../services/publish-org.ts"
+import { getPlugin, createPlugin, setPluginTags, getPluginById, getPluginOrgId, updatePlugin } from "../services/plugins.ts"
+import {
+  authorizeExistingPluginPublish,
+  authorizeNewPluginPublish,
+  preflightPublishAuthz,
+} from "../services/publish-authz.ts"
 import { createVersion, versionExists, finalizeVersion, getVersionById } from "../services/versions.ts"
 import { getSignedUploadUrl, getSignedDownloadUrl, generateJarPath, uploadJar } from "../services/storage.ts"
 import { getAuthenticatedUser, getUserDisplayName, logApiKeyAction } from "../utils/auth.ts"
@@ -30,7 +34,6 @@ import {
   JarTooLargeError,
 } from "../services/github.ts"
 import {
-  PLUGIN_CREATE_PERMISSION,
   registerDefinedPermissions,
   validateDeclaredPermissions,
 } from "../utils/permissions.ts"
@@ -82,7 +85,8 @@ const publishPluginRoute = createRoute({
       }
     },
     403: {
-      description: 'Caller lacks the plugins.create permission, or the API key lacks the publish scope',
+      description: 'Caller may not publish: no plugins.create permission and no organisation they '
+        + 'may publish for, or the API key lacks the publish scope',
       content: {
         'application/json': {
           schema: ErrorResponseSchema
@@ -111,13 +115,22 @@ publish.openapi(publishPluginRoute, async (ctx) => {
     const auth = await getAuthenticatedUser(supabase, authHeader, apiKeyHeader, {
       allowApiKey: true,
       requiredScopes: ['publish'],
-      requiredPermission: PLUGIN_CREATE_PERMISSION,
     })
 
     if (!auth.ok) {
       return ctx.json({ success: false, error: auth.error }, auth.status)
     }
     const user = auth.user
+
+    // May they publish at all, and for whom. One call because the two halves are not separable:
+    // the org-scoped path exists precisely because "may you publish" cannot be answered without
+    // knowing where the plugin would land. Authorised BEFORE any row is written - this handler runs
+    // as service role, so the `can_publish_org_plugin` WITH CHECK on `plugins` is bypassed and
+    // nothing else would refuse an organisation the caller has no rights in.
+    const authz = await authorizeNewPluginPublish(supabase, user, body.orgId)
+    if (!authz.ok) {
+      return ctx.json({ success: false, error: authz.error }, authz.status)
+    }
 
     // Reject dangling required permissions before creating any rows.
     const permCheck = await validateDeclaredPermissions(supabase, body)
@@ -134,14 +147,6 @@ publish.openapi(publishPluginRoute, async (ctx) => {
     // Get author display name - use custom name if provided, otherwise derive from email
     const authorName = body.authorName || await getUserDisplayName(supabase, user.userId)
 
-    // Which organisation owns it. Resolved and AUTHORISED before any row is written: this
-    // handler runs as service role, so the `can_publish_org_plugin` WITH CHECK on `plugins` is
-    // bypassed and nothing else would refuse an organisation the caller has no rights in.
-    const orgResolution = await resolvePublishOrg(supabase, user, body.orgId)
-    if (!orgResolution.ok) {
-      return ctx.json({ success: false, error: orgResolution.error }, orgResolution.status)
-    }
-
     // Create plugin
     const result = await createPlugin(
       supabase,
@@ -155,7 +160,10 @@ publish.openapi(publishPluginRoute, async (ctx) => {
       body.type,
       body.apiVersion,
       body.requiredPermissions,
-      orgResolution.orgId
+      authz.orgId,
+      // An organisation publishing for itself lands on its own shelf. A `plugins.create` publish
+      // keeps the column default ('public'), which is what every existing publisher gets.
+      authz.orgScoped ? 'org' : null
     )
 
     // Auto-register the permissions this plugin introduces (ungranted; admin grants later).
@@ -278,7 +286,6 @@ publish.openapi(publishVersionRoute, async (ctx) => {
     const auth = await getAuthenticatedUser(supabase, authHeader, apiKeyHeader, {
       allowApiKey: true,
       requiredScopes: ['version'],
-      requiredPermission: PLUGIN_CREATE_PERMISSION,
     })
 
     if (!auth.ok) {
@@ -295,6 +302,18 @@ publish.openapi(publishVersionRoute, async (ctx) => {
     // Verify ownership
     if (plugin.authorId !== user.userId) {
       return ctx.json({ success: false, error: 'Not authorized to publish to this plugin' }, 403)
+    }
+
+    // May they publish a version of THIS plugin. Gated on the organisation the plugin is already
+    // recorded against, never a fresh resolution: ownership is a property of the plugin, so
+    // re-deriving here would let a membership change move somebody else's work.
+    const authz = await authorizeExistingPluginPublish(
+      supabase,
+      user,
+      await getPluginOrgId(supabase, plugin.id)
+    )
+    if (!authz.ok) {
+      return ctx.json({ success: false, error: authz.error }, authz.status)
     }
 
     // Check if version already exists
@@ -443,7 +462,6 @@ publish.openapi(finalizeVersionRoute, async (ctx) => {
     const auth = await getAuthenticatedUser(supabase, authHeader, apiKeyHeader, {
       allowApiKey: true,
       requiredScopes: ['finalize'],
-      requiredPermission: PLUGIN_CREATE_PERMISSION,
     })
 
     if (!auth.ok) {
@@ -466,6 +484,18 @@ publish.openapi(finalizeVersionRoute, async (ctx) => {
     // Verify ownership
     if (plugin.authorId !== user.userId) {
       return ctx.json({ success: false, error: 'Not authorized' }, 403)
+    }
+
+    // May they publish a version of THIS plugin. Gated on the organisation the plugin is already
+    // recorded against, never a fresh resolution: ownership is a property of the plugin, so
+    // re-deriving here would let a membership change move somebody else's work.
+    const authz = await authorizeExistingPluginPublish(
+      supabase,
+      user,
+      await getPluginOrgId(supabase, plugin.id)
+    )
+    if (!authz.ok) {
+      return ctx.json({ success: false, error: authz.error }, authz.status)
     }
 
     // Recompute the hash server-side — the store signature must anchor to
@@ -636,13 +666,21 @@ publish.openapi(publishFromGitHubRoute, async (ctx) => {
     const auth = await getAuthenticatedUser(supabase, authHeader, apiKeyHeader, {
       allowApiKey: true,
       requiredScopes: ['publish'],
-      requiredPermission: PLUGIN_CREATE_PERMISSION,
     })
 
     if (!auth.ok) {
       return ctx.json({ success: false, error: auth.error }, auth.status)
     }
     const user = auth.user
+
+    // Refuse a caller with no publishing rights at all BEFORE the GitHub fetch below. The full
+    // decision needs the manifest (it is what says whether the plugin already exists, and so which
+    // organisation to authorise against), and the manifest costs a release download - which is not
+    // work to do on behalf of somebody who cannot publish anything anywhere.
+    const preflight = await preflightPublishAuthz(supabase, user)
+    if (preflight) {
+      return ctx.json({ success: false, error: preflight.error }, preflight.status)
+    }
 
     // Fetch plugin from GitHub
     console.log(`Fetching plugin from GitHub: ${body.githubUrl}`)
@@ -682,6 +720,17 @@ publish.openapi(publishFromGitHubRoute, async (ctx) => {
         }, 403)
       }
 
+      // May they publish a version of THIS plugin - gated on the organisation it is already
+      // recorded against, not on a fresh resolution of the caller's memberships.
+      const authz = await authorizeExistingPluginPublish(
+        supabase,
+        user,
+        await getPluginOrgId(supabase, existingPlugin.id)
+      )
+      if (!authz.ok) {
+        return ctx.json({ success: false, error: authz.error }, authz.status)
+      }
+
       pluginUuid = existingPlugin.id
 
       // Update plugin metadata from manifest
@@ -699,12 +748,11 @@ publish.openapi(publishFromGitHubRoute, async (ctx) => {
       isNewPlugin = true
       const authorName = manifest.author || await getUserDisplayName(supabase, user.userId)
 
-      // Which organisation owns it. Resolved and AUTHORISED before any row is written: this
-      // handler runs as service role, so the `can_publish_org_plugin` WITH CHECK on `plugins` is
-      // bypassed and nothing else would refuse an organisation the caller has no rights in.
-      const orgResolution = await resolvePublishOrg(supabase, user, body.orgId)
-      if (!orgResolution.ok) {
-        return ctx.json({ success: false, error: orgResolution.error }, orgResolution.status)
+      // Which organisation owns it, and whether they may publish for it at all. The preflight
+      // above only established that they can publish SOMEWHERE.
+      const authz = await authorizeNewPluginPublish(supabase, user, body.orgId)
+      if (!authz.ok) {
+        return ctx.json({ success: false, error: authz.error }, authz.status)
       }
 
       const result = await createPlugin(
@@ -719,7 +767,9 @@ publish.openapi(publishFromGitHubRoute, async (ctx) => {
         ((manifest.type as string) || 'panel').toLowerCase(),
         manifest.apiVersion,
         manifest.requiredPermissions || [],
-        orgResolution.orgId
+        authz.orgId,
+        // An organisation publishing for itself lands on its own shelf, not the global one.
+        authz.orgScoped ? 'org' : null
       )
 
       pluginUuid = result.id
@@ -858,13 +908,21 @@ publish.openapi(publishFromGitHubMetadataRoute, async (ctx) => {
     const auth = await getAuthenticatedUser(supabase, authHeader, apiKeyHeader, {
       allowApiKey: true,
       requiredScopes: ['publish'],
-      requiredPermission: PLUGIN_CREATE_PERMISSION,
     })
 
     if (!auth.ok) {
       return ctx.json({ success: false, error: auth.error }, auth.status)
     }
     const user = auth.user
+
+    // Refuse a caller with no publishing rights at all BEFORE the GitHub work below. The full
+    // decision needs the manifest (it is what says whether the plugin already exists, and so which
+    // organisation to authorise against), and reaching it costs several GitHub round trips plus a
+    // remote hash - not work to do on behalf of somebody who cannot publish anything anywhere.
+    const preflight = await preflightPublishAuthz(supabase, user)
+    if (preflight) {
+      return ctx.json({ success: false, error: preflight.error }, preflight.status)
+    }
 
     // Resolve the GitHub download URL for the JAR
     const parsed = parseGitHubUrl(body.githubUrl)
@@ -977,6 +1035,18 @@ publish.openapi(publishFromGitHubMetadataRoute, async (ctx) => {
           error: 'Not authorized to publish to this plugin. You are not the owner.'
         }, 403)
       }
+
+      // May they publish a version of THIS plugin - gated on the organisation it is already
+      // recorded against, not on a fresh resolution of the caller's memberships.
+      const authz = await authorizeExistingPluginPublish(
+        supabase,
+        user,
+        await getPluginOrgId(supabase, existingPlugin.id)
+      )
+      if (!authz.ok) {
+        return ctx.json({ success: false, error: authz.error }, authz.status)
+      }
+
       pluginUuid = existingPlugin.id
 
       await updatePlugin(supabase, pluginUuid, {
@@ -991,12 +1061,11 @@ publish.openapi(publishFromGitHubMetadataRoute, async (ctx) => {
       isNewPlugin = true
       const authorName = manifest.author || await getUserDisplayName(supabase, user.userId)
 
-      // Which organisation owns it. Resolved and AUTHORISED before any row is written: this
-      // handler runs as service role, so the `can_publish_org_plugin` WITH CHECK on `plugins` is
-      // bypassed and nothing else would refuse an organisation the caller has no rights in.
-      const orgResolution = await resolvePublishOrg(supabase, user, body.orgId)
-      if (!orgResolution.ok) {
-        return ctx.json({ success: false, error: orgResolution.error }, orgResolution.status)
+      // Which organisation owns it, and whether they may publish for it at all. The preflight
+      // above only established that they can publish SOMEWHERE.
+      const authz = await authorizeNewPluginPublish(supabase, user, body.orgId)
+      if (!authz.ok) {
+        return ctx.json({ success: false, error: authz.error }, authz.status)
       }
 
       const result = await createPlugin(
@@ -1011,7 +1080,9 @@ publish.openapi(publishFromGitHubMetadataRoute, async (ctx) => {
         ((manifest.type as string) || 'panel').toLowerCase(),
         manifest.apiVersion || '1.0.0',
         manifest.requiredPermissions || [],
-        orgResolution.orgId
+        authz.orgId,
+        // An organisation publishing for itself lands on its own shelf, not the global one.
+        authz.orgScoped ? 'org' : null
       )
       pluginUuid = result.id
     }

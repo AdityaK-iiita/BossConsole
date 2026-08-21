@@ -17,6 +17,9 @@
  * `user_can_publish_org_plugin` is that single source of truth - it evaluates `publish_role_id`
  * (which overrides) then `publish_policy`, and short-circuits true for a global admin. It is
  * deliberately not reimplemented in TypeScript.
+ *
+ * This module answers "which organisation, and may you publish for it". Whether you may publish
+ * AT ALL is services/publish-authz.ts, which layers the `plugins.create` / org-scoped rule on top.
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js"
@@ -37,10 +40,36 @@ export interface PublishingCaller {
   apiKeyOrgId?: string
 }
 
+/**
+ * How the organisation was arrived at.
+ *
+ * Carried because `orgId: null` means three different things and the org-scoped gate in
+ * publish-authz.ts has to tell them apart to refuse honestly: "you named nothing and have no single
+ * organisation to fall back on" and "your organisation's publish policy refuses you" send the
+ * reader to completely different places. Nothing in the pre-existing behaviour reads it.
+ */
+export type PublishOrgSource =
+  /** The caller named it, or their API key is bound to it. Authorised. */
+  | "explicit"
+  /** Their sole non-system organisation, authorised. */
+  | "derived"
+  /** Nothing named and the caller belongs to no non-system organisation. `orgId` is null. */
+  | "no_org"
+  /** Nothing named and more than one candidate, so there was nothing to derive. `orgId` is null. */
+  | "many_orgs"
+  /** A sole candidate existed and its publish policy refused them. `orgId` is null. */
+  | "policy_refused"
+  /** The membership list could not be read at all. `orgId` is null. */
+  | "unreadable"
+
 /** The organisation to record, or a refusal to hand back to the caller. */
 export type PublishOrgResolution =
-  | { ok: true; orgId: string | null }
+  | { ok: true; orgId: string | null; source: PublishOrgSource }
   | { ok: false; status: 403 | 500; error: string }
+
+/** The one wording for "we could not ask the database", shared by both gates. */
+export const ORG_CHECK_UNAVAILABLE =
+  "Could not verify your publishing rights for that organisation. Please try again."
 
 /**
  * Decide and authorise the owning organisation for a NEW plugin.
@@ -79,11 +108,7 @@ export async function resolvePublishOrg(
       // 500, not 503, because 503 is not in these routes' declared response set and widening
       // three OpenAPI definitions to express "transient" is not worth it. The message carries the
       // retry advice, which is the part the caller acts on.
-      return {
-        ok: false,
-        status: 500,
-        error: "Could not verify your publishing rights for that organisation. Please try again.",
-      }
+      return { ok: false, status: 500, error: ORG_CHECK_UNAVAILABLE }
     }
     if (!allowed) {
       return {
@@ -92,18 +117,21 @@ export async function resolvePublishOrg(
         error: "You do not have permission to publish plugins for that organisation.",
       }
     }
-    return { ok: true, orgId: explicit }
+    return { ok: true, orgId: explicit, source: "explicit" }
   }
 
-  const sole = await soleNonSystemOrg(supabase, user.userId)
-  if (!sole) return { ok: true, orgId: null }
+  const candidates = await nonSystemOrgIds(supabase, user.userId)
+  if (candidates === null) return { ok: true, orgId: null, source: "unreadable" }
+  if (candidates.length === 0) return { ok: true, orgId: null, source: "no_org" }
+  if (candidates.length > 1) return { ok: true, orgId: null, source: "many_orgs" }
+  const sole = candidates[0]
 
   // Authorised too, even though it was derived rather than named: membership alone is not
   // publishing rights. An organisation with publish_policy = 'owner_only' must not have every
   // member's plugins land on it.
   const allowed = await canPublishForOrg(supabase, user.userId, sole)
-  if (allowed !== true) return { ok: true, orgId: null }
-  return { ok: true, orgId: sole }
+  if (allowed !== true) return { ok: true, orgId: null, source: "policy_refused" }
+  return { ok: true, orgId: sole, source: "derived" }
 }
 
 /**
@@ -111,8 +139,11 @@ export async function resolvePublishOrg(
  *
  * Null is distinct from false on purpose: false is a decision, null is an outage, and the caller
  * treats them differently for an explicitly requested organisation.
+ *
+ * Exported for publish-authz.ts, which asks the same question about the organisation a plugin
+ * ALREADY belongs to - a path with no resolution to do.
  */
-async function canPublishForOrg(
+export async function canPublishForOrg(
   supabase: SupabaseClient,
   userId: string,
   orgId: string,
@@ -129,18 +160,24 @@ async function canPublishForOrg(
 }
 
 /**
- * The caller's only non-system organisation, or null when there is none or more than one.
+ * The caller's ACTIVE, NON-SYSTEM organisations, or null when the list could not be read.
  *
  * Read through `get_my_organisations(p_actor_id)` rather than the membership tables directly.
  * `p_actor_id` is the service_role-only impersonation parameter that exists for exactly this: the
  * function runs as service role, so `auth.uid()` is null and the RPC's default subject would be
  * nobody. Going through the RPC also means the definition of "my organisations" stays in one
  * place instead of being restated as a join here.
+ *
+ * System organisations are dropped here rather than by each caller, which is what makes this
+ * usable as the org-scoped gate's is_system test as well: an id absent from this list is either
+ * not the caller's or is `@boss`, and both must refuse. Null (unreadable) is NOT an empty list -
+ * the derivation treats it as "derive nothing" while the gate has to fail closed, so the
+ * distinction has to survive the return.
  */
-async function soleNonSystemOrg(
+export async function nonSystemOrgIds(
   supabase: SupabaseClient,
   userId: string,
-): Promise<string | null> {
+): Promise<string[] | null> {
   const { data, error } = await supabase.rpc("get_my_organisations", { p_actor_id: userId })
   if (error) {
     console.error("get_my_organisations failed while resolving a publish organisation:", error.message)
@@ -158,6 +195,5 @@ async function soleNonSystemOrg(
     .map((row) => (typeof row.id === "string" ? row.id : null))
     .filter((id): id is string => id !== null)
 
-  const unique = [...new Set(candidates)]
-  return unique.length === 1 ? unique[0] : null
+  return [...new Set(candidates)]
 }

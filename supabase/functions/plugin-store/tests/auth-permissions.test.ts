@@ -112,9 +112,17 @@ function stubSupabase(opts: StubOptions = {}): { client: SupabaseClient; calls: 
 
 // ---------------------------------------------------------------------------
 // Session (JWT) auth
+//
+// These exercise `getAuthenticatedUser`'s `requiredPermission` option, which is
+// the mechanism, not the publish policy. No route passes it today: publishing
+// moved to services/publish-authz.ts, where holding `plugins.create` is one of
+// TWO ways to be allowed (the other being an organisation whose publish policy
+// admits you). What is asserted here — a permission miss is 403 and not 401,
+// admins bypass, an API key is judged by its owner's live roles — is what that
+// module is built on top of, so it all still has to hold.
 // ---------------------------------------------------------------------------
 
-Deno.test("JWT holding plugins.create may publish", async () => {
+Deno.test("JWT holding plugins.create satisfies a requiredPermission gate", async () => {
   const { client } = stubSupabase()
   const token = jwt({ is_admin: false, user_permissions: ["plugins.create", "api_key.create"] })
 
@@ -132,7 +140,9 @@ Deno.test("JWT holding plugins.create may publish", async () => {
 Deno.test("JWT without plugins.create is 403, not 401", async () => {
   const { client } = stubSupabase()
   // A plain user: this is exactly what every authenticated caller could do
-  // before plugins.create existed.
+  // before plugins.create existed. On the publish path such a caller now gets a
+  // second chance through their organisation — see tests/publish-authz.test.ts —
+  // but the permission miss itself still has to read as 403.
   const token = jwt({ is_admin: false, user_permissions: ["user.read"] })
 
   const outcome = await getAuthenticatedUser(client, `Bearer ${token}`, undefined, {
@@ -192,7 +202,7 @@ Deno.test("no credentials is 401", async () => {
 // API-key auth — permissions come from the owner's roles, not a claim
 // ---------------------------------------------------------------------------
 
-Deno.test("API key publishes when its owner still holds plugins.create", async () => {
+Deno.test("API key auth resolves permissions from its OWNER, not from a claim", async () => {
   const { client, calls } = stubSupabase({ apiKey: { scopes: ["publish"] }, probe: true })
 
   const outcome = await getAuthenticatedUser(client, undefined, VALID_KEY, {
@@ -321,12 +331,19 @@ Deno.test("userHasPermission reads the claim for JWT callers without a round tri
 /**
  * The tests above prove the gate WORKS; these prove it is CONNECTED.
  *
- * Deleting `requiredPermission` from one of the five publish handlers leaves the
- * whole suite green and still type-checks (verified by mutation: 5 gates -> 4,
- * 15/15 passing) — the handlers are the only place the wiring exists, and there
- * is no HTTP harness here to exercise them. Reading the source is the cheap
- * guard; it costs one file read and catches the one edit most likely to reopen
- * publishing to every authenticated user.
+ * Deleting the gate from one of the five publish handlers leaves the whole suite
+ * green and still type-checks (verified by mutation: 5 gates -> 4, 15/15
+ * passing) — the handlers are the only place the wiring exists, and there is no
+ * HTTP harness here to exercise them. Reading the source is the cheap guard; it
+ * costs one file read and catches the one edit most likely to reopen publishing
+ * to every authenticated user.
+ *
+ * The gate used to be `requiredPermission: PLUGIN_CREATE_PERMISSION` on every
+ * handler. It is now one of the services/publish-authz.ts calls, because an
+ * organisation's own publish policy is a second way to be allowed and it cannot
+ * be evaluated before the owning organisation is known. So this asserts the
+ * INVARIANT — no publish handler without a gate — rather than one spelling of
+ * it, and accepts either.
  *
  * If these ever become awkward, replace them with real route tests — do not
  * simply delete them.
@@ -334,18 +351,37 @@ Deno.test("userHasPermission reads the claim for JWT callers without a round tri
 const routeSource = (name: string) =>
   Deno.readTextFileSync(new URL(`../routes/${name}`, import.meta.url))
 
-Deno.test("every publish handler passes requiredPermission to getAuthenticatedUser", () => {
+Deno.test("every publish handler gates on something", () => {
   const src = routeSource("publish.ts")
 
   const authCalls = src.match(/getAuthenticatedUser\(/g)?.length ?? 0
   assertEquals(authCalls, 5, "the five publishing handlers: publish, version, finalize, github, github/metadata")
 
-  const gated = src.match(/requiredPermission:\s*PLUGIN_CREATE_PERMISSION/g)?.length ?? 0
-  assertEquals(
-    gated,
-    authCalls,
-    "a getAuthenticatedUser call without requiredPermission is an ungated publish path",
-  )
+  // One segment per handler. The trailing createRoute definition each segment picks up cannot
+  // contain a gate, so it can only ever make this test stricter, never laxer.
+  const handlers = src.split("publish.openapi(").slice(1)
+  assertEquals(handlers.length, authCalls, "one openapi handler per getAuthenticatedUser call")
+
+  const GATES = [
+    "authorizeNewPluginPublish(",
+    "authorizeExistingPluginPublish(",
+    "preflightPublishAuthz(",
+    "requiredPermission:",
+  ]
+  handlers.forEach((handler, i) => {
+    assert(
+      GATES.some((gate) => handler.includes(gate)),
+      `publish handler #${i + 1} reaches a write with no authorization call - ` +
+        "every authenticated user can publish through it",
+    )
+  })
+
+  // The two GitHub handlers must refuse a caller with no publishing rights BEFORE they pull a
+  // release archive. Their real gate needs the manifest, which costs that download, so the
+  // preflight is the only thing standing between an authenticated non-publisher and making this
+  // function fetch arbitrary GitHub assets.
+  const preflights = src.match(/preflightPublishAuthz\(/g)?.length ?? 0
+  assertEquals(preflights, 2, "both GitHub publish handlers preflight before fetching")
 
   // Each handler must also surface the outcome's own status rather than a
   // hardcoded 401, or a 403 would be reported as "who are you?". Matched on the

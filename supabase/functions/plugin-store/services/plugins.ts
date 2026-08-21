@@ -175,6 +175,39 @@ export async function getPluginById(
 }
 
 /**
+ * The organisation a plugin already belongs to, by internal UUID.
+ *
+ * Its own one-column read rather than a field on `getPlugin`: that goes through the
+ * `get_plugin_with_stats` RPC, whose `RETURNS TABLE` cannot be `CREATE OR REPLACE`d - adding a
+ * column means a DROP, and 20260803000000_plugins_org_ownership.sql's header spells out why that
+ * is not something to do casually (the grants go with it, and the store browses anonymously).
+ *
+ * Null is a real answer: `plugins.org_id` is nullable, with `plugins_default_org` filling it in on
+ * INSERT. `authorizeExistingPluginPublish` treats null as "not an organisation you can claim",
+ * which is right in both directions - the trigger's answer for it would have been `@boss`.
+ *
+ * Throws on an unexpected failure rather than returning null, so an outage can never read as
+ * "belongs to no organisation" and widen a gate.
+ */
+export async function getPluginOrgId(
+  supabase: SupabaseClient,
+  id: string
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('plugins')
+    .select('org_id')
+    .eq('id', id)
+    .single()
+
+  if (error) {
+    console.error('Error getting plugin organisation:', error)
+    throw new Error(`Failed to get plugin organisation: ${error.message}`)
+  }
+
+  return (data?.org_id as string | null) ?? null
+}
+
+/**
  * Create a new plugin
  */
 export async function createPlugin(
@@ -197,7 +230,17 @@ export async function createPlugin(
    * both become the boss organisation. Leaving the key out keeps that fallback visibly the
    * trigger's decision rather than looking like this function chose it.
    */
-  orgId: string | null = null
+  orgId: string | null = null,
+  /**
+   * Store visibility, or null to take the column default.
+   *
+   * OMITTED when null for the same reason as `org_id` above: `plugins.visibility` defaults to
+   * `'public'` and rule (3) of 20260803000000_plugins_org_ownership.sql says it must, because this
+   * function did not set it and any other default would have unpublished every new plugin. Passing
+   * `'org'` is how an org-scoped publish - one allowed by an organisation's own publish policy
+   * rather than by `plugins.create` - lands on that organisation's shelf instead of the global one.
+   */
+  visibility: 'public' | 'org' | 'unlisted' | null = null
 ): Promise<{ id: string }> {
   const { data, error } = await supabase
     .from('plugins')
@@ -213,7 +256,8 @@ export async function createPlugin(
       api_version: apiVersion,
       required_permissions: requiredPermissions,
       published: true,
-      ...(orgId ? { org_id: orgId } : {})
+      ...(orgId ? { org_id: orgId } : {}),
+      ...(visibility ? { visibility } : {})
     })
     .select('id')
     .single()
