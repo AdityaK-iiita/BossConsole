@@ -35,6 +35,11 @@ on:
         required: true
         default: true
         type: boolean
+      allow_unsigned_windows:
+        description: 'Publish even if the Windows MSI is unsigned (signing is broken and you need this release out)'
+        required: false
+        default: false
+        type: boolean
   # Allow this workflow to be called from other workflows (e.g., promote-release)
   workflow_call:
     inputs:
@@ -60,6 +65,11 @@ on:
         type: boolean
       skip_version_increment:
         description: 'Skip version increment (for promotion)'
+        required: false
+        default: false
+        type: boolean
+      allow_unsigned_windows:
+        description: 'Publish even if the Windows MSI is unsigned'
         required: false
         default: false
         type: boolean
@@ -1063,6 +1073,10 @@ jobs:
     needs: prepare-version
     if: needs.prepare-version.outputs.should-build == 'true'
     runs-on: windows-latest
+    # What the signature actually came out as, so create-release can say so in
+    # the release body rather than leaving it to whoever reads the run log.
+    outputs:
+      msi-signature: ${{ steps.verify-signature.outputs.status }}
 
     steps:
       - name: 📥 Checkout Repository
@@ -1289,6 +1303,40 @@ jobs:
           SM_CLIENT_CERT_FILE: ${{ runner.temp }}\Certificate_pkcs12.p12
           SM_CLIENT_CERT_PASSWORD: ${{ secrets.CODE_SIGNING_CLIENT_CERT_PASSWORD }}
 
+      # The missing step, and the reason every MSI since the signing secrets landed
+      # on 2026-07-21 came out unsigned: `smctl sign` shells out to signtool, which
+      # looks for the certificate in the Windows certificate store, and nothing had
+      # ever put it there. DigiCert's own pipeline guidance is to run certsync as
+      # the first step of every signing job. Without it smctl prints
+      # "signCommand command for file <path> FAILED" and exits 0, so the release
+      # shipped an unsigned installer under a green build.
+      #
+      # healthcheck / ksp list / keypair ls come along because smctl gives no
+      # reason for a signing failure. If certsync is not the whole story, the next
+      # run says which of the credential, the KSP registration or the keypair alias
+      # is wrong, instead of costing another release to find out.
+      #
+      # continue-on-error: this step is diagnostics plus a precondition, and the
+      # authoritative verdict is "Verify MSI Signature" reading the file itself. A
+      # certsync failure should let the sign attempt proceed and be judged there.
+      - name: Sync KeyLocker Certificate to the Windows Store
+        if: ${{ steps.check-secret.outputs.can_sign == 'true' }}
+        continue-on-error: true
+        run: |
+          rem smctl exits 0 whether a subcommand works or not, and cmd keeps going
+          rem after a failure, so all four run and the log carries every answer.
+          smctl healthcheck
+          smctl windows ksp list
+          smctl keypair ls
+          smctl windows certsync --keypair-alias="%KEYPAIR_ALIAS%"
+        shell: cmd
+        env:
+          SM_HOST: ${{ secrets.CODE_SIGNING_CERT_HOST }}
+          SM_API_KEY: ${{ secrets.CODE_SIGNING_CERT_HOST_API_KEY }}
+          SM_CLIENT_CERT_FILE: ${{ runner.temp }}\Certificate_pkcs12.p12
+          SM_CLIENT_CERT_PASSWORD: ${{ secrets.CODE_SIGNING_CLIENT_CERT_PASSWORD }}
+          KEYPAIR_ALIAS: ${{ secrets.CODE_SIGNING_KEYPAIR_ALIAS }}
+
       - name: Sign Windows MSI with DigiCert KeyLocker
         if: ${{ steps.check-secret.outputs.can_sign == 'true' }}
         run: |
@@ -1315,7 +1363,12 @@ jobs:
         shell: powershell
 
       - name: 🔏 Verify MSI Signature
+        id: verify-signature
         shell: powershell
+        env:
+          # Fails closed: on a push-triggered release the inputs context is empty,
+          # so this is 'false' and the gate below stays a gate.
+          ALLOW_UNSIGNED: ${{ inputs.allow_unsigned_windows == true || inputs.allow_unsigned_windows == 'true' }}
         run: |
           $msiPath = "${{ steps.find-msi.outputs.msi-path }}"
           $sig = Get-AuthenticodeSignature -FilePath $msiPath
@@ -1323,14 +1376,20 @@ jobs:
           if ($sig.SignerCertificate) {
             Write-Host "Signer: $($sig.SignerCertificate.Subject)"
           }
+          echo "status=$($sig.Status)" >> $env:GITHUB_OUTPUT
           if ($sig.Status -ne 'Valid') {
             if ('${{ steps.check-secret.outputs.can_sign }}' -ne 'true') {
               Write-Host "::warning::Windows MSI is UNSIGNED, status $($sig.Status) (no CODE_SIGNING_* secrets configured)"
             } elseif ($sig.Status -eq 'NotSigned' -or $sig.Status -eq 'HashMismatch') {
               # Credentials were present and smctl exited 0, yet no usable
               # signature is on the file. That is the silent case worth blocking.
-              Write-Host "::error::MSI signature is $($sig.Status) even though signing credentials were present"
-              exit 1
+              if ($env:ALLOW_UNSIGNED -eq 'true') {
+                Write-Host "::warning::Signature enforcement overridden: publishing a $($sig.Status) Windows MSI because allow_unsigned_windows was set"
+              } else {
+                Write-Host "::error::MSI signature is $($sig.Status) even though signing credentials were present"
+                Write-Host "::error::Read the 'Sync KeyLocker Certificate to the Windows Store' step for why. To ship this release anyway, re-run the workflow with allow_unsigned_windows enabled."
+                exit 1
+              }
             } else {
               # NotTrusted / UnknownError and friends: the signature may be fine
               # and the runner's trust store or parser may not be. Loud, not fatal.
@@ -1370,6 +1429,8 @@ jobs:
     if: needs.prepare-version.outputs.should-build == 'true'
     runs-on: windows-11-arm
     continue-on-error: true  # Graceful failure if ARM runner unavailable
+    outputs:
+      msi-signature: ${{ steps.verify-signature.outputs.status }}
 
     steps:
       - name: 📥 Checkout Repository
@@ -1589,6 +1650,25 @@ jobs:
           SM_CLIENT_CERT_FILE: ${{ runner.temp }}\Certificate_pkcs12.p12
           SM_CLIENT_CERT_PASSWORD: ${{ secrets.CODE_SIGNING_CLIENT_CERT_PASSWORD }}
 
+      # Same certsync precondition as the x64 job above; see the comment there.
+      - name: Sync KeyLocker Certificate to the Windows Store (Windows ARM64)
+        if: ${{ steps.check-secret.outputs.can_sign == 'true' && steps.install-digicert.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          rem smctl exits 0 whether a subcommand works or not, and cmd keeps going
+          rem after a failure, so all four run and the log carries every answer.
+          smctl healthcheck
+          smctl windows ksp list
+          smctl keypair ls
+          smctl windows certsync --keypair-alias="%KEYPAIR_ALIAS%"
+        shell: cmd
+        env:
+          SM_HOST: ${{ secrets.CODE_SIGNING_CERT_HOST }}
+          SM_API_KEY: ${{ secrets.CODE_SIGNING_CERT_HOST_API_KEY }}
+          SM_CLIENT_CERT_FILE: ${{ runner.temp }}\Certificate_pkcs12.p12
+          SM_CLIENT_CERT_PASSWORD: ${{ secrets.CODE_SIGNING_CLIENT_CERT_PASSWORD }}
+          KEYPAIR_ALIAS: ${{ secrets.CODE_SIGNING_KEYPAIR_ALIAS }}
+
       - name: Sign Windows ARM64 MSI with DigiCert KeyLocker
         if: ${{ steps.check-secret.outputs.can_sign == 'true' && steps.install-digicert.outcome == 'success' }}
         continue-on-error: true
@@ -1620,6 +1700,7 @@ jobs:
       # the upload and cost the release its ARM64 asset. Reporting must never do
       # that in a job whose whole signing path is best effort.
       - name: 🔏 Verify MSI Signature (Windows ARM64)
+        id: verify-signature
         if: ${{ steps.find-msi.outputs.msi-path != '' }}
         continue-on-error: true
         shell: powershell
@@ -1627,6 +1708,7 @@ jobs:
           $msiPath = "${{ steps.find-msi.outputs.msi-path }}"
           $sig = Get-AuthenticodeSignature -FilePath $msiPath
           Write-Host "Signature status: $($sig.Status)"
+          echo "status=$($sig.Status)" >> $env:GITHUB_OUTPUT
           if ($sig.SignerCertificate) {
             Write-Host "Signer: $($sig.SignerCertificate.Subject)"
           }
@@ -1929,6 +2011,35 @@ jobs:
 
           🤖 *This release was automatically built and published by GitHub Actions*
           EOF
+
+          # A release whose Windows installer is not Valid-signed says so at the top
+          # of its own body. Driven by what the verify steps measured on the
+          # artifacts, never by whether the override was requested: the override is
+          # a no-op when signing works, and an unconfigured-secrets build reaches
+          # here too. An empty value means that job did not get as far as measuring.
+          X64_SIG='${{ needs.build-windows.outputs.msi-signature }}'
+          ARM_SIG='${{ needs.build-windows-arm64.outputs.msi-signature }}'
+          UNSIGNED=''
+          if [ -n "$X64_SIG" ] && [ "$X64_SIG" != 'Valid' ]; then
+            UNSIGNED="x64 ($X64_SIG)"
+          fi
+          if [ -n "$ARM_SIG" ] && [ "$ARM_SIG" != 'Valid' ]; then
+            if [ -n "$UNSIGNED" ]; then
+              UNSIGNED="$UNSIGNED, arm64 ($ARM_SIG)"
+            else
+              UNSIGNED="arm64 ($ARM_SIG)"
+            fi
+          fi
+          if [ -n "$UNSIGNED" ]; then
+            echo "Windows installer is not signed: $UNSIGNED - prepending a notice"
+            {
+              echo "> ⚠️ **The Windows installer in this release is not signed:** $UNSIGNED."
+              echo "> Windows will warn on install, and SmartScreen may block it."
+              echo ""
+              cat release-notes.md
+            } > release-notes.body
+            mv release-notes.body release-notes.md
+          fi
 
           # Set output for release creation
           echo "notes-file=release-notes.md" >> $GITHUB_OUTPUT
