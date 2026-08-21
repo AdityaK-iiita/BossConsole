@@ -40,6 +40,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.dp
+import com.teamdev.jxbrowser.ObjectClosedException
 import com.teamdev.jxbrowser.browser.Browser
 import com.teamdev.jxbrowser.browser.callback.CreatePopupCallback
 import com.teamdev.jxbrowser.browser.callback.OpenPopupCallback
@@ -259,6 +260,35 @@ internal class BrowserHandleImpl(
      */
     @Volatile private var lastCommittedMainFrameUrl: String = ""
 
+    /**
+     * Whether this handle's page is [url], without asking Chromium.
+     *
+     * Built on [lastCommittedMainFrameUrl] rather than on a second field of its own: main added
+     * that one for the page-event bridge while this was in review, for the same reason - reading
+     * a field instead of betting on whether `Browser.url()` is a synchronous round trip - and two
+     * volatiles tracking one value is how they drift.
+     *
+     * Exists so a handle can be matched against a tab's URL without an IPC round trip.
+     * `DesktopBrowserAccessor.findBrowserForTab` resolves a dynamic plugin's browser tab by
+     * scanning every active handle for the one whose URL equals the tab's, and it used to read
+     * each candidate's `getCurrentUrl()` - a blocking call into Chromium per handle, on a path a
+     * panel can poll. With a dozen tabs open that was a dozen round trips per lookup, and a
+     * handle whose transport had gone made each one a failure that had to fail first.
+     *
+     * The comparison is sound because the field is fed from the same `NavigationFinished`
+     * main-frame branch that notifies [navigationListeners], which is where the plugin's own tab
+     * state gets its URL from: both sides now come from one event, rather than a tracked value on
+     * one side and a live read on the other. Same-document navigations reach that branch too, so
+     * an SPA route change is reflected.
+     *
+     * Falls back to the creation URL while the field is still blank, so a browser that has not
+     * navigated yet is matchable. Deliberately not an exposed getter - a caller holding the
+     * string would be tempted to read live when it looked stale, which is the round trip this
+     * removes - and deliberately NOT the `browser.url()` fallback [lastCommittedMainFrameUrl]'s
+     * other reader uses, since that is the round trip.
+     */
+    internal fun isAtUrl(url: String): Boolean = lastCommittedMainFrameUrl.ifBlank { config.url } == url
+
     /** Receives in-page interaction batches, attributed to the page that is actually loaded. */
     private val interactionBridge =
         BrowserInteractionBridge(
@@ -267,6 +297,28 @@ internal class BrowserHandleImpl(
         )
 
     private val disposed = AtomicBoolean(false)
+
+    /**
+     * Latched when a synchronous RPC through this browser fails because its transport is gone.
+     *
+     * [isValid]'s generation clause covers a browser outliving *its engine*. It cannot see the
+     * other way a browser's IPC dies: this browser's own connection closing while the engine
+     * generation still matches - a renderer going away, a page calling `window.close()`, or a
+     * plugin disposing the browser behind its own handle. In that state `isClosed` still answers
+     * `false` (nothing arrived to mark it) and the generation still matches, so [isValid]
+     * answered `true` for a browser every call through which throws.
+     *
+     * That made the handle uncollectable: [BrowserServiceImpl.reconcileOrphanedBrowsers] prunes
+     * on `!isValid`, so a handle that can never be valid again was also never pruned, and stayed
+     * in `getActiveHandles()` for the rest of the session. Any scan over those handles then paid
+     * a failing round trip per zombie and, because these accessors threw, aborted at the first
+     * one - so the scan could never reach a live browser again either.
+     *
+     * Latched rather than probed: the condition is terminal (a closed connection is never
+     * reopened - a new browser gets a new handle), and probing would mean spending the failing
+     * round trip this exists to avoid.
+     */
+    private val connectionDead = AtomicBoolean(false)
 
     /**
      * Whether [Content] has ever been composed for this handle.
@@ -1984,8 +2036,71 @@ internal class BrowserHandleImpl(
     override val isValid: Boolean
         get() =
             !disposed.get() &&
+                !connectionDead.get() &&
                 FluckEngine.currentEngineGeneration == engineGeneration &&
                 runCatching { !browser.isClosed }.getOrDefault(false)
+
+    /**
+     * Runs a synchronous JxBrowser accessor, returning [fallback] instead of throwing.
+     *
+     * Every sync accessor here is an IPC round trip that can fail at any moment, and they are
+     * called from plugin code and from scans over [BrowserServiceImpl.getActiveHandles] - an
+     * `if (isValid)` guard cannot make them safe, because the connection can die between the
+     * check and the call. A throw out of one of these is what turned a single dead browser into
+     * a permanently broken lookup, so they report failure by value like the rest of this class.
+     *
+     * A transport failure also latches [connectionDead], which is what lets the handle be pruned.
+     * The log stays at debug: the whole point is that this path can repeat on a hot caller, and
+     * it was a WARN-with-stack-trace per failure that flooded the console buffer.
+     */
+    private fun <T> syncCall(
+        op: String,
+        fallback: T,
+        block: () -> T,
+    ): T {
+        if (!isValid) return fallback
+        return try {
+            block()
+        } catch (e: Exception) {
+            if (isTransportFailure(e)) connectionDead.set(true)
+            logger.debug(
+                LogCategory.BROWSER,
+                "Browser sync call failed",
+                mapOf("handleId" to id, "op" to op, "error" to (e.message ?: e.javaClass.simpleName)),
+            )
+            fallback
+        }
+    }
+
+    /**
+     * Whether [e] means "this browser's IPC is gone" rather than "this one call failed".
+     *
+     * Only two things are treated as terminal: `ObjectClosedException`, and an
+     * [IllegalStateException] carrying "The connection has been closed." - both of which say
+     * the transport itself is gone, and a closed connection is never reopened.
+     *
+     * Deliberately NOT "Failed to receive the response.", even though that is the message on
+     * the exception this was written for. It describes a round trip that did not come back,
+     * which is also what a live-but-wedged renderer produces - see the frame-stall probe above,
+     * which exists because `executeJavaScript` can block indefinitely against a page that is
+     * still alive. Latching on it would let one slow round trip permanently invalidate a
+     * healthy browser: every navigation and zoom call silently refusing on a tab that renders
+     * fine, which is a worse bug than the one this fixes.
+     *
+     * Nothing is lost by excluding it, because the chain is what is matched, not the top
+     * message: the observed failures arrived as "Failed to receive the response." with
+     * "The connection has been closed." as their `cause`, so the terminal reason is still
+     * found. Anything unrecognised counts as a transient call failure - a new message shape
+     * costs a retry rather than a wrongly discarded live browser.
+     */
+    private fun isTransportFailure(e: Throwable): Boolean =
+        generateSequence(e) { prev -> prev.cause?.takeIf { it !== prev } }
+            // Bounded: a cause cycle longer than self-reference would otherwise not terminate.
+            .take(MAX_CAUSE_DEPTH)
+            .any { cause ->
+                cause is ObjectClosedException ||
+                    (cause.message ?: "").contains("connection has been closed", ignoreCase = true)
+            }
 
     override suspend fun loadUrl(url: String) {
         if (!isValid) {
@@ -2032,15 +2147,9 @@ internal class BrowserHandleImpl(
         }
     }
 
-    override fun getCurrentUrl(): String {
-        if (!isValid) return ""
-        return browser.url()
-    }
+    override fun getCurrentUrl(): String = syncCall("url", "") { browser.url() }
 
-    override fun getTitle(): String {
-        if (!isValid) return ""
-        return browser.title()
-    }
+    override fun getTitle(): String = syncCall("title", "") { browser.title() }
 
     override fun addNavigationListener(listener: (String) -> Unit) {
         navigationListeners.add(listener)
@@ -2067,66 +2176,57 @@ internal class BrowserHandleImpl(
     }
 
     override fun goBack() {
-        if (isValid && browser.navigation().canGoBack()) {
+        if (!canGoBack()) return
+        syncCall("goBack", Unit) {
             visitTracker.expect(BrowserNavigationType.BACK_FORWARD)
             browser.navigation().goBack()
         }
     }
 
     override fun goForward() {
-        if (isValid && browser.navigation().canGoForward()) {
+        if (!canGoForward()) return
+        syncCall("goForward", Unit) {
             visitTracker.expect(BrowserNavigationType.BACK_FORWARD)
             browser.navigation().goForward()
         }
     }
 
     override fun reload() {
-        if (isValid) {
+        syncCall("reload", Unit) {
             visitTracker.expect(BrowserNavigationType.RELOAD)
             browser.navigation().reload()
         }
     }
 
-    override fun stop() {
-        if (isValid) {
-            browser.navigation().stop()
-        }
-    }
+    override fun stop() = syncCall("stop", Unit) { browser.navigation().stop() }
 
-    override fun canGoBack(): Boolean = isValid && browser.navigation().canGoBack()
+    override fun canGoBack(): Boolean = syncCall("canGoBack", false) { browser.navigation().canGoBack() }
 
-    override fun canGoForward(): Boolean = isValid && browser.navigation().canGoForward()
+    override fun canGoForward(): Boolean = syncCall("canGoForward", false) { browser.navigation().canGoForward() }
 
     // ============================================================
     // ZOOM CONTROLS
     // ============================================================
 
-    override fun getZoomLevel(): Double {
-        if (!isValid) return 1.0
-        return browser.zoom().level().value()
-    }
+    override fun getZoomLevel(): Double = syncCall("zoomLevel", 1.0) { browser.zoom().level().value() }
 
     override fun setZoomLevel(level: Double) {
-        if (!isValid) return
-        browser.zoom().level(ZoomLevel.of(level))
+        syncCall("setZoomLevel", Unit) { browser.zoom().level(ZoomLevel.of(level)) }
         notifyZoomListeners()
     }
 
     override fun zoomIn() {
-        if (!isValid) return
-        browser.zoom().`in`()
+        syncCall("zoomIn", Unit) { browser.zoom().`in`() }
         notifyZoomListeners()
     }
 
     override fun zoomOut() {
-        if (!isValid) return
-        browser.zoom().out()
+        syncCall("zoomOut", Unit) { browser.zoom().out() }
         notifyZoomListeners()
     }
 
     override fun resetZoom() {
-        if (!isValid) return
-        browser.zoom().reset()
+        syncCall("resetZoom", Unit) { browser.zoom().reset() }
         notifyZoomListeners()
     }
 
@@ -2168,8 +2268,10 @@ internal class BrowserHandleImpl(
     // ============================================================
 
     override fun isSecure(): Boolean {
-        if (!isValid) return false
-        val url = browser.url()
+        // Through getCurrentUrl, not browser.url(): this was the same unguarded round trip,
+        // reached from toolbar UI, and "" does not start with https so a dead handle reads
+        // as not-secure rather than throwing into the composable.
+        val url = getCurrentUrl()
         return url.startsWith("https://")
     }
 
@@ -3174,6 +3276,9 @@ internal class BrowserHandleImpl(
     )
 
     companion object {
+        /** Cause-chain depth [isTransportFailure] inspects before giving up. */
+        private const val MAX_CAUSE_DEPTH = 16
+
         /**
          * Popup browsers we are currently waiting to capture an upload body for.
          * Populated by the popup handler before [BeforeSendUploadDataCallback] fires;

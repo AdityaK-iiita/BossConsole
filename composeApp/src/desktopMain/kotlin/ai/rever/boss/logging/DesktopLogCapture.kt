@@ -6,6 +6,7 @@ import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import java.io.PrintStream
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Desktop-specific log capture system.
@@ -20,6 +21,46 @@ class DesktopLogCapture {
 
     // Thread-safe buffer for captured logs (circular buffer implemented via pruning)
     private val buffer = ConcurrentLinkedQueue<LogEntry>()
+
+    /**
+     * Tracks [buffer]'s length so trimming never has to ask the queue for it.
+     *
+     * `ConcurrentLinkedQueue.size()` is O(n) by contract - it walks the list - and the trim that
+     * used it ran once per captured line, re-reading `size` on each iteration of its own loop. At
+     * the 10k cap that is a 10,000-node walk per line of output, paid on whichever thread did the
+     * logging while it held the `System.out` monitor (the tee runs inside `PrintStream.write`).
+     * Every other thread that wanted to log then queued behind it, so a burst of output from one
+     * component stalled threads with nothing to do with logging.
+     *
+     * Kept beside [buffer] rather than inside the tee because [clear] empties the queue, and a
+     * count owned by the tee would have been left overstated - which would have made the next
+     * writes trim a nearly empty buffer.
+     */
+    private val bufferedLines = AtomicInteger(0)
+
+    /**
+     * Appends one captured line, trimming to [MAX_BUFFERED_LINES], then notifies listeners.
+     *
+     * Both tee streams funnel through here so there is one place the count is maintained.
+     *
+     * The count can still drift from the queue by a little, and deliberately is not locked
+     * against it: an `add` landing between [clear]'s `buffer.clear()` and its `set(0)`
+     * understates by one, and a `record` that polls before a concurrent `clear` and decrements
+     * after can go momentarily negative. Both are bounded and self-correcting - the visible
+     * effect is the buffer sitting a few lines either side of the cap, which is what a cap on a
+     * debug log buffer is for. Locking the two together would put a mutex on the path every
+     * `println` in the process takes, which is the cost this whole change exists to remove.
+     */
+    private fun record(entry: LogEntry) {
+        buffer.add(entry)
+        var count = bufferedLines.incrementAndGet()
+        while (count > MAX_BUFFERED_LINES) {
+            // Queue already drained by a concurrent clear(): that resets the count, so stop.
+            if (buffer.poll() == null) break
+            count = bufferedLines.decrementAndGet()
+        }
+        notifyListeners(entry)
+    }
 
     // Listeners for new log entries
     private val listeners = mutableListOf<(LogEntry) -> Unit>()
@@ -37,8 +78,8 @@ class DesktopLogCapture {
         isCapturing = true
 
         // Create tee streams that write to both original stream and our buffer
-        val teeOut = TeeOutputStream(originalOut, buffer, LogSource.STDOUT, ::notifyListeners)
-        val teeErr = TeeOutputStream(originalErr, buffer, LogSource.STDERR, ::notifyListeners)
+        val teeOut = TeeOutputStream(originalOut, LogSource.STDOUT, ::record)
+        val teeErr = TeeOutputStream(originalErr, LogSource.STDERR, ::record)
 
         // Replace System streams
         System.setOut(PrintStream(teeOut, true, Charsets.UTF_8))
@@ -71,6 +112,7 @@ class DesktopLogCapture {
      */
     fun clear() {
         buffer.clear()
+        bufferedLines.set(0)
         logger.debug(LogCategory.SYSTEM, "Log buffer cleared")
     }
 
@@ -93,6 +135,17 @@ class DesktopLogCapture {
     }
 
     /**
+     * How many listeners are registered.
+     *
+     * A test seam. A provider that fails to unregister on dispose leaks silently: the leak is
+     * invisible through the provider's own state, because a cancelled consumer publishes
+     * nothing whether or not the listener is still attached. This is the only place the
+     * difference shows.
+     */
+    internal val listenerCount: Int
+        get() = synchronized(listeners) { listeners.size }
+
+    /**
      * Notify all listeners of a new log entry.
      * Uses copy-on-read pattern to avoid holding lock during callback invocation.
      */
@@ -109,7 +162,6 @@ class DesktopLogCapture {
      */
     private class TeeOutputStream(
         private val originalStream: PrintStream,
-        private val buffer: ConcurrentLinkedQueue<LogEntry>,
         private val source: LogSource,
         private val onNewEntry: (LogEntry) -> Unit,
     ) : OutputStream() {
@@ -133,14 +185,8 @@ class DesktopLogCapture {
                             source = source,
                         )
 
-                    buffer.add(entry)
-
-                    // Prune old entries if over limit
-                    while (buffer.size > 10000) {
-                        buffer.poll()
-                    }
-
-                    // Notify listeners
+                    // Buffering, trimming and listener notification all live in
+                    // DesktopLogCapture.record so the queue and its counter stay in step.
                     onNewEntry(entry)
                 }
                 lineBuffer.reset()
@@ -157,5 +203,10 @@ class DesktopLogCapture {
         override fun close() {
             originalStream.close()
         }
+    }
+
+    private companion object {
+        /** Captured lines retained; oldest are dropped past this. */
+        const val MAX_BUFFERED_LINES = 10000
     }
 }
