@@ -95,6 +95,11 @@ class PluginLoaderDelegateImpl(
             description = info.manifest.description,
             author = info.manifest.author,
             url = info.manifest.url,
+            // Blank on a FIRST install, because the caller persists the row after this returns.
+            // That is the right answer anyway - blank means "ask the store", which is where a
+            // plugin being installed for the first time by any store path came from. On an update
+            // the row is already there and still carries the original provenance.
+            sourceUrl = PluginPersistence.getSourceUrl(info.manifest.pluginId).orEmpty(),
             type =
                 info.manifest.type.name
                     .lowercase(),
@@ -454,6 +459,11 @@ class PluginLoaderDelegateImpl(
                     description = info.manifest.description,
                     author = info.manifest.author,
                     url = info.manifest.url,
+                    // The list the Toolbox's installed view is built from, so this is the site that
+                    // decides where its Update goes. Read per plugin rather than hoisted: the
+                    // persisted config is held in memory behind a lock, so each call is a find on a
+                    // list, not a file read.
+                    sourceUrl = PluginPersistence.getSourceUrl(info.manifest.pluginId).orEmpty(),
                     type =
                         info.manifest.type.name
                             .lowercase(),

@@ -107,7 +107,16 @@ intellij-platform = "243.21565.199"
 # Superset of 1.0.80: 1.0.81 made fillCredentials a deprecated no-op (the host already stopped
 # implementing it in #215) and 1.0.82 was doc-only, so nothing a host module or an installed plugin
 # resolves has been withdrawn.
-boss-plugin-api = "1.0.83"
+#
+# 1.0.84 adds LoadedPluginInfo.sourceUrl, which PluginLoaderDelegateImpl on this branch fills from
+# PluginPersistence. Without it the only location a plugin can see is the manifest homepage, and the
+# Toolbox was reading that as a download source - which sent every store plugin's update to an
+# unauthenticated GitHub API call and 404d for every private repo. Same forced order as above: api
+# first (boss-plugin-api#40 cuts v1.0.84), then this, **and this pin 404s CI until that release
+# exists**.
+#
+# Superset of 1.0.83: the field is additive with a "" default and nothing was withdrawn.
+boss-plugin-api = "1.0.84"
 
 [libraries]
 kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
