@@ -44,8 +44,8 @@ a theme is one `BossAppTheme` plus one list entry.
 
 | Theme | id | | Identity |
 |-------|----|-|----------|
-| **Blueprint** | `blueprint` | dark | Electric blue on ink - matches [bossconsole.ai](https://bossconsole.ai). **The default.** |
-| **Blueprint Light** | `blueprint-light` | light | The same blue, re-grounded on the site's `--paper` |
+| **Blueprint** | `blueprint` | dark | Electric blue on ink - matches [bossconsole.ai](https://bossconsole.ai). **The default on macOS and Linux.** |
+| **Blueprint Light** | `blueprint-light` | light | The same blue, re-grounded on the site's `--paper`. **The default on Windows.** |
 | **Operator** | `operator` | dark | The original amber-on-ink identity |
 | **Daylight** | `daylight` | light | Clean light theme |
 | **Clean** | `clean` | dark | Neutral charcoal, steel-blue accent |
@@ -53,13 +53,31 @@ a theme is one `BossAppTheme` plus one list entry.
 The choice is explicit and persisted (`~/.boss/app-theme-settings.json`); the OS
 theme setting is never consulted.
 
+**The default is per-platform.** Windows opens on Blueprint Light, everything else
+on Blueprint. `BossThemes.defaultIdFor(isWindows)` is the only place that branches;
+`BossThemes.DEFAULT_ID` stays the *class* default, which is what an existing
+settings file means when it says nothing.
+
 **Who a default change re-skins.** `AppThemeSettingsManager` writes that file only
-from `select()` - `ensureInitialized()` resolves the id without saving. So a file
-that omits `appThemeId`, *or no file at all*, means "whatever the default is", and
-**anyone who never explicitly picked a theme moves to Blueprint on update**. Only an
-explicit selection survives. That is intended here (it is the brand alignment this
-theme exists for); if a future default change should instead be a no-op for current
-users, `ensureInitialized()` has to persist the resolved id once.
+from `select()` - `ensureInitialized()` resolves the id without saving. The file's
+existence is therefore the record that someone chose, and the two absences are not
+the same thing:
+
+| On disk | Means | Resolves to |
+|---------|-------|-------------|
+| no file | nobody has ever picked | the platform default |
+| a file with no `appThemeId` | someone picked the class default, under the old `encodeDefaults = false` writer | `DEFAULT_ID`, on every platform |
+| a file with an `appThemeId` | someone picked that | that theme |
+
+The middle row is the one that costs something to get wrong: resolving it from the
+platform default would flip a Windows user who deliberately chose Blueprint back to
+light on their next launch, with no way to make the choice stick. Writes now use
+`encodeDefaults = true`, so files written from here on always name the id and the
+ambiguity ends with the files that already exist.
+
+`ensureInitialized()` still does not persist what it resolved. Pinning a platform
+default on first launch would mean the next change to what a platform opens with
+reaches nobody who has ever run the app.
 
 That property is why the four mirrors below have to agree on the default, not just
 on the palettes.
@@ -311,10 +329,15 @@ raw-palette names `chalk` / `mist` / `muted`.
 | Terminal defaults | BossTerm `…/settings/TerminalSettings.kt` (`activeThemeId = "boss-blueprint"`, and the fg/bg/selection defaults must match that theme) |
 | Terminal chrome tokens | BossTerm `…/settings/theme/UiTheme.kt` (`EXACT_TOKENS` - both BOSS identities skip derivation) |
 
-**Defaults:** the host default is `blueprint` (`BossThemes.DEFAULT_ID`) and the
-BossTerm default is `boss-blueprint` (`DEFAULT_THEME_ID` /
-`TerminalSettings.activeThemeId`). Existing saved settings keep their current
-theme; only fresh installs pick up a new default.
+**Defaults:** the host default is `blueprint` (`BossThemes.DEFAULT_ID`) on macOS
+and Linux and `blueprint-light` (`BossThemes.WINDOWS_DEFAULT_ID`) on Windows,
+resolved through `BossThemes.defaultIdFor(isWindows)`. The BossTerm default is
+`boss-blueprint` (`DEFAULT_THEME_ID` / `TerminalSettings.activeThemeId`) on every
+platform, but that default is what standalone BossTerm opens with: inside BOSS the
+`terminal-tab` plugin's `ApplyHostThemeToTerminal()` pushes the host tokens into
+BossTerm's `ThemeManager` on every compose, so the terminal follows the host and a
+Windows first run comes up light throughout. Existing saved settings keep their
+current theme; only fresh installs pick up a new default.
 
 **Four mirrors, one settings file.** The palettes exist in four places and they
 have to agree:
@@ -330,3 +353,9 @@ The Rust mirror reads and writes **the same** `~/.boss/app-theme-settings.json`,
 and a file that omits `appThemeId` means "the default" - so its `ThemeId::DEFAULT`
 must move whenever `BossThemes.DEFAULT_ID` does, or the two hosts render different
 themes from identical settings.
+
+`DEFAULT_ID` has not moved, so that mirror is still in step. The **Windows**
+default is a second thing to mirror: until `boss-core` grows the equivalent of
+`defaultIdFor(isWindows)`, a Windows first run opens light under this host and
+dark under the Rust one. Neither ships on Windows today, so this is a note for
+whoever gets there first, not a live divergence.

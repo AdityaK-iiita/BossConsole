@@ -3,6 +3,7 @@ package ai.rever.boss.theme
 import ai.rever.boss.plugin.pathutils.BossDirectories
 import ai.rever.boss.plugin.ui.BossThemeController
 import ai.rever.boss.plugin.ui.BossThemes
+import ai.rever.boss.utils.SystemUtils
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import kotlinx.coroutines.CoroutineScope
@@ -13,24 +14,25 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
 
 /**
  * Persists the user's host theme choice and keeps the live [BossThemeController]
  * in sync. Follows the BOSS settings pattern (JSON in ~/.boss, sync load on
- * init, async save). Desktop-only — the host app ships desktop only.
+ * init, async save). Desktop-only - the host app ships desktop only.
+ *
+ * The load is synchronous on purpose: `ensureInitialized()` is this object's
+ * first accessor, so an asynchronous `init` would lose the race against its own
+ * first reader and the app would open on the compiled-in default.
  */
 object AppThemeSettingsManager {
     private val logger = BossLogger.forComponent("AppThemeSettingsManager")
     private val settingsFile = BossDirectories.resolve("app-theme-settings.json")
-    private val json =
-        Json {
-            prettyPrint = true
-            ignoreUnknownKeys = true
-        }
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    private val _settings = MutableStateFlow(AppThemeSettings())
+    private val platformDefaults: AppThemeSettings
+        get() = AppThemeSettings.defaultsFor(SystemUtils.isWindows)
+
+    private val _settings = MutableStateFlow(platformDefaults)
     val settings: StateFlow<AppThemeSettings> = _settings.asStateFlow()
 
     init {
@@ -41,7 +43,12 @@ object AppThemeSettingsManager {
     /**
      * Applies the persisted theme to [BossThemeController] so the app opens in
      * the saved look. Call once early in startup, before the first frame is
-     * composed. Idempotent — selecting the same theme again just re-sets the id.
+     * composed. Idempotent - selecting the same theme again just re-sets the id.
+     *
+     * This deliberately does not write the resolved id back. Persisting a
+     * platform default on first launch would pin it, and every later change to
+     * what a platform opens with would then reach nobody who had ever run the
+     * app.
      */
     fun ensureInitialized() {
         BossThemeController.select(_settings.value.appThemeId)
@@ -57,23 +64,23 @@ object AppThemeSettingsManager {
 
     private fun loadSync() {
         try {
-            if (settingsFile.exists()) {
-                _settings.value =
-                    json.decodeFromString(
-                        AppThemeSettings.serializer(),
-                        settingsFile.readText(),
-                    )
-            }
+            val content = if (settingsFile.exists()) settingsFile.readText() else null
+            _settings.value = AppThemeSettings.decodeOrDefaults(content, SystemUtils.isWindows)
         } catch (e: Exception) {
             logger.warn(LogCategory.SYSTEM, "Failed to load app theme settings, using default", error = e)
-            _settings.value = AppThemeSettings()
+            _settings.value = platformDefaults
         }
     }
 
     private suspend fun save() =
         withContext(Dispatchers.IO) {
             try {
-                settingsFile.writeText(json.encodeToString(AppThemeSettings.serializer(), _settings.value))
+                settingsFile.writeText(
+                    AppThemeSettings.storageJson.encodeToString(
+                        AppThemeSettings.serializer(),
+                        _settings.value,
+                    ),
+                )
                 logger.debug(LogCategory.SYSTEM, "Saved app theme", mapOf("themeId" to _settings.value.appThemeId))
             } catch (e: Exception) {
                 logger.warn(LogCategory.SYSTEM, "Failed to save app theme settings", error = e)

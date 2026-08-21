@@ -185,6 +185,16 @@ private fun lightMaterial(s: BossColorScheme): Colors =
 object BossThemes {
     const val DEFAULT_ID = "blueprint"
 
+    /**
+     * What Windows opens with. Blueprint Light rather than Daylight: it is the
+     * light half of the same identity [DEFAULT_ID] names, so the two platforms
+     * differ in value and not in brand, and Daylight carries a known contrast
+     * defect (its amber signal sits at 2.63:1 on its own near-white floor, under
+     * the 3:1 floor for UI components) that has no business being anyone's
+     * out-of-the-box look. `BossThemesRegistryTest` records that debt.
+     */
+    const val WINDOWS_DEFAULT_ID = "blueprint-light"
+
     val BLUEPRINT =
         BossAppTheme(
             id = "blueprint",
@@ -243,6 +253,19 @@ object BossThemes {
      * KDoc warned about, and a comment is a weaker guarantee than an expression.
      */
     fun byId(id: String?): BossAppTheme = all.find { it.id == id } ?: default
+
+    /**
+     * The default theme id for a platform, in the platform-explicit form the
+     * host's other platform defaults use (`StartupPanelPolicy`,
+     * `FocusModeSettings`), so both branches are reachable from a test on any
+     * CI leg. Callers resolve `isWindows` themselves: this module is
+     * commonMain and has no business reading system properties.
+     *
+     * [DEFAULT_ID] deliberately stays the *class* default. It is what an
+     * existing settings file means when it omits `appThemeId`, and only a
+     * first run with no file at all resolves through here.
+     */
+    fun defaultIdFor(isWindows: Boolean): String = if (isWindows) WINDOWS_DEFAULT_ID else DEFAULT_ID
 }
 
 /**
