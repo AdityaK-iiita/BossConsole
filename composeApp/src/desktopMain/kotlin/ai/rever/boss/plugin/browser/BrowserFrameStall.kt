@@ -48,12 +48,17 @@ import com.teamdev.jxbrowser.engine.RenderingMode
  * records for `window.__bossInteraction`, and the worst case either way is cosmetic, so it is
  * written down rather than defended against. The re-attach cap below bounds the noisy direction.
  *
- * **Not injected at document start, on purpose.** [BrowserInjectDispatcher] exists for exactly
- * that and would make the first reading meaningful, but `ensureCoBrowseInjectCallback` still
- * claims the browser's single `InjectJsCallback` slot with a direct `browser.set`, so registering
- * through the dispatcher here would clobber the co-browse recorder or be clobbered by it. Arming
- * lazily on the first probe keeps this feature out of that conflict; the cost is one extra
- * round-trip, spelled out in [ARM_DELAY_MS].
+ * **Not injected at document start, though the reason has changed.** This used to say the
+ * dispatcher was unusable because `ensureCoBrowseInjectCallback` claimed the browser's single
+ * `InjectJsCallback` slot with a direct `browser.set`. That is no longer true: co-browse and the
+ * page-event script both register through [BrowserInjectDispatcher], and
+ * `InjectJsCallbackOwnershipTest` keeps it that way, so there is no conflict left to stay out of.
+ *
+ * What remains is simply that nobody has moved this one. Arming lazily on the first probe works and
+ * costs one extra round-trip (spelled out in [ARM_DELAY_MS]); registering at document start would
+ * make the *first* reading after a navigation meaningful, which is the one case this currently
+ * cannot answer. It is an available improvement, not a constraint - do not read this paragraph as
+ * an argument against the dispatcher.
  */
 internal object BrowserFrameStall {
     /**

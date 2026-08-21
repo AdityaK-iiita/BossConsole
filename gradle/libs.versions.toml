@@ -88,7 +88,26 @@ intellij-platform = "243.21565.199"
 # checking rather than trusting the ordering: fetchApiPluginJar has no Maven fallback, so
 # a pin that dropped a type would surface as an unrelated compile error, and this comment
 # is the only record of which api PR a pin corresponds to.
-boss-plugin-api = "1.0.80"
+#
+# 1.0.83 carries BrowserHandle.setPageEventScript + PAGE_EVENT_BRIDGE, which this release
+# implements (BrowserHandleImpl, via BrowserInjectDispatcher).
+#
+# The pin is NOT what makes that method compile here: `ai.rever.boss.plugin.browser` is a host
+# source mirror under plugin-api-browser, and only `ai.rever.boss.plugin.api` is filtered out of the
+# pinned jar. The bump is needed because fluck-browser declares `minApiVersion: 1.0.83`, and
+# DynamicPluginLoader hard-fails a plugin whose minApiVersion exceeds the api layer the host serves
+# (PluginApiLevelException) - so without this the plugin carrying the feature would not load at all.
+#
+# 1.0.83, not 1.0.82, and the difference is easy to get wrong: the api release workflow bump-pushes
+# the version BEFORE building, so the number in that repo's build.gradle.kts is the one already
+# published and a merge cuts the next. boss-plugin-api#39 therefore releases as v1.0.83. **This pin
+# 404s CI until that release exists** (fetchApiPluginJar has no Maven fallback), which is the forced
+# order: api first, then this.
+#
+# Superset of 1.0.80: 1.0.81 made fillCredentials a deprecated no-op (the host already stopped
+# implementing it in #215) and 1.0.82 was doc-only, so nothing a host module or an installed plugin
+# resolves has been withdrawn.
+boss-plugin-api = "1.0.83"
 
 [libraries]
 kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }

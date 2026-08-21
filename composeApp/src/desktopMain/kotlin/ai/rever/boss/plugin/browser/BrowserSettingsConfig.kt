@@ -35,6 +35,27 @@ object BrowserSettings {
             System.setProperty(DISCRETE_PASSWORD_FILL_PROP, value.toString())
         }
 
+    // Offer a generated password on a signup or change-password field, and save it to Secret
+    // Manager when the user takes it. ON by default: a password manager that has to be switched on
+    // first is one most people never find, and the alternative is the user inventing a password
+    // that never gets stored anywhere.
+    const val SUGGEST_PASSWORDS_PROP = "boss.fluck.suggestPasswords"
+    var suggestPasswords: Boolean = true
+        set(value) {
+            field = value
+            System.setProperty(SUGGEST_PASSWORDS_PROP, value.toString())
+        }
+
+    // Offer to save or update a credential the user typed, after a login that looks like it
+    // worked. ON by default, for the same reason. Note what turning this OFF does: the plugin
+    // uninstalls its page-event script entirely, so nothing observes a submit at all.
+    const val OFFER_TO_SAVE_PASSWORDS_PROP = "boss.fluck.offerToSavePasswords"
+    var offerToSavePasswords: Boolean = true
+        set(value) {
+            field = value
+            System.setProperty(OFFER_TO_SAVE_PASSWORDS_PROP, value.toString())
+        }
+
     // Tab sharing (configurable via Settings > Browser > Tab Sharing). OFF by default:
     // the co-browse share (QR) button stays hidden in the browser toolbar until the
     // user opts in. The toolbar is rendered by the fluck-browser plugin in a separate
@@ -54,6 +75,11 @@ object BrowserSettings {
         // relying on two places to agree on a privacy default is how they drift apart.
         System.setProperty(DISCRETE_PASSWORD_FILL_PROP, discretePasswordFill.toString())
         System.setProperty(SHOW_SHARE_BUTTON_PROP, showShareButton.toString())
+        // These two matter more than the others here: they default to ON, so a plugin reading an
+        // absent property has to guess which way an unset value falls. Publishing them removes the
+        // guess.
+        System.setProperty(SUGGEST_PASSWORDS_PROP, suggestPasswords.toString())
+        System.setProperty(OFFER_TO_SAVE_PASSWORDS_PROP, offerToSavePasswords.toString())
     }
 }
 

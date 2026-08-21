@@ -170,6 +170,22 @@ private fun browserEntries() =
         setting("Target panel", "Terminal Links")
         setting("Reset Link Behavior", "Terminal Links")
         group("Secret Manager")
+        setting(
+            "Suggest Strong Passwords",
+            "Secret Manager",
+            "generate",
+            "generator",
+            "signup",
+            "password manager",
+        )
+        setting(
+            "Offer to Save Passwords",
+            "Secret Manager",
+            "save password",
+            "remember",
+            "autofill",
+            "password manager",
+        )
         setting("Discrete Password Fill", "Secret Manager", "blur", "privacy", "autofill")
         group("Tab Sharing")
         setting("Show share (QR) button", "Tab Sharing", "co-browse", "cobrowse", "qr code")

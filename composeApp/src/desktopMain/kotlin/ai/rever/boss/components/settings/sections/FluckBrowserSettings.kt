@@ -212,7 +212,35 @@ fun FluckBrowserSettings() {
 
         // Secret Manager Settings
         SettingsSection(title = "Secret Manager") {
+            var suggestPasswords by remember { mutableStateOf(BrowserSettings.suggestPasswords) }
+            var offerToSavePasswords by remember { mutableStateOf(BrowserSettings.offerToSavePasswords) }
             var discretePasswordFill by remember { mutableStateOf(BrowserSettings.discretePasswordFill) }
+
+            SettingsToggle(
+                label = "Suggest Strong Passwords",
+                checked = suggestPasswords,
+                onCheckedChange = { enabled ->
+                    suggestPasswords = enabled
+                    BrowserSettings.suggestPasswords = enabled
+                    coroutineScope.launch {
+                        BrowserSettingsManager.saveSettings()
+                    }
+                },
+                description = "Offer a generated password on signup forms and save it to Secret Manager",
+            )
+
+            SettingsToggle(
+                label = "Offer to Save Passwords",
+                checked = offerToSavePasswords,
+                onCheckedChange = { enabled ->
+                    offerToSavePasswords = enabled
+                    BrowserSettings.offerToSavePasswords = enabled
+                    coroutineScope.launch {
+                        BrowserSettingsManager.saveSettings()
+                    }
+                },
+                description = "Ask to save or update a credential after you sign in to a site",
+            )
 
             SettingsToggle(
                 label = "Discrete Password Fill",

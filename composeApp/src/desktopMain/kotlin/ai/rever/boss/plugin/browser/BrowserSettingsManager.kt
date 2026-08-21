@@ -20,6 +20,10 @@ data class BrowserSettingsData(
     val maxRecoveryAttempts: Int = 3,
     // Secret Manager settings
     val discretePasswordFill: Boolean = true,
+    // Offer a generated password on new-password fields, and save it when taken (on by default)
+    val suggestPasswords: Boolean = true,
+    // Offer to save or update a credential the user typed after a login (on by default)
+    val offerToSavePasswords: Boolean = true,
     // Tab sharing — show the co-browse share (QR) button in the browser toolbar (off by default)
     val showShareButton: Boolean = false,
 )
@@ -65,6 +69,8 @@ object BrowserSettingsManager {
                 BrowserSettings.maxRecoveryAttempts = settings.maxRecoveryAttempts.coerceIn(1, 10)
                 // Secret Manager settings (setter mirrors to the system property the plugin reads)
                 BrowserSettings.discretePasswordFill = settings.discretePasswordFill
+                BrowserSettings.suggestPasswords = settings.suggestPasswords
+                BrowserSettings.offerToSavePasswords = settings.offerToSavePasswords
                 // Tab sharing (setter mirrors to the system property the plugin reads)
                 BrowserSettings.showShareButton = settings.showShareButton
 
@@ -91,6 +97,8 @@ object BrowserSettingsManager {
                         maxInitRetries = BrowserSettings.maxInitRetries,
                         maxRecoveryAttempts = BrowserSettings.maxRecoveryAttempts,
                         discretePasswordFill = BrowserSettings.discretePasswordFill,
+                        suggestPasswords = BrowserSettings.suggestPasswords,
+                        offerToSavePasswords = BrowserSettings.offerToSavePasswords,
                         showShareButton = BrowserSettings.showShareButton,
                     )
 
