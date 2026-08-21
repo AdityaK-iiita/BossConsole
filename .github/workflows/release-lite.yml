@@ -486,6 +486,25 @@ jobs:
           SM_CLIENT_CERT_FILE: ${{ runner.temp }}\Certificate_pkcs12.p12
           SM_CLIENT_CERT_PASSWORD: ${{ secrets.CODE_SIGNING_CLIENT_CERT_PASSWORD }}
 
+      - name: 🔏 Verify MSI Signature
+        shell: powershell
+        run: |
+          $sig = Get-AuthenticodeSignature -FilePath "${{ steps.find-msi.outputs.msi-path }}"
+          Write-Host "Signature status: $($sig.Status)"
+          if ($sig.SignerCertificate) {
+            Write-Host "Signer: $($sig.SignerCertificate.Subject)"
+          }
+          if ($sig.Status -ne 'Valid') {
+            if ('${{ steps.check-secret.outputs.can_sign }}' -ne 'true') {
+              Write-Host "::warning::Windows MSI is UNSIGNED, status $($sig.Status) (no CODE_SIGNING_* secrets configured)"
+            } elseif ($sig.Status -eq 'NotSigned' -or $sig.Status -eq 'HashMismatch') {
+              Write-Host "::error::MSI signature is $($sig.Status) even though signing credentials were present"
+              exit 1
+            } else {
+              Write-Host "::warning::MSI signature status is $($sig.Status), expected Valid"
+            }
+          }
+
       - name: 📋 Rename MSI to Lite convention
         env:
           VERSION: ${{ needs.prepare-version.outputs.version }}
