@@ -167,6 +167,14 @@ fun main(args: Array<String>) {
     ai.rever.boss.services.llm.BrokeredCredentialAccess
         .initialize(ai.rever.boss.llm.BrokeredCredentialProviderImpl)
 
+    // Same arrangement, for the dialog that offers a way out of a plugin version floor: the
+    // remedies reach the app updater, the plugin store and the plugins directory, all desktopMain,
+    // while the dialog is mounted from commonMain. Registered BEFORE any plugin loads, because the
+    // refusal this exists for happens during startup plugin loading - a refusal recorded before
+    // this runs would sit in the registry with nothing able to act on it.
+    ai.rever.boss.components.plugin.PluginVersionRemedyAccess
+        .initialize(ai.rever.boss.components.plugin.DesktopPluginVersionRemedyResolver)
+
     // Warm the two settings singletons that load their file synchronously in `init`
     // (WorkspaceSettingsManager and FocusModeSettingsManager). Both must be readable the
     // instant a startup effect asks - the workspace one decides which layout a window opens

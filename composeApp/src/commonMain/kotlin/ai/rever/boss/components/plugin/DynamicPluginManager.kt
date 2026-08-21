@@ -15,7 +15,9 @@ import ai.rever.boss.plugin.api.PluginState
 import ai.rever.boss.plugin.api.PluginUnloadAware
 import ai.rever.boss.plugin.api.TabRegistry
 import ai.rever.boss.plugin.loader.DynamicPluginLoaderImpl
+import ai.rever.boss.plugin.loader.PluginApiLevelException
 import ai.rever.boss.plugin.loader.PluginBinaryIncompatibilityException
+import ai.rever.boss.plugin.loader.PluginBossVersionException
 import ai.rever.boss.plugin.loader.PluginUnloadException
 import ai.rever.boss.plugin.sandbox.InProcessPluginSandbox
 import ai.rever.boss.plugin.sandbox.PluginErrorClassifier
@@ -149,6 +151,22 @@ class DynamicPluginManager(
         System.setProperty("boss.api.version", apiLoader.apiVersion ?: "")
         // Published for the out-of-process spawner (child-JVM classpaths).
         System.setProperty("boss.api.jar", apiLoader.apiJarPath ?: "")
+        // The APP's version, published for the same reason as boss.api.version and
+        // boss.ipc.version: a plugin cannot otherwise learn it.
+        //
+        // The Toolbox is the case that needs it. Store rows carry minBossVersion - the Toolbox
+        // itself writes that field when publishing - but nothing on its browse or install path
+        // could compare it against this host, because this host never said what version it is. So
+        // the Toolbox offered every published version, Install downloaded a plugin the loader then
+        // refused, and the reason reached only the log. That is how fluck-browser 1.2.22
+        // (minBossVersion 9.4.23) presented on 9.4.22: an install that silently would not take.
+        //
+        // A system property rather than an api member, deliberately: it needs no api release, so
+        // every already-installed plugin can read it as soon as this host ships. Same trick as the
+        // boss.fluck.* settings mirror. The host's own catalog already filters on
+        // AppVersion.currentVersionString() (StoreHomeCatalogProvider); this is the same fact,
+        // reachable from a plugin.
+        System.setProperty("boss.app.version", AppVersion.currentVersionString())
         // fromPluginDir already logs the resolved jar + version at INFO;
         // keep this at debug to avoid triple-logging one init.
         logger.debug(
@@ -906,6 +924,16 @@ class DynamicPluginManager(
                             notifyListeners { it.pluginLoadFailed(manifest, error) }
                             return@withLock Result.failure(error)
                         }
+
+                        // A version floor is the one load failure with a known fix, so record it
+                        // where something can offer one. Everything else stays a log line: a
+                        // corrupt jar or a missing main class has no button that helps.
+                        //
+                        // Before this, a floor refusal reached only the log, and from the user's
+                        // side the plugin simply stopped existing. For a systemPlugin that means a
+                        // feature vanished - fluck-browser IS the browser tab, so 1.2.22 requiring
+                        // BOSS 9.4.23 on a 9.4.22 host presented as "my browser is gone".
+                        versionGateFor(error)?.let(PluginVersionGateRegistry::record)
 
                         notifyListeners { it.pluginLoadFailed(null, error ?: Exception("Unknown error")) }
                         return@withLock Result.failure(error ?: Exception("Unknown error"))

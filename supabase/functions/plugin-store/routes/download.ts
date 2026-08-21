@@ -222,6 +222,16 @@ download.openapi(downloadLatestRoute, async (ctx) => {
       size: version.jarSize,
       versionId: version.id,
       minIpcVersion: version.minIpcVersion,
+      // The app-version floor, so a client can refuse a version its host cannot load BEFORE
+      // downloading it over the installed jar. Every field above was already here; this one was
+      // not, which left the Toolbox with `min_boss_version` on browse rows and nothing at all on
+      // the path that actually installs. Clients default it to blank and treat blank as "no
+      // opinion", so an older Toolbox is unaffected by its arrival.
+      // `?? ''` because `plugin_versions.min_boss_version` is nullable (TEXT DEFAULT '1.0.0', no
+      // NOT NULL), and an explicit null in a field a client models as a string fails the whole
+      // decode rather than one field - which on a strict client would turn a null floor into a
+      // failed install.
+      minBossVersion: version.minBossVersion ?? '',
       requiredPermissions: plugin.requiredPermissions
     }, 200)
   } catch (error) {
@@ -358,6 +368,16 @@ download.openapi(downloadVersionRoute, async (ctx) => {
       size: version.jarSize,
       versionId: version.id,
       minIpcVersion: version.minIpcVersion,
+      // The app-version floor, so a client can refuse a version its host cannot load BEFORE
+      // downloading it over the installed jar. Every field above was already here; this one was
+      // not, which left the Toolbox with `min_boss_version` on browse rows and nothing at all on
+      // the path that actually installs. Clients default it to blank and treat blank as "no
+      // opinion", so an older Toolbox is unaffected by its arrival.
+      // `?? ''` because `plugin_versions.min_boss_version` is nullable (TEXT DEFAULT '1.0.0', no
+      // NOT NULL), and an explicit null in a field a client models as a string fails the whole
+      // decode rather than one field - which on a strict client would turn a null floor into a
+      // failed install.
+      minBossVersion: version.minBossVersion ?? '',
       requiredPermissions: plugin.requiredPermissions
     }, 200)
   } catch (error) {

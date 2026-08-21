@@ -111,6 +111,22 @@ actual object PluginUpdateBridge {
             return Result.failure(Exception("Refusing to download update outside the plugin directory"))
         }
         val targetPath = targetFile.absolutePath
+
+        // Keep the jar this update is about to make unreachable, BEFORE anything downloads.
+        //
+        // This path does not overwrite - it writes a new version-named file and then calls
+        // `PluginJarReconciler.reconcilePluginDir`, which deletes every other jar for this plugin
+        // id. So the version that currently works stops existing the moment the update succeeds,
+        // and if the new one then fails its version floor at load there is nothing on disk to go
+        // back to. That is precisely what happened to fluck-browser 1.2.22 on a 9.4.22 host: the
+        // browser tab was gone and the recovery was to find the previous release by hand.
+        //
+        // Taken here rather than inside `mgr.updatePlugin` so it happens once, before the unload
+        // closes the classloader, and so a failure to keep the copy cannot fail the update.
+        manager.getPluginInfo(pluginId)?.jarPath?.let { installedJar ->
+            PluginRollbackStore.snapshot(pluginDir, pluginId, installedJar)
+        }
+
         val reporter = MissingDependencyReporter.forManager(manager)
         val result =
             mgr.updatePlugin(

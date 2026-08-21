@@ -22,6 +22,8 @@ import ai.rever.boss.components.plugin.MissingDependencyDialog
 import ai.rever.boss.components.plugin.PluginDependencyEventBus
 import ai.rever.boss.components.plugin.PluginStoreVersionBridge
 import ai.rever.boss.components.plugin.PluginUpdateBridge
+import ai.rever.boss.components.plugin.PluginVersionGateHost
+import ai.rever.boss.components.plugin.PluginVersionRemedyAccess
 import ai.rever.boss.components.plugin.providers.GenericDialogHostContent
 import ai.rever.boss.components.plugin.tab_types.fluck.FluckTabInfo
 import ai.rever.boss.components.registery.PanelComponentStoreRegistry
@@ -756,6 +758,14 @@ internal fun BossAppDialogs(state: BossAppState) {
             },
         )
     }
+
+    // A plugin the host refused for a version floor. Before this the refusal reached only the log
+    // and the plugin simply stopped existing, which for a systemPlugin reads as a feature
+    // disappearing - fluck-browser IS the browser tab.
+    PluginVersionGateHost(
+        manager = state.currentDefaultPlugin?.dynamicPluginManager,
+        remedyResolver = PluginVersionRemedyAccess.current(),
+    )
 
     // Directory picker for project selection (must be outside conditional for Compose)
     val directoryPicker =
