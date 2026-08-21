@@ -22,9 +22,12 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  # contents: write and pull-requests: write are for the pin-bump PR below; the
+  # resolver itself only reads.
+  contents: write
   actions: write
   issues: write
+  pull-requests: write
 
 jobs:
   check-and-dispatch:
@@ -32,6 +35,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # The pin-bump step pushes a branch, so the checkout has to carry a
+          # token that can. PROJECT_TOKEN is preferred over github.token for one
+          # reason: GitHub does not raise pull_request events for PRs opened with
+          # the default token, so a bump PR created that way would sit with zero
+          # CI runs - and CI is the entire point of proposing it as a PR instead
+          # of committing straight to main. Falls back rather than failing hard,
+          # because a PR with no checks still beats no PR at all.
+          token: ${{ secrets.PROJECT_TOKEN || github.token }}
 
       - name: Resolve latest JxBrowser release
         id: release
@@ -264,6 +276,53 @@ jobs:
             --ref main \
             -f jxbrowser_version="$JXBROWSER_VERSION"
 
+      # Runs when the engine for the resolved version is published and complete,
+      # which is exactly the state the resolver calls release_already_published.
+      # That makes one code path serve both routes: the normal one (branding
+      # publishes, the next scheduled run opens the PR, so at most four hours
+      # later) and the catch-up one (an engine published while the pin stood
+      # still). The script is idempotent across those four-hourly runs and leaves
+      # a closed-unmerged PR alone rather than reopening a declined bump.
+      - name: Open the version pin PR
+        id: pin
+        if: steps.release.outputs.reason == 'release_already_published'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN || github.token }}
+          VERSION: ${{ steps.release.outputs.latest_version }}
+          BASE_BRANCH: main
+          DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && 'true' || 'false' }}
+        run: bash .github/scripts/open-jxbrowser-pin-pr.sh
+
+      - name: Report a broken pin bump
+        if: steps.pin.outcome == 'failure'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.latest_version }}
+        run: |
+          set -euo pipefail
+          issue_title="JxBrowser $VERSION pin bump could not be opened"
+          issues="$(gh issue list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --search "$issue_title in:title" \
+            --json number,title)"
+          issue_number="$(jq -r --arg title "$issue_title" \
+            'first(.[] | select(.title == $title) | .number) // empty' <<< "$issues")"
+          if [[ -n "$issue_number" ]]; then
+            echo "Issue #$issue_number already tracks this failure."
+            exit 0
+          fi
+          gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$issue_title" \
+            --body "The BOSS Chromium engine for JxBrowser $VERSION is published, but the automated pin bump in \`gradle/libs.versions.toml\` failed. The pin is still behind, so the shipped app keeps the previous engine until this is bumped by hand.
+
+          A push permission problem is the likeliest cause: the workflow prefers \`PROJECT_TOKEN\` and falls back to the default token, which cannot always push a branch.
+
+          Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
       - name: Summary
         if: always()
         env:
@@ -271,6 +330,9 @@ jobs:
           SHOULD_DISPATCH: ${{ steps.release.outputs.should_dispatch }}
           REASON: ${{ steps.release.outputs.reason }}
           DRY_RUN: ${{ inputs.dry_run }}
+          PIN_ACTION: ${{ steps.pin.outputs.pin_action }}
+          PIN_CURRENT: ${{ steps.pin.outputs.current_pin }}
+          PIN_PR_URL: ${{ steps.pin.outputs.pin_pr_url }}
         run: |
           {
             echo "## JxBrowser auto-release"
@@ -279,4 +341,8 @@ jobs:
             echo "- Dispatch required: \`${SHOULD_DISPATCH:-unknown}\`"
             echo "- Reason: \`${REASON:-check_failed}\`"
             echo "- Dry run: \`${DRY_RUN:-false}\`"
+            if [[ -n "${PIN_ACTION:-}" ]]; then
+              echo "- Pin (\`${PIN_CURRENT:-unknown}\`): \`$PIN_ACTION\`"
+              [[ -n "${PIN_PR_URL:-}" ]] && echo "- Pin PR: $PIN_PR_URL"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

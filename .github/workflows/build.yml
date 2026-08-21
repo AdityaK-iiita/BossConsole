@@ -54,6 +54,14 @@ jobs:
         # deterministic and does not consume credentials.
         run: bash scripts/test/test-jxbrowser-autorelease.sh
 
+      - name: 🧪 JxBrowser version pin PR tests
+        # The pin bump runs unattended every four hours against the version
+        # catalog, so the expensive failures are silent ones: a rewrite that
+        # matches nothing, one that also catches jxbrowser-gradle-plugin on the
+        # next line, a lexical compare that reads 9.4.10 as older than 9.4.9, or
+        # reopening a bump a human closed. git and gh are stubbed.
+        run: bash scripts/test/test-jxbrowser-pin-pr.sh
+
       - name: 🧪 Browser interaction collector
         # BrowserInteractionScript is JavaScript inside a Kotlin string, so the
         # Kotlin suite can only grep it - and every budget bug in it so far was
