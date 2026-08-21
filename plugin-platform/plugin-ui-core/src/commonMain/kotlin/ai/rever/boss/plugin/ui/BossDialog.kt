@@ -1,31 +1,16 @@
 package ai.rever.boss.plugin.ui
 
-import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentHeight
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.rememberScrollbarAdapter
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.LocalContentColor
-import androidx.compose.material.ProvideTextStyle
-import androidx.compose.material.Surface
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -39,7 +24,6 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -47,11 +31,9 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
@@ -301,9 +283,9 @@ internal fun ScrimmedModalContent(
  * @param confirmButton The primary action. Rendered last, i.e. rightmost.
  * @param dismissButton The secondary action, rendered to the left of [confirmButton].
  * @param text The body. **When the card's parent bounds its height, the body is placed in a scroll
- * container and therefore measured with an UNBOUNDED height** — that is the bounded-parent branch,
+ * container and therefore measured with an UNBOUNDED height** - that is the bounded-parent branch,
  * not the unbounded one, and it is the branch most alerts take. A composable that refuses an
- * unbounded main axis — a `LazyColumn`, a `LazyVerticalGrid`, a nested `verticalScroll` — will not
+ * unbounded main axis - a `LazyColumn`, a `LazyVerticalGrid`, a nested `verticalScroll` - will not
  * lay out there unless it caps itself, so give any such content a `Modifier.heightIn(max = …)`.
  * This is the one thing about this card a caller has to know.
  * @param shape Card shape; null takes the design system's dialog radius.
@@ -353,12 +335,9 @@ fun BossAlertDialog(
  * Mirrors Material 2's `buttons` overload. Use it when the actions are not a confirm/dismiss pair:
  * three buttons, a progress row, or no buttons at all.
  *
- * @param text The body. **When the card's parent bounds its height, the body is placed in a scroll
- * container and therefore measured with an UNBOUNDED height** — that is the bounded-parent branch,
- * not the unbounded one, and it is the branch most alerts take. A composable that refuses an
- * unbounded main axis — a `LazyColumn`, a `LazyVerticalGrid`, a nested `verticalScroll` — will not
- * lay out there unless it caps itself, so give any such content a `Modifier.heightIn(max = …)`.
- * This is the one thing about this card a caller has to know.
+ * @param text The body. Measured with an unbounded height on the bounded-parent branch, so content
+ * that refuses that must cap itself - see the `confirmButton` overload's `@param text`, which this
+ * deliberately does not restate.
  */
 @Composable
 fun BossAlertDialog(

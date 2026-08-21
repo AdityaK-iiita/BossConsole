@@ -345,6 +345,36 @@ class BossAlertCardLayoutTest {
     }
 
     @Test
+    fun `the scrollbar stays in the viewport rather than scrolling with the content`() {
+        // The bug this replaced: the scrollbar was a sibling of the content INSIDE the scrolled box.
+        // `verticalScroll` measures its child against an infinite height, so that box sizes to the
+        // content (~996dp here against a ~150dp viewport) and a matchParentSize scrollbar was
+        // measured to the content height and translated upward as the user scrolled. Nothing in the
+        // suite touched the scrollbar, which is how it shipped.
+        //
+        // The viewport now owns the weight and the scrollbar is its sibling, so the scrollbar's
+        // height is the viewport's and it does not move when the body does.
+        setCard(width = 400.dp, height = 300.dp) { TallBody() }
+
+        val before = rule.onNodeWithTag(SCROLLBAR).getUnclippedBoundsInRoot()
+        val card = cardBounds()
+        assertTrue(
+            before.bottom - before.top <= card.bottom - card.top,
+            "the scrollbar is ${before.bottom - before.top} tall in a ${card.bottom - card.top} " +
+                "card - it was measured against the content instead of the viewport",
+        )
+
+        rule.onNodeWithText(LAST_LINE).performScrollTo()
+
+        val after = rule.onNodeWithTag(SCROLLBAR).getUnclippedBoundsInRoot()
+        assertTrue(
+            after.top == before.top && after.bottom == before.bottom,
+            "the scrollbar moved from ${before.top}..${before.bottom} to ${after.top}.." +
+                "${after.bottom} when the body scrolled - it is inside the scrolled subtree",
+        )
+    }
+
+    @Test
     fun `the body scrolls rather than overflowing its box`() {
         // The scrolling half of the trade, which nothing else here pins: dropping verticalScroll
         // while keeping weight(1f, fill = false) leaves all the other assertions green, because the
@@ -366,6 +396,8 @@ class BossAlertCardLayoutTest {
     private companion object {
         const val FRAME = "alert-frame"
         const val CARD = "alert-card"
+        val SCROLLBAR = BODY_SCROLLBAR_TAG
+
         const val BODY_LINES = 40
 
         fun bodyLine(i: Int) = "line $i of a long body"

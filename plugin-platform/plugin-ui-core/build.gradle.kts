@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.risaboss"
-version = "1.0.9"
+version = "1.1.0"
 
 kotlin {
     compilerOptions {

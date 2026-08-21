@@ -148,5 +148,23 @@ class BossAlertDialogComposeTest {
             (confirm.bottom - confirm.top) > 0.dp,
             "the confirm button measured ${confirm.bottom - confirm.top} tall under a 40-line body",
         )
+
+        // Which branch this path takes is PLATFORM-DEPENDENT, which is why nothing here asserts it.
+        //
+        // A previous version did, scale-free (the actions sit below the body's last line when the
+        // body is not scrolled, above most of it when it is). CI answered it: that assertion passed
+        // on macOS and Linux and failed on windows-latest. So desktop's `Dialog` hands its content
+        // an unbounded height on some platforms and a bounded one on others, and the card
+        // consequently flexes its body on Windows and not elsewhere.
+        //
+        // Both outcomes are acceptable - which is the point. The invariant that has to hold
+        // everywhere is the one asserted above: the actions keep their height. Pinning the branch
+        // instead would make this test red on one platform for a reason unrelated to the property,
+        // the same way an alert's line count turned out to be a font fact rather than a layout one.
+        val lastLine = rule.onNodeWithText("line 39 of a long body").getUnclippedBoundsInRoot()
+        assertTrue(
+            lastLine.bottom > lastLine.top,
+            "the body's last line measured no height at all, on either branch",
+        )
     }
 }

@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.takeOrElse
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
@@ -35,6 +36,9 @@ import androidx.compose.ui.unit.dp
 // Its own file rather than living in BossDialog.kt: that file was already carrying the dialog
 // routing, the scrim, the popup and the anchor maths, and the card's own reasoning about measurement
 // is long enough that detekt's per-file function budget and per-function length both objected.
+
+/** Test tag on the body's scrollbar; see `BossAlertCardLayoutTest`. */
+internal const val BODY_SCROLLBAR_TAG = "alert-body-scrollbar"
 
 /** Width of a BOSS alert card, matching the house confirmation dialog. */
 internal val AlertWidth: Dp = 400.dp
@@ -68,9 +72,16 @@ internal val AlertWidth: Dp = 400.dp
  *    line only holds it `space.lg` clear of the parent's edges.
  *
  * **This fixes the squeeze where the card is measured against a parent, which is the scrimmed path**
- * (`ScrimmedModalContent` is a `fillMaxSize` Box, and that is where the report came from). On the
- * lightweight `Dialog` path it is inert by design, and the ceiling there is the *screen* rather than
- * the card: a tall card on a shorter display still puts its actions out of reach. Pre-existing.
+ * (`ScrimmedModalContent` is a `fillMaxSize` Box, and that is where the report came from).
+ *
+ * **On the lightweight `Dialog` path the answer is platform-dependent, not "inert".** That is
+ * measured, not assumed: a test asserting the body was NOT flexed there passed on macOS and Linux
+ * and failed on windows-latest, so that window hands its content an unbounded height on some
+ * platforms and a bounded one on others. Where it is unbounded the ceiling is the *screen* rather
+ * than the card, and a tall card on a shorter display still puts its actions out of reach -
+ * pre-existing, and not addressed here. Where it is bounded, this fix applies and the body scrolls.
+ * Either way the actions keep their height, which is the only invariant worth pinning; do not write
+ * a test that asserts which branch a platform takes.
  *
  * **There is a floor, about 176dp.** Only the body flexes, so padding, title and spacers are still
  * measured first. Measured: full-height actions at a 180dp parent, 20dp at 160dp, 0dp at 140dp, and
@@ -147,6 +158,10 @@ internal fun BossAlertCard(
 /**
  * The card's body: the part that gives way when the card is shorter than its content.
  *
+ * The scrollbar is a raw `VerticalScrollbar` and does **not** honour the app-wide scrollbar
+ * settings that `plugin-scrollbar` owns - this module cannot depend on that one, so the
+ * inconsistency is deliberate rather than an oversight.
+ *
  * [canFlex] must come from the constraints the enclosing `Column` receives, not from the card's own
  * incoming constraints - the caller's `modifier` sits between the two, and a caller that removes the
  * height bound would otherwise get the weighted branch against an infinite axis, which is the
@@ -159,23 +174,33 @@ private fun ColumnScope.AlertBody(
     contentColor: Color,
 ) {
     val scroll = rememberScrollState()
-    Box(
-        modifier =
-            if (canFlex) {
-                Modifier.weight(1f, fill = false).verticalScroll(scroll)
-            } else {
-                Modifier
-            },
-    ) {
-        CompositionLocalProvider(LocalContentColor provides contentColor) {
-            ProvideTextStyle(BossTheme.type.body, text)
-        }
-        // The affordance the scroll would otherwise not have, drawn only when something is below the
-        // fold. matchParentSize so the scrollbar takes no part in sizing the body.
-        if (canFlex && scroll.maxValue in 1 until Int.MAX_VALUE) {
-            Box(Modifier.matchParentSize(), contentAlignment = Alignment.TopEnd) {
-                VerticalScrollbar(rememberScrollbarAdapter(scroll), Modifier.fillMaxHeight())
+    val showScrollbar = canFlex && scroll.maxValue in 1 until Int.MAX_VALUE
+    // Two boxes, and which one owns which modifier is the whole point.
+    //
+    // The VIEWPORT owns the weight; the scroll lives in a child. Putting the scrollbar inside the
+    // scrolled subtree instead - as the first version of this did - makes it a sibling of the
+    // content in CONTENT space: `verticalScroll` measures its child against an infinite height, so
+    // that Box sizes to the content (~996dp for a 40-line body against a ~150dp viewport), and a
+    // `matchParentSize` scrollbar is then measured to the content height and translates upward as
+    // the user scrolls. Keeping the viewport and the scrollbar as siblings puts the scrollbar in
+    // viewport space, where a scrollbar belongs.
+    Box(modifier = if (canFlex) Modifier.weight(1f, fill = false) else Modifier) {
+        Box(modifier = if (canFlex) Modifier.verticalScroll(scroll) else Modifier) {
+            CompositionLocalProvider(LocalContentColor provides contentColor) {
+                // A gutter while the scrollbar is showing, so it does not sit on top of the last
+                // few characters of every wrapped line.
+                Box(Modifier.padding(end = if (showScrollbar) BossTheme.space.md else 0.dp)) {
+                    ProvideTextStyle(BossTheme.type.body, text)
+                }
             }
+        }
+        if (showScrollbar) {
+            VerticalScrollbar(
+                rememberScrollbarAdapter(scroll),
+                // Tagged so a test can assert it is measured against the VIEWPORT and does not
+                // translate with the content; nothing else about it is observable.
+                Modifier.align(Alignment.CenterEnd).fillMaxHeight().testTag(BODY_SCROLLBAR_TAG),
+            )
         }
     }
 }
