@@ -131,27 +131,38 @@ jobs:
       - name: 📥 Checkout Repository
         uses: actions/checkout@v7
 
-      - name: ☕ Setup JDK
-        uses: actions/setup-java@v5.6.0
-        with:
-          java-version: ${{ env.JAVA_VERSION }}
-          distribution: ${{ env.JAVA_DISTRIBUTION }}
-
+      # No JDK and no Gradle here on purpose. This job's two outputs are read
+      # out of version.properties with grep, and the `./gradlew showVersion`
+      # that used to follow them only printed the same file back: ShowVersionTask
+      # is a read-only task that loads version.properties and formats it, and it
+      # derives nothing the file does not already hold.
+      #
+      # It cost the whole job. Measured on three consecutive runs, the step took
+      # 153s / 157s / 211s out of a 160s / 163s / 221s job - a cold Gradle
+      # distribution download and a full configuration pass, with no
+      # setup-gradle cache to fall back on. build-test (three OSes),
+      # code-quality, compatibility-test and database-tests all `needs:` this
+      # job, so every pull request queued its entire matrix behind it.
+      #
+      # Printing the properties file directly gives a reader strictly more than
+      # the formatted box did, in milliseconds. `🧪 Test Version System` in
+      # compatibility-test still exercises showVersion itself, where the task is
+      # the thing under test and the job has a Gradle cache.
       - name: 🔍 Version Information
         id: get-version
         run: |
           # Get version info using our centralized system
           VERSION=$(grep "^app.version=" version.properties | cut -d'=' -f2)
           BUILD_NUMBER=$(grep "^app.build.number=" version.properties | cut -d'=' -f2)
-          
+
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "build-number=$BUILD_NUMBER" >> $GITHUB_OUTPUT
-          
+
           echo "📦 Version: $VERSION"
           echo "🔢 Build Number: $BUILD_NUMBER"
-          
-          # Show detailed version info
-          ./gradlew showVersion
+
+          echo "📋 version.properties:"
+          sed 's/^/   /' version.properties
 
   build-test:
     needs: version-check
