@@ -693,17 +693,17 @@ fun main(args: Array<String>) {
     // Skipped when the engine needs downloading: pre-warming against a mismatched
     // directory cannot succeed, and its only effect is to raise the very error
     // the download is about to fix.
-    // Gated on hasUsableEngine, not on !chromiumNeedsDownload: in the
-    // BootAndReport case there is no usable engine AND no download, so the latter
-    // would fire a guaranteed-futile boot that burns an attempt and sets an error
-    // — exactly what the comment above says pre-warming must not do.
-    if (hasUsableEngine) {
-        try {
-            ai.rever.boss.plugin.browser.FluckEngine
-                .prewarmInBackground()
-        } catch (e: Exception) {
-            logger.warn(LogCategory.SYSTEM, "Browser engine pre-warm failed to start", error = e)
-        }
+    // The "is there a usable engine" precondition is no longer applied here. It used to be, for
+    // the BootAndReport case - no usable engine AND no download, where a boot could only burn an
+    // attempt and set an error - and that reasoning still holds; it just belongs in the one gate
+    // every caller passes through. prewarmDecision re-evaluates it, freshly rather than from this
+    // startup-time snapshot, and logs which reason refused the call. Two copies of a precondition
+    // are two things that can disagree.
+    try {
+        ai.rever.boss.plugin.browser.FluckEngine
+            .prewarmInBackground()
+    } catch (e: Exception) {
+        logger.warn(LogCategory.SYSTEM, "Browser engine pre-warm failed to start", error = e)
     }
 
     // Parse CLI arguments if provided
@@ -960,9 +960,15 @@ fun main(args: Array<String>) {
                                 // The pre-warm was skipped at startup because the engine
                                 // was missing; now that it is installed, warm it so the
                                 // first tab does not pay the full boot.
+                                //
+                                // force, because it was skipped for a SECOND reason this
+                                // comment did not know about: the unforced gate wants an
+                                // existing browser profile, and a machine that has just
+                                // downloaded its engine has never had one. So this call
+                                // silently did nothing, on the one launch it was written for.
                                 runCatching {
                                     ai.rever.boss.plugin.browser.FluckEngine
-                                        .prewarmInBackground()
+                                        .prewarmInBackground(force = true)
                                 }
                                 isDownloadingChromium = false
                             }
@@ -1001,12 +1007,13 @@ fun main(args: Array<String>) {
                                             downloadProgress = progress
                                             if (progress.isComplete) {
                                                 WindowManager.createNewWindow()
-                                                // The pre-warm was skipped at startup because the engine
-                                                // was missing; now that it is installed, warm it so the
-                                                // first tab does not pay the full boot.
+                                                // Forced for the same reason as the first-attempt
+                                                // path above: a freshly downloaded engine has no
+                                                // browser profile yet, which the unforced gate reads
+                                                // as "this machine does not use the browser".
                                                 runCatching {
                                                     ai.rever.boss.plugin.browser.FluckEngine
-                                                        .prewarmInBackground()
+                                                        .prewarmInBackground(force = true)
                                                 }
                                                 isDownloadingChromium = false
                                             }
