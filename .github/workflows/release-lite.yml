@@ -446,96 +446,34 @@ jobs:
           }
         shell: powershell
 
-      - name: Check if DigiCert signing is available
-        id: check-secret
-        run: |
-          if [ -n "$CERT_HOST" ]; then
-            echo "can_sign=true" >> $GITHUB_OUTPUT
-          else
-            echo "can_sign=false" >> $GITHUB_OUTPUT
-          fi
-        shell: bash
-        env:
-          CERT_HOST: ${{ secrets.CODE_SIGNING_CERT_HOST }}
+      # This job's workspace is a checkout of BossConsoleLite, not of this repo,
+      # so a bare ./.github/actions path would not exist. Fetched the same way
+      # and for the same reason as the notarization helper in build-macos:
+      # sparse and path-scoped so it cannot disturb the Lite workspace, and
+      # pinned to this workflow's own commit so the action and the step that
+      # calls it always match.
+      - name: 📥 Fetch the shared Windows signing action
+        uses: actions/checkout@v7
+        with:
+          path: .boss-ci
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
 
-      - name: Decode Client Certificate
-        if: steps.check-secret.outputs.can_sign == 'true'
-        run: |
-          $certBytes = [System.Convert]::FromBase64String("${{ secrets.CODE_SIGNING_CLIENT_CERT }}")
-          [System.IO.File]::WriteAllBytes("${{ runner.temp }}\Certificate_pkcs12.p12", $certBytes)
-        shell: powershell
-
-      - name: Install DigiCert STM Client Tools
-        if: steps.check-secret.outputs.can_sign == 'true'
-        uses: digicert/ssm-code-signing@v1.2.1
-        env:
-          SM_HOST: ${{ secrets.CODE_SIGNING_CERT_HOST }}
-          SM_API_KEY: ${{ secrets.CODE_SIGNING_CERT_HOST_API_KEY }}
-          SM_CLIENT_CERT_FILE: ${{ runner.temp }}\Certificate_pkcs12.p12
-          SM_CLIENT_CERT_PASSWORD: ${{ secrets.CODE_SIGNING_CLIENT_CERT_PASSWORD }}
-
-      - name: Reset SMCTL Credentials
-        if: steps.check-secret.outputs.can_sign == 'true'
-        run: smctl credentials delete && smctl credentials save ${{ secrets.CODE_SIGNING_CERT_HOST_API_KEY }} ${{ secrets.CODE_SIGNING_CLIENT_CERT_PASSWORD }}
-        shell: cmd
-        env:
-          SM_HOST: ${{ secrets.CODE_SIGNING_CERT_HOST }}
-
-      # certsync puts the certificate where signtool looks for it. Without it
-      # smctl prints FAILED and exits 0; see release.yml for the full note.
-      - name: Sync KeyLocker Certificate to the Windows Store
-        if: steps.check-secret.outputs.can_sign == 'true'
-        continue-on-error: true
-        run: |
-          rem smctl exits 0 whether a subcommand works or not, and cmd keeps going
-          rem after a failure, so all four run and the log carries every answer.
-          smctl healthcheck
-          smctl windows ksp list
-          smctl keypair ls
-          smctl windows certsync --keypair-alias="%KEYPAIR_ALIAS%"
-        shell: cmd
-        env:
-          SM_HOST: ${{ secrets.CODE_SIGNING_CERT_HOST }}
-          SM_API_KEY: ${{ secrets.CODE_SIGNING_CERT_HOST_API_KEY }}
-          SM_CLIENT_CERT_FILE: ${{ runner.temp }}\Certificate_pkcs12.p12
-          SM_CLIENT_CERT_PASSWORD: ${{ secrets.CODE_SIGNING_CLIENT_CERT_PASSWORD }}
-          KEYPAIR_ALIAS: ${{ secrets.CODE_SIGNING_KEYPAIR_ALIAS }}
-
-      - name: Sign Windows MSI
-        if: steps.check-secret.outputs.can_sign == 'true'
-        run: smctl sign --keypair-alias "${{ secrets.CODE_SIGNING_KEYPAIR_ALIAS }}" --input "${{ steps.find-msi.outputs.msi-path }}"
-        shell: bash
-        env:
-          SM_HOST: ${{ secrets.CODE_SIGNING_CERT_HOST }}
-          SM_API_KEY: ${{ secrets.CODE_SIGNING_CERT_HOST_API_KEY }}
-          SM_CLIENT_CERT_FILE: ${{ runner.temp }}\Certificate_pkcs12.p12
-          SM_CLIENT_CERT_PASSWORD: ${{ secrets.CODE_SIGNING_CLIENT_CERT_PASSWORD }}
-
-      - name: 🔏 Verify MSI Signature
-        shell: powershell
-        env:
-          ALLOW_UNSIGNED: ${{ inputs.allow_unsigned_windows == true || inputs.allow_unsigned_windows == 'true' }}
-        run: |
-          $sig = Get-AuthenticodeSignature -FilePath "${{ steps.find-msi.outputs.msi-path }}"
-          Write-Host "Signature status: $($sig.Status)"
-          if ($sig.SignerCertificate) {
-            Write-Host "Signer: $($sig.SignerCertificate.Subject)"
-          }
-          if ($sig.Status -ne 'Valid') {
-            if ('${{ steps.check-secret.outputs.can_sign }}' -ne 'true') {
-              Write-Host "::warning::Windows MSI is UNSIGNED, status $($sig.Status) (no CODE_SIGNING_* secrets configured)"
-            } elseif ($sig.Status -eq 'NotSigned' -or $sig.Status -eq 'HashMismatch') {
-              if ($env:ALLOW_UNSIGNED -eq 'true') {
-                Write-Host "::warning::Signature enforcement overridden: publishing a $($sig.Status) Windows MSI because allow_unsigned_windows was set"
-              } else {
-                Write-Host "::error::MSI signature is $($sig.Status) even though signing credentials were present"
-                Write-Host "::error::To ship this release anyway, re-run with allow_unsigned_windows enabled."
-                exit 1
-              }
-            } else {
-              Write-Host "::warning::MSI signature status is $($sig.Status), expected Valid"
-            }
-          }
+      # Same action the two release.yml Windows jobs use. Signing happens before
+      # the rename below because an Authenticode signature covers the file's
+      # contents, not its name.
+      - name: 🔏 Sign and verify the Windows MSI
+        id: sign-msi
+        uses: ./.boss-ci/.github/actions/sign-windows-msi
+        with:
+          msi-path: ${{ steps.find-msi.outputs.msi-path }}
+          cert-host: ${{ secrets.CODE_SIGNING_CERT_HOST }}
+          api-key: ${{ secrets.CODE_SIGNING_CERT_HOST_API_KEY }}
+          client-cert: ${{ secrets.CODE_SIGNING_CLIENT_CERT }}
+          client-cert-password: ${{ secrets.CODE_SIGNING_CLIENT_CERT_PASSWORD }}
+          keypair-alias: ${{ secrets.CODE_SIGNING_KEYPAIR_ALIAS }}
+          allow-unsigned: ${{ inputs.allow_unsigned_windows == true || inputs.allow_unsigned_windows == 'true' }}
+          label: BOSS Lite Windows
 
       - name: 📋 Rename MSI to Lite convention
         env:
