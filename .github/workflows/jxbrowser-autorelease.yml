@@ -343,6 +343,16 @@ jobs:
             echo "- Dry run: \`${DRY_RUN:-false}\`"
             if [[ -n "${PIN_ACTION:-}" ]]; then
               echo "- Pin (\`${PIN_CURRENT:-unknown}\`): \`$PIN_ACTION\`"
-              [[ -n "${PIN_PR_URL:-}" ]] && echo "- Pin PR: $PIN_PR_URL"
+              # A full `if`, not `[[ ... ]] && echo`. These blocks run under `bash -e`, and a
+              # trailing AND-list whose test is false returns 1 - which -e cannot tell apart from
+              # a command that failed. Being the last statement in this `if`, and so of the
+              # enclosing group, that exit status became the step's, and the job's.
+              #
+              # It fired on every run that had nothing to do, because `pin_pr_url` is empty
+              # precisely when there was no PR to open. A daily scheduled no-op reported itself
+              # as a failure, which is also where a real engine-release failure would have shown.
+              if [[ -n "${PIN_PR_URL:-}" ]]; then
+                echo "- Pin PR: $PIN_PR_URL"
+              fi
             fi
           } >> "$GITHUB_STEP_SUMMARY"
