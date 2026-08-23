@@ -54,6 +54,11 @@ import java.util.concurrent.TimeUnit
  * answers "what is BOSS holding"; the colour answers "is this machine in trouble". Conflating
  * them would inherit this bias into the alerting.
  */
+// Over detekt's 11-function threshold by one. Suppressed rather than paid for by exiling a
+// member to file scope, which is what an earlier revision did: it left `retainLive` as a
+// module-wide symbol whose name no longer said what it retained, for no reason a reader of this
+// file could see.
+@Suppress("TooManyFunctions")
 object ProcessFootprint {
     private val logger = BossLogger.forComponent("ProcessFootprint")
 
@@ -112,6 +117,18 @@ object ProcessFootprint {
         val browserBytes: Long,
         val pluginBytes: Long,
         val processCount: Int,
+        /**
+         * Bytes per owned pid, so one process can be reported on its own.
+         *
+         * Carried on the reading rather than kept as separate mutable state next to it, which
+         * would let a caller pair the sums from one sample with the per-pid map from another -
+         * a torn read that would surface as a tab figure exceeding the total it sits inside.
+         * Here the two cannot disagree, because they are the same object.
+         *
+         * The measurement already happens for every pid on every sample, so the detail is free:
+         * no extra `ps`, no second cadence.
+         */
+        val bytesByPid: Map<Long, Long> = emptyMap(),
     ) {
         val totalBytes: Long get() = hostBytes + browserBytes + pluginBytes
     }
@@ -160,17 +177,14 @@ object ProcessFootprint {
     }
 
     /**
-     * Which pids need their command line read this tick.
+     * The last reading, without ever taking one.
      *
-     * Pure, so the incremental rule is testable without a process table. Everything on a full
-     * rescan; otherwise only what has appeared since the last enumeration, which on a settled
-     * machine is nothing at all.
+     * Deliberately distinct from [current]: that refreshes when its TTL has expired, and doing so
+     * spawns `ps`. This is for readers on paths that must never block - a Compose pass drawing the
+     * status strip - where triggering a subprocess would be a serious bug rather than a slow
+     * frame. Null before the sampler's first successful read.
      */
-    internal fun pidsToClassify(
-        livePids: Set<Long>,
-        knownPids: Set<Long>,
-        fullRescan: Boolean,
-    ): Set<Long> = if (fullRescan) livePids else livePids - knownPids
+    fun lastReading(): Reading? = cached
 
     /**
      * The owned-pid map carried into this tick, with the dead dropped.
@@ -185,6 +199,19 @@ object ProcessFootprint {
         livePids: Set<Long>,
         fullRescan: Boolean,
     ): Map<Long, Owner> = if (fullRescan) emptyMap() else owned.filterKeys { it in livePids }
+
+    /**
+     * Which pids need their command line read this tick.
+     *
+     * Pure, so the incremental rule is testable without a process table. Everything on a full
+     * rescan; otherwise only what has appeared since the last enumeration, which on a settled
+     * machine is nothing at all.
+     */
+    internal fun pidsToClassify(
+        livePids: Set<Long>,
+        knownPids: Set<Long>,
+        fullRescan: Boolean,
+    ): Set<Long> = if (fullRescan) livePids else livePids - knownPids
 
     private fun read(nowMs: Long): Reading? =
         runCatching {
@@ -245,7 +272,7 @@ object ProcessFootprint {
                     Owner.PLUGIN -> plugin += bytes
                 }
             }
-            Reading(host, browser, plugin, memory.size)
+            Reading(host, browser, plugin, memory.size, memory)
         }.onFailure {
             logger.debug(LogCategory.SYSTEM, "Footprint reading failed: ${it.message}")
         }.getOrNull()

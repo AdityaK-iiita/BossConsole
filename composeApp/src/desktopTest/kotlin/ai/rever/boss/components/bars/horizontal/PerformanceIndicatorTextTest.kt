@@ -15,12 +15,54 @@ class PerformanceIndicatorTextTest {
     private val gb = 1024f
 
     private fun text(
+        activeBrowserMB: Float? = null,
         footprintMB: Float? = 2.1f * gb,
         systemUsedMB: Float? = 70f * gb,
         systemTotalMB: Float? = 128f * gb,
         heapUsedMB: Float = 296f,
         heapMaxMB: Float = 2f * gb,
-    ) = memoryIndicatorText(footprintMB, systemUsedMB, systemTotalMB, heapUsedMB, heapMaxMB)
+    ) = memoryIndicatorText(activeBrowserMB, footprintMB, systemUsedMB, systemTotalMB, heapUsedMB, heapMaxMB)
+
+    // region the active browser figure
+
+    @Test
+    fun `the active tab is nested inside the total`() {
+        assertEquals("2.4GB (1.6GB tab) · 70/128GB", text(activeBrowserMB = 1.6f * gb, footprintMB = 2.4f * gb))
+    }
+
+    /**
+     * Brackets, not a third peer, because the renderer is one of the processes already summed
+     * into the footprint. Listed side by side, the two invite being added together.
+     */
+    @Test
+    fun `no browser reading leaves today's string untouched`() {
+        assertEquals("2.1GB · 70/128GB", text(activeBrowserMB = null))
+    }
+
+    /**
+     * A tab figure with no total to sit inside has no referent, so it is dropped rather than
+     * promoted to the front of the label.
+     */
+    @Test
+    fun `the tab figure is suppressed when the footprint is unknown`() {
+        assertEquals("70/128GB", text(activeBrowserMB = 1.6f * gb, footprintMB = null))
+    }
+
+    @Test
+    fun `the tab figure survives an unreadable machine`() {
+        assertEquals(
+            "2.4GB (1.6GB tab)",
+            text(activeBrowserMB = 1.6f * gb, footprintMB = 2.4f * gb, systemUsedMB = null, systemTotalMB = null),
+        )
+    }
+
+    @Test
+    fun `a small tab keeps its own unit rather than borrowing the total's`() {
+        // Unlike the machine pair, these two are not a ratio and are formatted independently.
+        assertEquals("2.4GB (180MB tab) · 70/128GB", text(activeBrowserMB = 180f, footprintMB = 2.4f * gb))
+    }
+
+    // endregion
 
     @Test
     fun `both readings show BOSS then the machine`() {

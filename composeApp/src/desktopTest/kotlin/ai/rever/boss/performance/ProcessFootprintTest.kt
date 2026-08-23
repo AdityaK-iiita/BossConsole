@@ -3,6 +3,7 @@ package ai.rever.boss.performance
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Guards the ownership rule and the per-platform parsers in [ProcessFootprint].
@@ -180,6 +181,61 @@ class ProcessFootprintTest {
         assertEquals(true, FootprintDisplay.isOnScreen)
         FootprintDisplay.setMounted(false)
         assertEquals(false, FootprintDisplay.isOnScreen)
+    }
+
+    // endregion
+
+    // region per-pid detail
+
+    /**
+     * The map rides on the reading rather than beside it, so the sums and the detail can never
+     * come from different samples - a tab figure larger than the total it is nested inside is
+     * exactly what a torn read would look like on screen.
+     */
+    @Test
+    fun `a reading carries the bytes of each owned pid`() {
+        val reading = ProcessFootprint.Reading(1L, 2L, 3L, 2, mapOf(42L to 4096L))
+        assertEquals(4096L, reading.bytesByPid[42L])
+        assertEquals(6L, reading.totalBytes)
+    }
+
+    @Test
+    fun `an unmeasured pid is absent rather than zero`() {
+        // Absent and zero are different claims: one is "not one of ours, or not measured yet",
+        // the other would assert a process holding no memory.
+        val reading = ProcessFootprint.Reading(1L, 2L, 3L, 1, mapOf(42L to 4096L))
+        assertNull(reading.bytesByPid[99L])
+    }
+
+    @Test
+    fun `an older reading still deserialises without the map`() {
+        // Defaulted, so a Reading constructed the old way keeps working.
+        assertEquals(emptyMap(), ProcessFootprint.Reading(1L, 2L, 3L, 0).bytesByPid)
+    }
+
+    /**
+     * The invariant that actually catches a sampler which forgets to carry the map.
+     *
+     * The three constructor tests above pin the shape but would all pass if `read()` built its
+     * `Reading` without the detail, because they construct one by hand. This takes a real
+     * reading and holds the two halves against each other: every measured pid lands in exactly
+     * one bucket, so the per-pid values must sum to the totals and count to `processCount`.
+     *
+     * Returns early rather than failing when no reading is available - a machine or CI image
+     * where the process query cannot run is not evidence of a bug - so the mutation guard this
+     * provides is real locally and best-effort in CI.
+     */
+    @Test
+    fun `a real reading's per-pid detail agrees with its totals`() {
+        FootprintDisplay.setMounted(true)
+        try {
+            val reading = ProcessFootprint.current() ?: return
+            assertEquals(reading.processCount, reading.bytesByPid.size)
+            assertEquals(reading.totalBytes, reading.bytesByPid.values.sum())
+            assertTrue(reading.bytesByPid.isNotEmpty(), "this JVM is running, so at least one pid is ours")
+        } finally {
+            FootprintDisplay.setMounted(false)
+        }
     }
 
     // endregion

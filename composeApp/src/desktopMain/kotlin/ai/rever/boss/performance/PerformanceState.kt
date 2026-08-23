@@ -8,6 +8,8 @@ import ai.rever.boss.components.plugin.MissingPluginDependency
 import ai.rever.boss.components.plugin.PluginDependencyEventBus
 import ai.rever.boss.plugin.MissingDependencyReporter
 import ai.rever.boss.plugin.api.PanelId
+import ai.rever.boss.plugin.browser.ActiveBrowserRegistry
+import ai.rever.boss.plugin.browser.BrowserHandleImpl
 import ai.rever.boss.utils.WindowFocusManager
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
@@ -33,6 +35,12 @@ private const val HOST_ID = "ai.rever.boss.host"
  * Desktop implementation of PerformanceState.
  * Uses PerformanceMonitor and PerformanceSettingsManager to provide state.
  */
+@Suppress("TooManyFunctions")
+// Over detekt's 11-function threshold. Suppressed rather than answered by moving whichever
+// member was easiest to move: the eviction that bought silence here also duplicated the logger
+// and put an unrelated function at file scope in a diff about renderer memory. If this object is
+// genuinely doing too much, the split worth making is a real one - the panel-plugin plumbing out
+// of a class about performance state - not one chosen by a lint threshold.
 actual object PerformanceState {
     private val logger = BossLogger.forComponent("PerformanceState")
     private val scope = CoroutineScope(Dispatchers.Main)
@@ -68,29 +76,25 @@ actual object PerformanceState {
         FootprintDisplay.setMounted(mounted)
     }
 
-    actual fun openPerformancePanel() {
-        scope.launch {
-            val focusedWindowId = WindowFocusManager.focusedWindowFlow.value
-            if (focusedWindowId == null) {
-                logger.debug(LogCategory.UI, "No window focused, cannot open performance panel")
-                return@launch
-            }
-            if (offerToInstallPanel()) return@launch
-            PanelEventBus.openPanel(PERFORMANCE_PANEL, sourceWindowId = focusedWindowId)
-        }
-    }
-
-    actual fun togglePerformancePanel() {
-        scope.launch {
-            val focusedWindowId = WindowFocusManager.focusedWindowFlow.value
-            if (focusedWindowId == null) {
-                logger.debug(LogCategory.UI, "No window focused, cannot toggle performance panel")
-                return@launch
-            }
-            if (offerToInstallPanel()) return@launch
-            PanelEventBus.togglePanel(PERFORMANCE_PANEL, sourceWindowId = focusedWindowId)
-        }
-    }
+    /**
+     * Three lookups, none of which blocks or touches IPC.
+     *
+     * `activeIn` filters every registered entry and evaluates `isValid` on each - disposed,
+     * connection-dead, engine generation, `browser.isClosed` - so it is a handful of atomic reads
+     * per open browser surface rather than the two map lookups an earlier draft of this comment
+     * claimed. Still non-blocking, which is the property that matters here.
+     * `lastKnownRendererPid` is a volatile load pushed at navigation time; `lastReading` returns
+     * the sampler's last result without taking a new one.
+     * That matters because the caller is a Compose pass - `ProcessFootprint.current()` would have
+     * been wrong here, since it spawns `ps` once its TTL expires.
+     *
+     * The cast is confined to this one place. It is sound because `ActiveBrowserRegistry.register`
+     * has exactly one caller, `BrowserHandleImpl.Content()`, which passes itself; it stays a safe
+     * cast because a status-bar figure is not worth a ClassCastException if that ever changes.
+     *
+     * A dead pid resolves to unknown for free: `ProcessFootprint` drops departed pids from its
+     * map each tick, so a lookup for one simply misses.
+     */
 
     /**
      * Offer to install the panel's plugin when it is absent, returning whether it did.
@@ -119,6 +123,37 @@ actual object PerformanceState {
         logger.info(LogCategory.UI, "Performance panel requested but its plugin is not installed")
         PluginDependencyEventBus.report(prompt)
         return true
+    }
+
+    actual fun activeBrowserBytes(windowId: String): Long {
+        val pid =
+            (ActiveBrowserRegistry.activeIn(windowId) as? BrowserHandleImpl)
+                ?.lastKnownRendererPid() ?: return 0L
+        return ProcessFootprint.lastReading()?.bytesByPid?.get(pid.toLong()) ?: 0L
+    }
+
+    actual fun openPerformancePanel() {
+        scope.launch {
+            val focusedWindowId = WindowFocusManager.focusedWindowFlow.value
+            if (focusedWindowId == null) {
+                logger.debug(LogCategory.UI, "No window focused, cannot open performance panel")
+                return@launch
+            }
+            if (offerToInstallPanel()) return@launch
+            PanelEventBus.openPanel(PERFORMANCE_PANEL, sourceWindowId = focusedWindowId)
+        }
+    }
+
+    actual fun togglePerformancePanel() {
+        scope.launch {
+            val focusedWindowId = WindowFocusManager.focusedWindowFlow.value
+            if (focusedWindowId == null) {
+                logger.debug(LogCategory.UI, "No window focused, cannot toggle performance panel")
+                return@launch
+            }
+            if (offerToInstallPanel()) return@launch
+            PanelEventBus.togglePanel(PERFORMANCE_PANEL, sourceWindowId = focusedWindowId)
+        }
     }
 
     actual fun registerResourceProviders(

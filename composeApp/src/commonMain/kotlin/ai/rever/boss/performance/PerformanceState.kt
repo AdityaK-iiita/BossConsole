@@ -37,6 +37,20 @@ expect object PerformanceState {
     fun setIndicatorMounted(mounted: Boolean)
 
     /**
+     * Resident memory of the renderer behind the browser on screen in [windowId], or 0.
+     *
+     * Resolved per window rather than sampled into the snapshot, for two reasons. The value is
+     * only ever drawn live in a status bar, so putting it in `MemoryMetrics` would persist a
+     * live-only figure into every one of the 10,000 retained history entries and into exported
+     * snapshots, where it means nothing. And it differs per window: a single sampled value would
+     * show one window's tab in the other window's strip.
+     *
+     * 0 means unknown - no browser on screen, a tab just switched, a renderer that has not
+     * committed a document yet - and must be rendered as absent, never as a zero.
+     */
+    fun activeBrowserBytes(windowId: String): Long
+
+    /**
      * Open the performance panel.
      */
     fun openPerformancePanel()

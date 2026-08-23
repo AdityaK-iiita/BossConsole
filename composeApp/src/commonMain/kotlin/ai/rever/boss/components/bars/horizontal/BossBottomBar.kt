@@ -239,9 +239,22 @@ fun BossRightBottomBar() {
     if (showIndicator) {
         val snapshot = PerformanceState.currentSnapshot()
         val health = PerformanceState.currentHealth()
+        // Resolved here rather than in the sampler because it is per window: this strip should
+        // show the browser in THIS window, and a single sampled value would show one window's tab
+        // in the other's.
+        //
+        // Keyed on the snapshot, which arrives every `memorySampleIntervalMs` - 1 s by default,
+        // not the 15 s of ProcessFootprint.MEASURE_TTL_MS. Those are two different clocks: this
+        // re-reads about once a second, while the value behind it only changes every 15 s. The
+        // key is there to keep it off the recomposition path, not to match the sampler.
+        val activeBrowserBytes =
+            remember(snapshot, windowId) {
+                windowId?.let { PerformanceState.activeBrowserBytes(it) } ?: 0L
+            }
         PerformanceIndicator(
             snapshot = snapshot,
             health = health,
+            activeBrowserBytes = activeBrowserBytes,
             onClick = { PerformanceState.togglePerformancePanel() },
         )
     }
