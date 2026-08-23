@@ -52,13 +52,13 @@ import androidx.compose.ui.window.DialogProperties
  * @param error a failure from the last attempt, kept on screen instead of dismissing the dialog
  */
 @Composable
-fun PluginVersionGateDialog(
-    gate: PluginVersionGate,
-    remedies: List<PluginVersionRemedy>,
+fun PluginLoadGateDialog(
+    gate: PluginLoadGate,
+    remedies: List<PluginLoadRemedy>,
     busy: Boolean,
     error: String?,
     onDismiss: () -> Unit,
-    onApply: (PluginVersionRemedy) -> Unit,
+    onApply: (PluginLoadRemedy) -> Unit,
 ) {
     BossDialog(
         // Not dismissable while a remedy is running: an app download or a jar restore continues
@@ -88,7 +88,7 @@ fun PluginVersionGateDialog(
             backgroundColor = BossTheme.colors.panel,
             elevation = 8.dp,
         ) {
-            PluginVersionGateBody(
+            PluginLoadGateBody(
                 gate = gate,
                 remedies = remedies,
                 busy = busy,
@@ -101,13 +101,13 @@ fun PluginVersionGateDialog(
 }
 
 @Composable
-private fun PluginVersionGateBody(
-    gate: PluginVersionGate,
-    remedies: List<PluginVersionRemedy>,
+private fun PluginLoadGateBody(
+    gate: PluginLoadGate,
+    remedies: List<PluginLoadRemedy>,
     busy: Boolean,
     error: String?,
     onDismiss: () -> Unit,
-    onApply: (PluginVersionRemedy) -> Unit,
+    onApply: (PluginLoadRemedy) -> Unit,
 ) {
     Column(modifier = Modifier.padding(20.dp)) {
         Text(
@@ -127,12 +127,20 @@ private fun PluginVersionGateBody(
         Text(
             text =
                 when (gate) {
-                    is PluginVersionGate.NeedsNewerHost -> {
+                    is PluginLoadGate.NeedsNewerHost -> {
                         "It needs BOSS ${gate.required} or later. This is ${gate.current}."
                     }
 
-                    is PluginVersionGate.NeedsNewerApi -> {
+                    is PluginLoadGate.NeedsNewerApi -> {
                         "It needs plugin API ${gate.required} or later. The installed API layer is ${gate.current}."
+                    }
+
+                    is PluginLoadGate.SignatureRejected -> {
+                        // Says what is wrong with the FILE, not with a version, and does not
+                        // accuse: the ordinary cause is a jar replaced by hand during development,
+                        // not an attack. The verifier's own reason is shown below.
+                        "The installed file does not match the signature the store recorded for " +
+                            "it, so it was not loaded."
                     }
                 },
             fontSize = 13.sp,
@@ -162,7 +170,7 @@ private fun PluginVersionGateBody(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        PluginVersionGateActions(
+        PluginLoadGateActions(
             remedies = remedies,
             busy = busy,
             onDismiss = onDismiss,
@@ -172,15 +180,15 @@ private fun PluginVersionGateBody(
 }
 
 @Composable
-private fun PluginVersionGateActions(
-    remedies: List<PluginVersionRemedy>,
+private fun PluginLoadGateActions(
+    remedies: List<PluginLoadRemedy>,
     busy: Boolean,
     onDismiss: () -> Unit,
-    onApply: (PluginVersionRemedy) -> Unit,
+    onApply: (PluginLoadRemedy) -> Unit,
 ) {
     // NothingAvailable is a sentence, not a button. remediesFor guarantees it is alone in the list
     // when present, so it is handled before anything is laid out as an action.
-    val explanation = remedies.filterIsInstance<PluginVersionRemedy.NothingAvailable>().firstOrNull()
+    val explanation = remedies.filterIsInstance<PluginLoadRemedy.NothingAvailable>().firstOrNull()
     if (explanation != null) {
         NoRemedyAvailable(reason = explanation.reason, onDismiss = onDismiss)
         return
@@ -273,10 +281,18 @@ private fun NoRemedyAvailable(
  * Every label names a version. "Downgrade" or "Update BOSS" leaves the user unable to tell what
  * they are about to get, and in the case of a revert, which version they are going back to.
  */
-internal fun remedyLabel(remedy: PluginVersionRemedy): String =
+internal fun remedyLabel(remedy: PluginLoadRemedy): String =
     when (remedy) {
-        is PluginVersionRemedy.UpdateHost -> "Update BOSS to ${remedy.availableVersion}"
-        is PluginVersionRemedy.UpdateApi -> "Update the plugin API to ${remedy.availableVersion}"
-        is PluginVersionRemedy.RevertPlugin -> "Go back to version ${remedy.toVersion}"
-        is PluginVersionRemedy.NothingAvailable -> remedy.reason
+        is PluginLoadRemedy.UpdateHost -> "Update BOSS to ${remedy.availableVersion}"
+
+        is PluginLoadRemedy.UpdateApi -> "Update the plugin API to ${remedy.availableVersion}"
+
+        is PluginLoadRemedy.RevertPlugin -> "Go back to version ${remedy.toVersion}"
+
+        // "Reinstall" rather than "Update", even when the store's version is higher: the point is
+        // replacing bytes that cannot be trusted, and a user told they are updating would not
+        // understand why it was offered for a plugin they never chose to change.
+        is PluginLoadRemedy.ReinstallFromStore -> "Reinstall version ${remedy.version} from the store"
+
+        is PluginLoadRemedy.NothingAvailable -> remedy.reason
     }

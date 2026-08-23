@@ -11,9 +11,9 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.launch
 
 /**
- * Shows a [PluginVersionGateDialog] for the first unresolved version-floor refusal, if any.
+ * Shows a [PluginLoadGateDialog] for the first unresolved load refusal, if any.
  *
- * Self-contained: it reads [PluginVersionGateRegistry] rather than taking state from the caller, so
+ * Self-contained: it reads [PluginLoadGateRegistry] rather than taking state from the caller, so
  * mounting it is one line and no state class grows a field. That matches where the refusal comes
  * from - startup plugin loading, before any window exists - and means whichever window opens first
  * asks the question.
@@ -26,11 +26,11 @@ import kotlinx.coroutines.launch
  *   can be supplied by the desktop layer that can reach them, and stubbed in a test.
  */
 @Composable
-fun PluginVersionGateHost(
+fun PluginLoadGateHost(
     manager: DynamicPluginManager?,
-    remedyResolver: PluginVersionRemedyResolver?,
+    remedyResolver: PluginLoadRemedyResolver?,
 ) {
-    val gates by PluginVersionGateRegistry.gates.collectAsState()
+    val gates by PluginLoadGateRegistry.gates.collectAsState()
     val gate = gates.values.firstOrNull()
     // One guard for all three absences. A refusal with no manager or no resolver is not renderable
     // and stays in the registry until something can act on it, so this is a plain absence rather
@@ -45,12 +45,12 @@ fun PluginVersionGateHost(
     // the dialog is not shown at all rather than shown with no buttons: an empty dialog that fills
     // in a moment later reads as a bug, and there is no hurry - the plugin has already failed.
     val remedies by
-        produceState<List<PluginVersionRemedy>?>(initialValue = null, gate) {
+        produceState<List<PluginLoadRemedy>?>(initialValue = null, gate) {
             value = remedyResolver.resolve(gate)
         }
     val resolved = remedies ?: return
 
-    PluginVersionGateDialog(
+    PluginLoadGateDialog(
         gate = gate,
         remedies = resolved,
         busy = busy,
@@ -60,7 +60,7 @@ fun PluginVersionGateHost(
             // recomposition for a problem the user has decided to live with would be worse than
             // the silence it replaced; the refusal is recorded again on the next launch, which is
             // the right cadence for something this consequential.
-            PluginVersionGateRegistry.clear(gate.pluginId)
+            PluginLoadGateRegistry.clear(gate.pluginId)
         },
         onApply = { remedy ->
             busy = true
@@ -89,22 +89,22 @@ fun PluginVersionGateHost(
  * Supplies and performs the remedies for a gate.
  *
  * An interface rather than a direct call into the desktop implementation, because
- * [PluginVersionGateHost] is `commonMain` and the pieces a remedy needs - the app updater, the
+ * [PluginLoadGateHost] is `commonMain` and the pieces a remedy needs - the app updater, the
  * plugin store, the plugins directory - are all `desktopMain`. It also makes the host testable
  * without any of them.
  */
-interface PluginVersionRemedyResolver {
-    suspend fun resolve(gate: PluginVersionGate): List<PluginVersionRemedy>
+interface PluginLoadRemedyResolver {
+    suspend fun resolve(gate: PluginLoadGate): List<PluginLoadRemedy>
 
     suspend fun apply(
-        gate: PluginVersionGate,
-        remedy: PluginVersionRemedy,
+        gate: PluginLoadGate,
+        remedy: PluginLoadRemedy,
         manager: DynamicPluginManager,
     ): Result<String>
 }
 
 /**
- * Holds the desktop [PluginVersionRemedyResolver] for the `commonMain` host composable.
+ * Holds the desktop [PluginLoadRemedyResolver] for the `commonMain` host composable.
  *
  * The same shape as `BrokeredCredentialAccess`, and for the same reason: the implementation speaks
  * to the app updater, the plugin store and the filesystem, all of which live in `desktopMain`,
@@ -114,14 +114,14 @@ interface PluginVersionRemedyResolver {
  * refusal recorded before this is set has nothing that could act on it, and it stays in the
  * registry until something can.
  */
-object PluginVersionRemedyAccess {
+object PluginLoadRemedyAccess {
     @Volatile
-    private var resolver: PluginVersionRemedyResolver? = null
+    private var resolver: PluginLoadRemedyResolver? = null
 
     /** Called once from desktop startup. */
-    fun initialize(implementation: PluginVersionRemedyResolver) {
+    fun initialize(implementation: PluginLoadRemedyResolver) {
         resolver = implementation
     }
 
-    fun current(): PluginVersionRemedyResolver? = resolver
+    fun current(): PluginLoadRemedyResolver? = resolver
 }

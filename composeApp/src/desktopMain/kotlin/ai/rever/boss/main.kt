@@ -217,8 +217,8 @@ fun main(args: Array<String>) {
     // while the dialog is mounted from commonMain. Registered BEFORE any plugin loads, because the
     // refusal this exists for happens during startup plugin loading - a refusal recorded before
     // this runs would sit in the registry with nothing able to act on it.
-    ai.rever.boss.components.plugin.PluginVersionRemedyAccess
-        .initialize(ai.rever.boss.components.plugin.DesktopPluginVersionRemedyResolver)
+    ai.rever.boss.components.plugin.PluginLoadRemedyAccess
+        .initialize(ai.rever.boss.components.plugin.DesktopPluginLoadRemedyResolver)
 
     // Warm the two settings singletons that load their file synchronously in `init`
     // (WorkspaceSettingsManager and FocusModeSettingsManager). Both must be readable the

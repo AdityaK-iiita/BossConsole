@@ -925,15 +925,18 @@ class DynamicPluginManager(
                             return@withLock Result.failure(error)
                         }
 
-                        // A version floor is the one load failure with a known fix, so record it
-                        // where something can offer one. Everything else stays a log line: a
-                        // corrupt jar or a missing main class has no button that helps.
+                        // A load failure with a known fix - a version floor, or a jar whose bytes
+                        // do not match its recorded signature - is recorded where something can
+                        // offer that fix. Everything else stays a log line: a corrupt jar or a
+                        // missing main class has no button that helps.
                         //
-                        // Before this, a floor refusal reached only the log, and from the user's
+                        // Before this, such a refusal reached only the log, and from the user's
                         // side the plugin simply stopped existing. For a systemPlugin that means a
                         // feature vanished - fluck-browser IS the browser tab, so 1.2.22 requiring
-                        // BOSS 9.4.23 on a 9.4.22 host presented as "my browser is gone".
-                        versionGateFor(error)?.let(PluginVersionGateRegistry::record)
+                        // BOSS 9.4.23 on a 9.4.22 host presented as "my browser is gone". The
+                        // signature case is worse still: the Toolbox is how a plugin gets
+                        // reinstalled, so when it is the one refused, the way out vanishes with it.
+                        loadGateFor(error)?.let(PluginLoadGateRegistry::record)
 
                         notifyListeners { it.pluginLoadFailed(null, error ?: Exception("Unknown error")) }
                         return@withLock Result.failure(error ?: Exception("Unknown error"))

@@ -13,9 +13,9 @@ import kotlin.test.assertTrue
  * only trace was one ERROR line in `~/.boss/logs`. Each case below is a position a user was actually
  * in that day.
  */
-class PluginVersionGateTest {
+class PluginLoadGateTest {
     private val hostGate =
-        PluginVersionGate.NeedsNewerHost(
+        PluginLoadGate.NeedsNewerHost(
             pluginId = "ai.rever.boss.plugin.dynamic.fluckbrowser",
             displayName = "Fluck Browser",
             required = "9.4.23",
@@ -23,7 +23,7 @@ class PluginVersionGateTest {
         )
 
     private val apiGate =
-        PluginVersionGate.NeedsNewerApi(
+        PluginLoadGate.NeedsNewerApi(
             pluginId = "ai.rever.boss.plugin.dynamic.fluckbrowser",
             displayName = "Fluck Browser",
             required = "1.0.83",
@@ -42,19 +42,19 @@ class PluginVersionGateTest {
     }
 
     private fun remedies(
-        gate: PluginVersionGate,
+        gate: PluginLoadGate,
         hostUpdate: String? = null,
         apiUpdate: String? = null,
         revertTo: String? = null,
-    ) = remediesFor(gate, hostUpdate, apiUpdate, revertTo, satisfies)
+    ) = remediesFor(gate, RemedyOptions(hostUpdate, apiUpdate, revertTo), satisfies)
 
     @Test
     fun `a host update that clears the floor is offered first`() {
         val out = remedies(hostGate, hostUpdate = "9.4.23", revertTo = "1.2.21")
-        assertEquals(PluginVersionRemedy.UpdateHost("9.4.23"), out.first())
+        assertEquals(PluginLoadRemedy.UpdateHost("9.4.23"), out.first())
         // Going forward beats going back when both are possible, but going back stays on offer -
         // a user mid-task should not have to restart the app to get their browser back.
-        assertEquals(PluginVersionRemedy.RevertPlugin("1.2.21"), out.last())
+        assertEquals(PluginLoadRemedy.RevertPlugin("1.2.21"), out.last())
     }
 
     @Test
@@ -63,7 +63,7 @@ class PluginVersionGateTest {
         // that lands below the floor costs the user a download and a restart and leaves the plugin
         // exactly as missing as before.
         val out = remedies(hostGate, hostUpdate = "9.4.22", revertTo = "1.2.21")
-        assertEquals(listOf(PluginVersionRemedy.RevertPlugin("1.2.21")), out)
+        assertEquals(listOf(PluginLoadRemedy.RevertPlugin("1.2.21")), out)
     }
 
     @Test
@@ -71,13 +71,13 @@ class PluginVersionGateTest {
         // The actual position on the day: 9.4.23 did not exist yet, because the plugin released
         // ahead of the host it required.
         val out = remedies(hostGate, hostUpdate = null, revertTo = "1.2.21")
-        assertEquals(listOf(PluginVersionRemedy.RevertPlugin("1.2.21")), out)
+        assertEquals(listOf(PluginLoadRemedy.RevertPlugin("1.2.21")), out)
     }
 
     @Test
     fun `with nothing published and nothing kept, say why rather than showing an empty dialog`() {
         val out = remedies(hostGate)
-        val nothing = assertIs<PluginVersionRemedy.NothingAvailable>(out.single())
+        val nothing = assertIs<PluginLoadRemedy.NothingAvailable>(out.single())
         assertTrue(nothing.reason.contains("9.4.23"), "the reason does not name what is needed")
         assertTrue(nothing.reason.contains("9.4.22"), "the reason does not name what is installed")
     }
@@ -88,13 +88,13 @@ class PluginVersionGateTest {
         // plugin, so this is resolvable in seconds without a restart - sending the user to download
         // a whole application update for it would be wrong even when one exists.
         val out = remedies(apiGate, hostUpdate = "9.9.9", apiUpdate = "1.0.83")
-        assertEquals(listOf<PluginVersionRemedy>(PluginVersionRemedy.UpdateApi("1.0.83")), out)
+        assertEquals(listOf<PluginLoadRemedy>(PluginLoadRemedy.UpdateApi("1.0.83")), out)
     }
 
     @Test
     fun `an api update below the floor is not offered either`() {
         val out = remedies(apiGate, apiUpdate = "1.0.82", revertTo = "1.2.21")
-        assertEquals(listOf(PluginVersionRemedy.RevertPlugin("1.2.21")), out)
+        assertEquals(listOf(PluginLoadRemedy.RevertPlugin("1.2.21")), out)
     }
 
     @Test
@@ -103,7 +103,7 @@ class PluginVersionGateTest {
         // Reading it as strict would refuse the exact release built to fix the problem.
         assertTrue(satisfies("9.4.23", "9.4.23"))
         val out = remedies(hostGate, hostUpdate = "9.4.23")
-        assertEquals(listOf<PluginVersionRemedy>(PluginVersionRemedy.UpdateHost("9.4.23")), out)
+        assertEquals(listOf<PluginLoadRemedy>(PluginLoadRemedy.UpdateHost("9.4.23")), out)
     }
 
     @Test
@@ -127,4 +127,86 @@ class PluginVersionGateTest {
             }
         }
     }
+
+    @Test
+    fun `a signature refusal is offered the store copy`() {
+        val remedies =
+            remediesFor(
+                gate = signatureGate(),
+                options =
+                    RemedyOptions(
+                        hostUpdate = "9.9.9",
+                        apiUpdate = "1.0.99",
+                        revertTo = "1.0.0",
+                        storeVersion = "1.9.21",
+                    ),
+                satisfies = { _, _ -> true },
+            )
+        // ONLY the reinstall, despite a host update, an api update and a kept jar all being
+        // available. None of them fixes bytes that do not match their signature, and offering
+        // three buttons that cannot work is worse than one that can.
+        assertEquals(listOf(PluginLoadRemedy.ReinstallFromStore("1.9.21")), remedies)
+    }
+
+    @Test
+    fun `a signature refusal is never offered a revert`() {
+        // The remedy that "always applies" for a version floor must NOT apply here: the kept jar
+        // is a different version, not a correctly-signed copy of this one, so it would swap one
+        // unverifiable artifact for another.
+        val remedies =
+            remediesFor(
+                gate = signatureGate(),
+                options =
+                    RemedyOptions(
+                        hostUpdate = null,
+                        apiUpdate = null,
+                        revertTo = "1.0.0",
+                        storeVersion = null,
+                    ),
+                satisfies = { _, _ -> true },
+            )
+        assertTrue(
+            remedies.none { it is PluginLoadRemedy.RevertPlugin },
+            "a revert cannot fix a signature mismatch: $remedies",
+        )
+    }
+
+    @Test
+    fun `an unreachable store says so rather than offering nothing`() {
+        val remedies =
+            remediesFor(
+                gate = signatureGate(),
+                options =
+                    RemedyOptions(
+                        hostUpdate = "9.9.9",
+                        apiUpdate = "1.0.99",
+                        revertTo = "1.0.0",
+                        storeVersion = null,
+                    ),
+                satisfies = { _, _ -> true },
+            )
+        val only = assertIs<PluginLoadRemedy.NothingAvailable>(remedies.single())
+        assertTrue(only.reason.isNotBlank())
+    }
+
+    @Test
+    fun `the store copy is offered even at the version already on disk`() {
+        // No floor to clear, so `satisfies` is irrelevant - refusing here on a version comparison
+        // would decline to replace tampered bytes with the ones the store vouched for.
+        val remedies =
+            remediesFor(
+                gate = signatureGate(),
+                options = RemedyOptions(storeVersion = "1.9.20"),
+                // Would veto every candidate if it were consulted.
+                satisfies = { _, _ -> false },
+            )
+        assertEquals(listOf(PluginLoadRemedy.ReinstallFromStore("1.9.20")), remedies)
+    }
+
+    private fun signatureGate() =
+        PluginLoadGate.SignatureRejected(
+            pluginId = "ai.rever.boss.plugin.dynamic.pluginmanager",
+            displayName = "Toolbox",
+            reason = "No trusted key verified the signature",
+        )
 }
