@@ -22,6 +22,7 @@ import ai.rever.boss.git.GitBranchInfo
 import ai.rever.boss.git.GitOperationResult
 import ai.rever.boss.git.GitService
 import ai.rever.boss.git.GitStashInfo
+import ai.rever.boss.layout.BossChrome
 import ai.rever.boss.platform.rememberDirectoryPicker
 import ai.rever.boss.plugin.ui.BossAlertDialog
 import ai.rever.boss.plugin.ui.BossTheme
@@ -78,7 +79,7 @@ fun BossDraggableComponent.BossTopBar(
 ) {
     val items = rememberBarContextMenuItems(ChromeBar.TOP)
 
-    HorizontalBar(modifier = Modifier.contextMenu(items = items), height = 40.dp) {
+    HorizontalBar(modifier = Modifier.contextMenu(items = items), height = BossChrome.dimens.topBarHeight) {
         HorizontalBarRow(modifier = Modifier.fillMaxHeight().padding(start = 36.dp)) {
             BossTopLeftBar(workspaceManager, onApplyWorkspace, getCurrentWorkspace, onShowTopOfMind, onNewProject, onCloneProject)
             Spacer(modifier = Modifier.weight(1f))

@@ -38,6 +38,7 @@ import ai.rever.boss.components.workspaces.workspaceManager
 import ai.rever.boss.icons.FileIcons
 import ai.rever.boss.keymap.KeymapSettingsManager
 import ai.rever.boss.keymap.model.TabSwitchMode
+import ai.rever.boss.layout.BossChrome
 import ai.rever.boss.plugin.api.LocalIsPanelActive
 import ai.rever.boss.plugin.api.TabComponentWithUI
 import ai.rever.boss.plugin.api.TabEvent
@@ -122,17 +123,6 @@ import kotlinx.coroutines.launch
 import kotlin.time.Clock
 
 private val bossMainWindowPanelLogger = BossLogger.forComponent("BossMainWindowPanel")
-
-/**
- * Width of the ring a panel reserves for its active-panel border.
- *
- * Named once because it is used twice and the two uses must agree exactly: the border is
- * drawn at this width and the content is inset by the same amount, so that a child which
- * Compose cannot draw over — a foreign native surface such as the HARDWARE_ACCELERATED
- * browser — has nowhere to cover it from. A padding smaller than the border leaves a
- * sliver the browser paints over; larger leaves a visible gap inside the border.
- */
-private val ACTIVE_PANEL_BORDER = 2.dp
 
 /**
  * Wrapper for BossTabButton that loads and displays favicons from cache
@@ -353,7 +343,7 @@ fun BossTabsComponent.BossMainTabBar(
     val dropTarget = tabDragComponent?.dropTarget
 
     HorizontalBar(
-        height = 42.dp,
+        height = BossChrome.dimens.tabBarHeight,
         backgroundColor = BossTheme.colors.panel,
     ) {
         HorizontalBarRow(
@@ -875,6 +865,7 @@ fun BossTabsComponent.BossMainPanel(
     // Track the active panel state to force recomposition
     val activePanelId by splitViewState?.activePanelIdState ?: remember { mutableStateOf("") }
     val isActivePanel = activePanelId == currentPanelId
+    val panelBorder = BossChrome.dimens.panelBorderThickness
 
     Column(
         modifier =
@@ -929,10 +920,13 @@ fun BossTabsComponent.BossMainPanel(
                 // inactive panel look exactly as it did before the ring existed, and gives the
                 // active border something themed to sit on.
                 .background(BossTheme.colors.panel)
+                // Border width and content inset must agree exactly, which is why both read the one
+                // value; see ChromeDimens.panelBorderThickness for what goes wrong if they drift.
+                // It is also 4dp of every panel's height and width, so ChromeMetrics charges for it.
                 .border(
-                    ACTIVE_PANEL_BORDER,
+                    panelBorder,
                     if (isActivePanel) MaterialTheme.colors.primary.copy(alpha = 0.5f) else Color.Transparent,
-                ).padding(ACTIVE_PANEL_BORDER),
+                ).padding(panelBorder),
     ) {
         BossMainTabBar(
             splitViewState = splitViewState,

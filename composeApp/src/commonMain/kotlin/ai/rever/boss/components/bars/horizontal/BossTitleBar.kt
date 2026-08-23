@@ -1,5 +1,6 @@
 package ai.rever.boss.components.bars.horizontal
 
+import ai.rever.boss.layout.BossChrome
 import ai.rever.boss.plugin.ui.BossTheme
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -12,13 +13,12 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 @Composable
 fun BossTitleBar(
     title: String = "Boss Console",
-    height: Dp = 26.dp,
+    height: Dp = BossChrome.dimens.titleBarHeight,
     onToggleMaximize: (() -> Unit)? = null,
 ) {
     HorizontalBar(

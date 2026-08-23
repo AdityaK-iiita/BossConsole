@@ -11,6 +11,7 @@ import ai.rever.boss.components.plugin.registries.StatusBarRegistryImpl
 import ai.rever.boss.components.plugin.registries.owningPluginId
 import ai.rever.boss.components.plugin.tab_types.fluck.FluckTabInfo
 import ai.rever.boss.components.window_panel.components.main_window_panels.BossTabsComponent
+import ai.rever.boss.layout.BossChrome
 import ai.rever.boss.mcp.McpToolRegistryImpl
 import ai.rever.boss.performance.PerformanceState
 import ai.rever.boss.plugin.api.PanelId
@@ -52,7 +53,7 @@ fun BossBottomBar(tabsComponent: BossTabsComponent? = null) {
     Divider(color = BossTheme.colors.line)
     HorizontalBar(
         modifier = Modifier.contextMenu(items = rememberBarContextMenuItems(ChromeBar.BOTTOM)),
-        height = 30.dp,
+        height = BossChrome.dimens.bottomBarHeight,
     ) {
         HorizontalBarRow {
             BossLeftBottomBar(tabsComponent)

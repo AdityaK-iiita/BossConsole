@@ -8,6 +8,7 @@ import ai.rever.boss.components.plugin.AvailablePluginUpdate
 import ai.rever.boss.components.plugin.PluginBuildInfo
 import ai.rever.boss.components.plugin.PluginBuildTag
 import ai.rever.boss.components.plugin.registries.PanelMenuRegistryImpl
+import ai.rever.boss.layout.BossChrome
 import ai.rever.boss.plugin.api.PanelId
 import ai.rever.boss.plugin.ui.BossTheme
 import ai.rever.boss.plugin.ui.BossThemeColors
@@ -159,7 +160,7 @@ fun BossPanelTopBar(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .height(28.dp)
+                .height(BossChrome.dimens.panelTopBarHeight)
                 .background(BossTheme.colors.raised)
                 .then(dragModifier)
                 .contextMenu(items = menuItems),

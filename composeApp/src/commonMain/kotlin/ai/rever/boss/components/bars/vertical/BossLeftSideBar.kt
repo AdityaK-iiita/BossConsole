@@ -11,6 +11,7 @@ import ai.rever.boss.components.sidebar.SidebarIconRail
 import ai.rever.boss.components.sidebar.SidebarVisibilitySettings
 import ai.rever.boss.components.sidebar.SidebarVisibilitySettingsManager
 import ai.rever.boss.components.sidebar.computeSlotIconLimits
+import ai.rever.boss.layout.BossChrome
 import ai.rever.boss.plugin.api.Panel.Companion.bottom
 import ai.rever.boss.plugin.api.Panel.Companion.left
 import ai.rever.boss.plugin.api.Panel.Companion.top
@@ -35,7 +36,7 @@ fun BossDraggableComponent.BossLeftSideBar() {
     val customizeOnThisBar = SidebarVisibilitySettings.isLeftSide(customizeSlotId)
 
     VerticalBar(
-        width = 40.dp,
+        width = BossChrome.dimens.stripWidth,
         // On the bar, not on the weighted Spacer below: the icons carry their own contextMenu and
         // consume the press first, so this fires on empty rail and nowhere else - the same
         // arrangement the top bar has had all along.

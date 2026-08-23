@@ -11,6 +11,7 @@ import ai.rever.boss.components.sidebar.SidebarIconRail
 import ai.rever.boss.components.sidebar.SidebarVisibilitySettings
 import ai.rever.boss.components.sidebar.SidebarVisibilitySettingsManager
 import ai.rever.boss.components.sidebar.computeSlotIconLimits
+import ai.rever.boss.layout.BossChrome
 import ai.rever.boss.plugin.api.Panel.Companion.bottom
 import ai.rever.boss.plugin.api.Panel.Companion.right
 import ai.rever.boss.plugin.api.Panel.Companion.top
@@ -49,7 +50,7 @@ fun BossDraggableComponent.BossRightSideBar(
 
     VDivider()
     VerticalBar(
-        width = 40.dp,
+        width = BossChrome.dimens.stripWidth,
         // See BossLeftSideBar: attached to the bar so the whole strip answers, while the icons'
         // own menus still win on the icons themselves.
         modifier = Modifier.contextMenu(items = rememberBarContextMenuItems(ChromeBar.RIGHT_STRIP)),
