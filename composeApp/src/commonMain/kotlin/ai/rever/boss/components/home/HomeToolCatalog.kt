@@ -1,6 +1,7 @@
 package ai.rever.boss.components.home
 
 import ai.rever.boss.components.plugin.PluginDependencyResolution
+import ai.rever.boss.components.plugin.RetiredPluginIds
 import ai.rever.boss.components.plugin.registries.RegistryAccess
 import ai.rever.boss.plugin.api.PanelId
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -166,6 +167,10 @@ object HomeToolCatalog {
                 // is an unload-all / swap / reload-all hot swap, which must not start from a tile
                 // in a grid; the runtime is refused by loadPlugin outright.
                 .filterNot { it.pluginId in PluginDependencyResolution.NOT_USER_INSTALLABLE }
+                // Nor a plugin another plugin has taken over. Unlisting the store row is a manual
+                // action outside CI, so until it happens the store still returns it - and a user
+                // could install it, have it swept away at the next launch, and install it again.
+                .filterNot { it.pluginId in RetiredPluginIds.ALL }
                 .filterNot { it.isService }
                 .filter { it.isCompatible }
                 // A plugin the user has no access to is hidden, not greyed. The host already hides

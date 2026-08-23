@@ -254,8 +254,7 @@ Scoped deliberately: this covers the **Docker and Kubernetes plugins only**, bec
 ### Security & secrets
 | Plugin | What it does |
 |--------|--------------|
-| **[Secret Manager](https://github.com/risa-labs-inc/boss-plugin-secret-manager)** | Encrypted credential vault - website/username/password, notes, tags, 2FA, expiry. Row-level-scoped to you, browser auto-fill, and permission-gated `secret_*` MCP tools |
-| **[My Secrets](https://github.com/risa-labs-inc/boss-plugin-user-secret-list)** | Read-only view of your own and shared credentials |
+| **[Secret Manager](https://github.com/risa-labs-inc/boss-plugin-secret-manager)** | Encrypted credential vault - website/username/password, notes, tags, 2FA, expiry. Row-level-scoped to you, browser auto-fill, and permission-gated `secret_*` MCP tools. A second section lists what other people have shared with you, read-only |
 
 ### Productivity & admin
 | Plugin | What it does |
@@ -448,7 +447,7 @@ BOSS is developed in the open, end to end - the host app, the plugin platform, t
 - **Dev tools** - [codebase](https://github.com/risa-labs-inc/boss-plugin-codebase) · [console](https://github.com/risa-labs-inc/boss-plugin-console) · [git-status](https://github.com/risa-labs-inc/boss-plugin-git-status) · [git-log](https://github.com/risa-labs-inc/boss-plugin-git-log) · [run-configurations](https://github.com/risa-labs-inc/boss-plugin-run-configurations) · [performance](https://github.com/risa-labs-inc/boss-plugin-performance)
 - **Infrastructure** - [docker](https://github.com/risa-labs-inc/boss-plugin-docker) · [kubernetes](https://github.com/risa-labs-inc/boss-plugin-kubernetes)
 - **AI & automation** - [tool-creator](https://github.com/risa-labs-inc/boss-plugin-tool-creator) · [tool-evolver](https://github.com/risa-labs-inc/boss-plugin-tool-evolver) · [llmrpa](https://github.com/risa-labs-inc/boss-plugin-llmrpa) · [rpaengine](https://github.com/risa-labs-inc/boss-plugin-rpaengine) · [rparecorder](https://github.com/risa-labs-inc/boss-plugin-rparecorder)
-- **Security** - [secret-manager](https://github.com/risa-labs-inc/boss-plugin-secret-manager) · [user-secret-list](https://github.com/risa-labs-inc/boss-plugin-user-secret-list)
+- **Security** - [secret-manager](https://github.com/risa-labs-inc/boss-plugin-secret-manager)
 - **Productivity** - [bookmarks](https://github.com/risa-labs-inc/boss-plugin-bookmarks) · [downloads](https://github.com/risa-labs-inc/boss-plugin-downloads) · [topofmind](https://github.com/risa-labs-inc/boss-plugin-topofmind)
 - **Admin** - [admin-role-management](https://github.com/risa-labs-inc/boss-plugin-admin-role-management) · [role-creation](https://github.com/risa-labs-inc/boss-plugin-role-creation)
 

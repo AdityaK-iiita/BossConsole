@@ -1,6 +1,7 @@
 package ai.rever.boss.components.home
 
 import ai.rever.boss.components.plugin.PluginDependencyResolution
+import ai.rever.boss.components.plugin.RetiredPluginIds
 import ai.rever.boss.components.plugin.registries.RegistryAccess
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Extension
@@ -192,6 +193,21 @@ class HomeToolCatalogTest {
             tools.isEmpty(),
             "NOT_USER_INSTALLABLE ids must not reach a tile: the api plugin's install is an " +
                 "unload-all / swap / reload-all hot swap.",
+        )
+    }
+
+    @Test
+    fun `a retired plugin is never offered`() {
+        // Unlisting the store row is a manual action outside CI, so until it happens the store
+        // keeps returning the plugin - and a user could install it, have the startup sweep remove
+        // it, and install it again indefinitely. The filter is what makes the retirement hold
+        // regardless of what the store says.
+        val tools = build(store = RetiredPluginIds.ALL.map { storeRow(it) })
+
+        assertTrue(
+            tools.isEmpty(),
+            "a retired plugin reached a tile: installing it only gets it swept away at the " +
+                "next launch",
         )
     }
 

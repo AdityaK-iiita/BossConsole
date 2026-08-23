@@ -23,7 +23,6 @@ object PanelIds {
 
     // Admin/Security panels
     val SECRET_MANAGER = PanelId("secret-manager", 2)
-    val USER_SECRET_LIST = PanelId("user-secret-list", 2)
     val ADMIN_ROLE_MANAGEMENT = PanelId("admin-role-management", 2)
     val ROLE_CREATION = PanelId("role-creation", 2)
 

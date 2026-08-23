@@ -905,9 +905,6 @@ class DefaultPlugin(
         // DYNAMIC: Secret Manager panel - loaded from boss-plugin-secret-manager JAR
         // registerSecretManagerPlugin()
 
-        // DYNAMIC: User Secret List panel - loaded from boss-plugin-user-secret-list JAR
-        // registerUserSecretListPlugin()
-
         // ============================================================
         // TAB TYPE PLUGINS
         // ============================================================

@@ -696,6 +696,11 @@ kotlin {
             implementation(projects.pluginPlatform.pluginLoader)
             implementation(projects.pluginPlatform.pluginRepository)
             implementation(projects.pluginPlatform.pluginUpdater)
+            // SemanticVersion, for RetiredPlugins: satisfiesVersionFloor (from pluginUpdater)
+            // fails OPEN on a version it cannot parse, which is right for gating an update and
+            // wrong for deciding whether to delete a plugin. One pure file; pluginUpdater has
+            // it as `implementation`, so it is not transitive.
+            implementation(projects.pluginPlatform.pluginDependency)
             // Plugin panel manager is now dynamic (loaded from boss_plugin as plugin-manager)
 
             // Tab type plugins are now loaded dynamically from boss_plugin:

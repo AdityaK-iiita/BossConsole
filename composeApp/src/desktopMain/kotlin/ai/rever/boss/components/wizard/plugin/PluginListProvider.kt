@@ -1,5 +1,6 @@
 package ai.rever.boss.components.wizard.plugin
 
+import ai.rever.boss.components.plugin.RetiredPluginIds
 import ai.rever.boss.plugin.PluginStoreSetup
 import ai.rever.boss.plugin.repository.PluginInfo
 import ai.rever.boss.plugin.repository.PluginWithSource
@@ -43,7 +44,11 @@ object PluginListProvider {
             "ai.rever.boss.plugin.dynamic.terminal",
             "ai.rever.boss.plugin.dynamic.console",
             "ai.rever.boss.plugin.dynamic.fluck",
-            "ai.rever.boss.plugin.dynamic.usersecretlist",
+            // Was `usersecretlist` ("My Secrets") until that plugin was retired into
+            // secret-manager's "Shared with me" section. Installing the read-only half by
+            // default and never the half that can add a key was backwards anyway: AI provider
+            // settings live in secret-manager, so a default install could not configure AI.
+            "ai.rever.boss.plugin.dynamic.secretmanager",
             "ai.rever.boss.plugin.dynamic.downloads",
             "ai.rever.boss.plugin.dynamic.codebase",
             "ai.rever.boss.plugin.dynamic.bookmarks",
@@ -82,7 +87,12 @@ object PluginListProvider {
             "ai.rever.boss.plugin.dynamic.terminal" to PluginCategory.ESSENTIAL,
             "ai.rever.boss.plugin.dynamic.console" to PluginCategory.ESSENTIAL,
             "ai.rever.boss.plugin.dynamic.fluck" to PluginCategory.ESSENTIAL,
-            "ai.rever.boss.plugin.dynamic.usersecretlist" to PluginCategory.ESSENTIAL,
+            // Not an admin tool, despite living under ADMIN until 9.4.7 and PRODUCTIVITY
+            // after it. It is a per-user credential vault (every RPC behind it is
+            // auth.uid()-scoped), it is the only place anyone adds an AI provider key, and
+            // since the My Secrets panel was retired into it, it is the only secrets panel
+            // there is - so it takes that panel's place among the essentials.
+            "ai.rever.boss.plugin.dynamic.secretmanager" to PluginCategory.ESSENTIAL,
             "ai.rever.boss.plugin.dynamic.downloads" to PluginCategory.ESSENTIAL,
             "ai.rever.boss.plugin.dynamic.fluckbrowser" to PluginCategory.ESSENTIAL,
             "ai.rever.boss.plugin.dynamic.editortab" to PluginCategory.ESSENTIAL,
@@ -94,10 +104,6 @@ object PluginListProvider {
             // Productivity
             "ai.rever.boss.plugin.dynamic.bookmarks" to PluginCategory.PRODUCTIVITY,
             "ai.rever.boss.plugin.dynamic.topofmind" to PluginCategory.PRODUCTIVITY,
-            // Not an admin tool, despite living here until 9.4.7. It is a per-user
-            // credential vault (every RPC behind it is auth.uid()-scoped) and, since AI
-            // provider settings moved into it, the only place anyone adds their own key.
-            "ai.rever.boss.plugin.dynamic.secretmanager" to PluginCategory.PRODUCTIVITY,
             // Automation
             "ai.rever.boss.plugin.dynamic.llmrpa" to PluginCategory.AUTOMATION,
             "ai.rever.boss.plugin.dynamic.rparecorder" to PluginCategory.AUTOMATION,
@@ -127,7 +133,6 @@ object PluginListProvider {
             "ai.rever.boss.plugin.dynamic.adminrolemanagement" to Icons.Default.ManageAccounts,
             "ai.rever.boss.plugin.dynamic.rolecreation" to Icons.Default.AdminPanelSettings,
             "ai.rever.boss.plugin.dynamic.secretmanager" to Icons.Default.Key,
-            "ai.rever.boss.plugin.dynamic.usersecretlist" to Icons.Default.Key,
             "ai.rever.boss.plugin.dynamic.performance" to Icons.Default.AutoAwesome,
             "ai.rever.boss.plugin.dynamic.fluck" to Icons.Default.Psychology,
             "ai.rever.boss.plugin.dynamic.runconfigurations" to Icons.Default.PlayArrow,
@@ -173,6 +178,10 @@ object PluginListProvider {
                             // cross-classloader IllegalAccessError.
                             .filter { it.plugin.type != ai.rever.boss.plugin.api.PluginType.SERVICE }
                             .filter { it.plugin.pluginId != ai.rever.boss.components.plugin.MicrokernelRuntime.PLUGIN_ID }
+                            // Nor a plugin another plugin has taken over: the store keeps
+                            // returning it until its row is unlisted by hand, and installing it
+                            // here only gets it swept away at the next launch.
+                            .filter { it.plugin.pluginId !in RetiredPluginIds.ALL }
                             .map { pws: PluginWithSource ->
                                 convertToWizardPluginInfo(pws.plugin)
                             }
@@ -301,9 +310,9 @@ object PluginListProvider {
                     category = PluginCategory.ESSENTIAL,
                 ),
                 WizardPluginInfo(
-                    id = "ai.rever.boss.plugin.dynamic.usersecretlist",
-                    name = "My Secrets",
-                    description = "View your secrets and shared credentials",
+                    id = "ai.rever.boss.plugin.dynamic.secretmanager",
+                    name = "Secret Manager",
+                    description = "Your credentials, what others share with you, and AI provider keys",
                     version = "1.0.0",
                     icon = Icons.Default.Key,
                     isDefault = true,
@@ -411,15 +420,6 @@ object PluginListProvider {
                     icon = Icons.Default.AdminPanelSettings,
                     isDefault = false,
                     category = PluginCategory.ADMIN,
-                ),
-                WizardPluginInfo(
-                    id = "ai.rever.boss.plugin.dynamic.secretmanager",
-                    name = "Secret Manager",
-                    description = "Your encrypted credential vault, and where you add AI provider keys",
-                    version = "1.0.0",
-                    icon = Icons.Default.Key,
-                    isDefault = false,
-                    category = PluginCategory.PRODUCTIVITY,
                 ),
             )
 }

@@ -238,6 +238,80 @@ deletes the jar it rejected - so an entry-only check made Retry close the dialog
 success with nothing installed, and silenced the prompt for every other dependent of that
 plugin. The check is an entry whose `jarPath` still exists.
 
+## Retiring a plugin into another one
+
+`RetiredPlugins.sweep()` uninstalls a plugin whose job another plugin has taken over. It runs at
+step 3c of `PluginStoreSetup.loadPersistedPlugins` - after `PluginJarReconciler`, so
+`installed.json`'s `jarPath` is trustworthy, and before step 4 reads it, so a retired plugin never
+registers a panel or an MCP tool on a machine where its replacement is present. It is `internal`
+and **startup-only**: `PluginArtifactCleanup.remove` deletes the jar without unloading anything,
+which is safe only before any plugin has loaded (`PluginRemoval` spells out the alternative -
+`NoClassDefFoundError` from code that is still running).
+
+There is no "already done" flag. The sweep keys on the plugin being installed, and removing the
+`installed.json` row is what makes the next launch a no-op.
+
+**It fails closed at every step, and each step is a bug someone would otherwise ship.** A wrong
+"yes" deletes a panel the user still needs, so all of these mean "not yet, wait for a launch that
+can prove it":
+
+| Refusal | Why |
+|---|---|
+| replacement not installed | the user would have no panel at all for what the retired one did |
+| replacement disabled | `setPluginEnabled` and a for-lack-of-access install both leave the row and the jar in place |
+| replacement's jar missing | `installPlugin` records a DISABLED entry for a plugin it then rejected and deleted |
+| replacement's version unparseable or absent | see below |
+| replacement older than `minReplacementVersion` | that version has not absorbed the retired plugin's work yet |
+| the retired plugin would be restored anyway | a bundled or system plugin is re-copied at step 1 or re-downloaded at step 2, so removing it is a copy-then-delete loop on every launch, notice included |
+| its jars could not actually be removed | see below - the row must not outlive the file |
+
+**The row is dropped only once the jars are gone, and that ordering is the whole guard.**
+`PluginArtifactCleanup.remove` drops the `installed.json` row unconditionally and only *logs*
+whether the delete worked, which is right for the interactive uninstall (the Toolbox already
+deleted the file) and wrong here. `DefaultPlugin.loadExternalPlugins` scans the same plugin
+directory after the persisted pass, **in the same launch**, and installs every jar the manager
+does not know about. So a retirement that drops the row while a jar survives does not leak a
+file - it reinstalls the plugin in the session the user was just told it left, `PluginBuildProbe`
+writes a fresh row on load, and every launch after that sweeps and announces again. The
+copy-then-delete loop the bundled/system veto prevents, by another door.
+
+`purgeJarsFor` therefore deletes **by manifest id, not by the recorded path**: `jarPath` can be
+stale while a differently named jar for the same plugin is still in the directory, and artifact
+prefixes are prefixes of each other (`boss-plugin-terminal` matches
+`boss-plugin-terminal-tab-*.jar`). It re-lists rather than trusting the delete results, because a
+Windows lock makes `delete()` return false silently and an already-absent file returns false too -
+absence is the postcondition, not the delete count.
+
+**`satisfiesVersionFloor` cannot be used alone here.** It returns `true` for anything
+`SemanticVersion.parse` rejects - `dev`, `v1.2.17`, `1.2.x`, a trailing `-` or `+` - by design,
+because for gating an *update* an ungated update beats a wrongly gated one. The consequence here
+runs the other way, and a locally built or side-loaded jar whose manifest version is not strict
+semver is exactly the case that would delete the user's only secrets panel. So the version is
+parsed explicitly first; `plugin-dependency` is on composeApp's classpath for that one call
+(`plugin-updater` has it as `implementation`, so it is not transitive).
+
+**The restore veto is asked at the call site, not inside `RetiredPlugins`**, which keeps that
+object free of both the manager and the system-plugin service. It combines
+`PluginRemoval.removalVeto` (the bundled dir) with `PluginStoreSetup.systemPlugins` (the remote
+`system_plugins` table merged over the built-in fallback). `ALL` is a list someone will append to
+without reading the change that added it, so this is a runtime guard rather than a comment.
+
+**Retirement is also a filter on what is *offered*, not only on what is installed.** Unlisting the
+store row is a manual database action outside this repo and outside CI, and until it happens the
+store keeps returning the plugin - so a user can install it, have the sweep remove it at the next
+launch, and install it again indefinitely. `RetiredPluginIds` (commonMain, because the wizard is
+desktopMain and the home tool grid is commonMain) is filtered wherever
+`PluginDependencyResolution.NOT_USER_INSTALLABLE` is, and `RetiredPluginsTest` pins it against
+`RetiredPlugins.ALL` so the two lists cannot drift.
+
+**One notice per sweep, not per retirement.** `StatusMessageManager.showMessage` cancels the
+previous message, so announcing in the loop would show only the last removal - and the sweep is
+one-shot, so a missed notice means a panel vanished with no explanation ever. Each retirement's
+removal is also wrapped individually, so one failure cannot drop the rest or lose the ids already
+removed. `noticeFor` **groups by replacement**: the function only exists for the multi-removal
+case, which is exactly the case where two retirements can point at different replacements, and
+taking `first().replacementDisplayName` told the user their panel moved somewhere it did not.
+
 ## Configuration
 
 Create `local.properties`:
