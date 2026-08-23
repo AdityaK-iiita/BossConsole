@@ -4,6 +4,7 @@ import ai.rever.boss.plugin.ui.BossAppTheme
 import ai.rever.boss.plugin.ui.BossBlueprintColorScheme
 import ai.rever.boss.plugin.ui.BossBlueprintLightColorScheme
 import ai.rever.boss.plugin.ui.BossColorScheme
+import ai.rever.boss.plugin.ui.BossNvidiaColorScheme
 import ai.rever.boss.plugin.ui.BossThemeController
 import ai.rever.boss.plugin.ui.BossThemes
 import androidx.compose.ui.graphics.Color
@@ -77,6 +78,48 @@ class BossThemesRegistryTest {
         // Material factory, so a wrong flag is a functional bug, not cosmetics.
         assertTrue(luminance(dark.colors.ink) < 0.5, "blueprint's floor should be dark")
         assertTrue(luminance(light.colors.ink) > 0.5, "blueprint-light's floor should be light")
+    }
+
+    @Test
+    fun `nvidia carries the brand anchors`() {
+        // #76B900 is the whole point of the theme; if it drifts it is no longer
+        // an NVIDIA theme, just a green one. Black is the site's actual floor,
+        // and black-on-green is how the site draws its buttons.
+        assertEquals(Color(0xFF76B900), BossNvidiaColorScheme.signal, "NVIDIA green")
+        assertEquals(Color(0xFF000000), BossNvidiaColorScheme.ink, "nvidia.com is pure black")
+        assertEquals(Color(0xFF000000), BossNvidiaColorScheme.onSignal, "green button, black type")
+    }
+
+    /**
+     * The reason `nvidia` sets `signalText = signal` rather than inventing a
+     * twin. If someone darkens the brand green for a light variant and copies
+     * the value here, this fails before the aliasing test does and says why.
+     */
+    @Test
+    fun `nvidia green is legible as both a glyph and a fill`() {
+        val c = BossNvidiaColorScheme
+        assertEquals(c.signal, c.signalText, "NVIDIA green clears the text floor unaided")
+        surfaces(c).forEach { (name, bg) ->
+            assertTrue(
+                contrast(c.signal, bg) >= 4.5,
+                "nvidia: signal is only ${format(contrast(c.signal, bg))}:1 on $name",
+            )
+        }
+        assertTrue(
+            contrast(c.onSignal, c.signal) >= 4.5,
+            "nvidia: onSignal is only ${format(contrast(c.onSignal, c.signal))}:1 on the green fill",
+        )
+    }
+
+    @Test
+    fun `nvidia keeps ok clear of the brand green`() {
+        // With a green `signal`, an `ok` in the same hue makes a success chip
+        // read as a primary action. Distance is the invariant, not the hex.
+        val c = BossNvidiaColorScheme
+        assertTrue(
+            hueDistance(c.ok, c.signal) >= 40.0,
+            "nvidia: ok is only ${format(hueDistance(c.ok, c.signal))} deg from signal",
+        )
     }
 
     /**
@@ -208,6 +251,32 @@ class BossThemesRegistryTest {
     }
 
     private fun format(ratio: Double): String = ((ratio * 100).toInt() / 100.0).toString()
+
+    /** Shortest angular distance between two hues, in degrees. */
+    private fun hueDistance(
+        a: Color,
+        b: Color,
+    ): Double {
+        val delta = kotlin.math.abs(hue(a) - hue(b))
+        return min(delta, 360.0 - delta)
+    }
+
+    private fun hue(c: Color): Double {
+        val r = c.red.toDouble()
+        val g = c.green.toDouble()
+        val b = c.blue.toDouble()
+        val hi = maxOf(r, g, b)
+        val lo = minOf(r, g, b)
+        val span = hi - lo
+        if (span == 0.0) return 0.0
+        val h =
+            when (hi) {
+                r -> 60 * (((g - b) / span) % 6)
+                g -> 60 * (((b - r) / span) + 2)
+                else -> 60 * (((r - g) / span) + 4)
+            }
+        return if (h < 0) h + 360 else h
+    }
 
     /** WCAG 2.x relative luminance. */
     private fun luminance(c: Color): Double {

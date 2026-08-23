@@ -18,8 +18,9 @@ Three rules drive every token. When a choice is unclear, return here.
 2. **Exactly one signal.** One color means *live / active / now*: the primary
    action, the focused field, the selected tab, the cursor. Nothing else competes
    for it. A second color, `data`, carries links and data. *Which* hues those are
-   is the active theme's business - electric blue under **Blueprint** (the
-   default), amber and cyan under **Operator** - but a theme never gets three.
+   is the active theme's business - NVIDIA green under **NVIDIA** (what macOS
+   and Linux open with), electric blue under **Blueprint**, amber and cyan under
+   **Operator** - but a theme never gets three.
 3. **Quiet everywhere else.** Surfaces separate by tint, not shadow. Borders are
    hairlines. Density is high and calm so your output is the loudest thing on
    screen.
@@ -44,19 +45,28 @@ a theme is one `BossAppTheme` plus one list entry.
 
 | Theme | id | | Identity |
 |-------|----|-|----------|
-| **Blueprint** | `blueprint` | dark | Electric blue on ink - matches [bossconsole.ai](https://bossconsole.ai). **The default on macOS and Linux.** |
+| **Blueprint** | `blueprint` | dark | Electric blue on ink - matches [bossconsole.ai](https://bossconsole.ai). **The class default** (what a settings file saying `{}` means). |
 | **Blueprint Light** | `blueprint-light` | light | The same blue, re-grounded on the site's `--paper`. **The default on Windows.** |
 | **Operator** | `operator` | dark | The original amber-on-ink identity |
 | **Daylight** | `daylight` | light | Clean light theme |
 | **Clean** | `clean` | dark | Neutral charcoal, steel-blue accent |
+| **NVIDIA** | `nvidia` | dark | NVIDIA green `#76B900` on black - the [nvidia.com](https://www.nvidia.com/en-us/) look. **The default on macOS and Linux.** |
 
 The choice is explicit and persisted (`~/.boss/app-theme-settings.json`); the OS
 theme setting is never consulted.
 
-**The default is per-platform.** Windows opens on Blueprint Light, everything else
-on Blueprint. `BossThemes.defaultIdFor(isWindows)` is the only place that branches;
-`BossThemes.DEFAULT_ID` stays the *class* default, which is what an existing
-settings file means when it says nothing.
+**The default is per-platform.** macOS and Linux open on NVIDIA
+(`BossThemes.UNIX_DEFAULT_ID`), Windows on Blueprint Light
+(`BossThemes.WINDOWS_DEFAULT_ID`). `BossThemes.defaultIdFor(isWindows)` is the only
+place that branches; `BossThemes.DEFAULT_ID` stays the *class* default, which is
+what an existing settings file means when it says nothing, and is now no longer
+what any platform opens with.
+
+Windows and the Unix default differ in **brand**, not merely in value, which was
+not true while both were Blueprint. That is forced rather than chosen: NVIDIA has
+no light half to reach for, because `#76B900` is 2.4:1 on white and darkening it
+enough to clear the 3:1 component floor stops it being the brand green. Windows
+keeps the identity that does have both halves.
 
 **Who a default change re-skins.** `AppThemeSettingsManager` writes that file only
 from `select()` - `ensureInitialized()` resolves the id without saving. The file's
@@ -82,7 +92,7 @@ reaches nobody who has ever run the app.
 That property is why the four mirrors below have to agree on the default, not just
 on the palettes.
 
-#### Blueprint - the default palette
+#### Blueprint - the class-default palette
 
 Lifted from bossconsole.ai's stylesheet, or composited from it (a site alpha over
 the site's own floor). The site's hero mocks the app itself (`.console-frame` /
@@ -329,15 +339,22 @@ raw-palette names `chalk` / `mist` / `muted`.
 | Terminal defaults | BossTerm `…/settings/TerminalSettings.kt` (`activeThemeId = "boss-blueprint"`, and the fg/bg/selection defaults must match that theme) |
 | Terminal chrome tokens | BossTerm `…/settings/theme/UiTheme.kt` (`EXACT_TOKENS` - both BOSS identities skip derivation) |
 
-**Defaults:** the host default is `blueprint` (`BossThemes.DEFAULT_ID`) on macOS
+**Defaults:** the host default is `nvidia` (`BossThemes.UNIX_DEFAULT_ID`) on macOS
 and Linux and `blueprint-light` (`BossThemes.WINDOWS_DEFAULT_ID`) on Windows,
-resolved through `BossThemes.defaultIdFor(isWindows)`. The BossTerm default is
+resolved through `BossThemes.defaultIdFor(isWindows)`. `BossThemes.DEFAULT_ID` is
+still `blueprint` and is now the class default only. The BossTerm default is
 `boss-blueprint` (`DEFAULT_THEME_ID` / `TerminalSettings.activeThemeId`) on every
 platform, but that default is what standalone BossTerm opens with: inside BOSS the
 `terminal-tab` plugin's `ApplyHostThemeToTerminal()` pushes the host tokens into
 BossTerm's `ThemeManager` on every compose, so the terminal follows the host and a
 Windows first run comes up light throughout. Existing saved settings keep their
 current theme; only fresh installs pick up a new default.
+
+There is no `boss-nvidia` BossTerm builtin, and none is needed. The bridge's
+builtin match is restricted to `boss-` prefixed themes, so NVIDIA's pure-black
+`ink` does not collide with BossTerm's XTerm-derived `default` (also `#000000`);
+with no BOSS builtin at that floor the bridge synthesizes the terminal from the
+host tokens instead, which is what makes the shell come up green-on-black.
 
 **Four mirrors, one settings file.** The palettes exist in four places and they
 have to agree:

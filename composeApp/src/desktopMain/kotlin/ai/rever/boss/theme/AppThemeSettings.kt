@@ -6,15 +6,19 @@ import kotlinx.serialization.json.Json
 
 /**
  * Persisted host theme preference. `appThemeId` matches a [BossThemes] id
- * ("blueprint", "blueprint-light", "operator", "daylight", "clean"). Stored at
- * ~/.boss/app-theme-settings.json.
+ * ("blueprint", "blueprint-light", "operator", "daylight", "clean", "nvidia").
+ * Stored at ~/.boss/app-theme-settings.json.
  *
  * Note that `BossConsoleRust` reads and writes this same file, so its
  * `ThemeId::DEFAULT` must stay in lockstep with [BossThemes.DEFAULT_ID] - a
  * settings file that omits `appThemeId` means "the default", and the two apps
- * would otherwise disagree about which theme that is. Windows now opens on
- * [BossThemes.WINDOWS_DEFAULT_ID] instead, but only when there is no file at
- * all; see [decodeOrDefaults] for why the two cases are not the same.
+ * would otherwise disagree about which theme that is. That lockstep is on
+ * [BossThemes.DEFAULT_ID] alone; the *platform* first-run defaults
+ * ([BossThemes.UNIX_DEFAULT_ID] on macOS and Linux,
+ * [BossThemes.WINDOWS_DEFAULT_ID] on Windows) apply only when there is no file
+ * at all, and see [decodeOrDefaults] for why those two absences are not the
+ * same thing. Rust has no `nvidia` variant yet, so a file this host writes
+ * naming it resolves there through `ThemeId::from_id(..).unwrap_or(DEFAULT)`.
  */
 @Serializable
 data class AppThemeSettings(

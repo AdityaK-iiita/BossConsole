@@ -5,6 +5,7 @@ import ai.rever.boss.utils.SystemUtils
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /**
@@ -17,9 +18,36 @@ import kotlin.test.assertTrue
  */
 class AppThemeDefaultsTest {
     @Test
-    fun `windows opens light and every other platform keeps the dark default`() {
+    fun `windows opens light and mac and linux open on the unix default`() {
         assertEquals(BossThemes.WINDOWS_DEFAULT_ID, BossThemes.defaultIdFor(isWindows = true))
-        assertEquals(BossThemes.DEFAULT_ID, BossThemes.defaultIdFor(isWindows = false))
+        assertEquals(BossThemes.UNIX_DEFAULT_ID, BossThemes.defaultIdFor(isWindows = false))
+    }
+
+    /**
+     * The Windows default is asserted as a *property* (light) because the request
+     * behind it was "light on Windows". This one is asserted as an *id*, because
+     * the request behind it named a theme: "make NVIDIA the default on mac". Every
+     * other test here routes through [BossThemes.UNIX_DEFAULT_ID] and so would
+     * still pass if the constant were re-pointed at any other dark theme - this is
+     * the only thing that pins which one.
+     */
+    @Test
+    fun `mac and linux open on nvidia specifically`() {
+        assertEquals("nvidia", BossThemes.UNIX_DEFAULT_ID)
+        assertEquals("nvidia", BossThemes.defaultIdFor(isWindows = false))
+    }
+
+    /**
+     * [BossThemes.DEFAULT_ID] is no longer any platform's first run, and that is
+     * the point: it is what a file saying `{}` means. If someone "tidies up" by
+     * re-pointing it at the new platform default, every user whose stored choice
+     * was written by the old `encodeDefaults = false` writer is silently
+     * re-skinned, on all three platforms at once.
+     */
+    @Test
+    fun `the class default is not what any platform opens with`() {
+        assertNotEquals(BossThemes.DEFAULT_ID, BossThemes.defaultIdFor(isWindows = false))
+        assertNotEquals(BossThemes.DEFAULT_ID, BossThemes.defaultIdFor(isWindows = true))
     }
 
     /**
@@ -35,7 +63,7 @@ class AppThemeDefaultsTest {
         assertTrue(windowsDefault.isLight, "Windows must open on a light theme")
         assertFalse(
             BossThemes.byId(BossThemes.defaultIdFor(isWindows = false)).isLight,
-            "the non-Windows default is unchanged and still dark",
+            "mac and Linux must open on a dark theme",
         )
     }
 
@@ -46,6 +74,7 @@ class AppThemeDefaultsTest {
 
         assertTrue(BossThemes.DEFAULT_ID in ids)
         assertTrue(BossThemes.WINDOWS_DEFAULT_ID in ids)
+        assertTrue(BossThemes.UNIX_DEFAULT_ID in ids)
     }
 
     @Test
@@ -63,7 +92,7 @@ class AppThemeDefaultsTest {
             AppThemeSettings.decodeOrDefaults(content = null, isWindows = true).appThemeId,
         )
         assertEquals(
-            BossThemes.DEFAULT_ID,
+            BossThemes.UNIX_DEFAULT_ID,
             AppThemeSettings.decodeOrDefaults(content = null, isWindows = false).appThemeId,
         )
     }
@@ -76,10 +105,18 @@ class AppThemeDefaultsTest {
      * light on the very next launch, with no way to make it stick.
      */
     @Test
-    fun `an existing file that omits the id keeps the dark default on windows`() {
+    fun `an existing file that omits the id keeps the class default on every platform`() {
         assertEquals(
             BossThemes.DEFAULT_ID,
             AppThemeSettings.decodeOrDefaults(content = "{}", isWindows = true).appThemeId,
+        )
+        // The same exposure the Windows default created, now live on macOS and
+        // Linux: `{}` is a mac user who deliberately picked Blueprint under the
+        // old writer, and resolving it from the platform default would flip them
+        // to NVIDIA on the very next launch with no way to make Blueprint stick.
+        assertEquals(
+            BossThemes.DEFAULT_ID,
+            AppThemeSettings.decodeOrDefaults(content = "{}", isWindows = false).appThemeId,
         )
     }
 
