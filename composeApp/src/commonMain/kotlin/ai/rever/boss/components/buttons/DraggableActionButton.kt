@@ -2,6 +2,8 @@ package ai.rever.boss.components.buttons
 
 import ai.rever.boss.components.model.BossDraggableComponent
 import ai.rever.boss.components.overlays.contextMenu
+import ai.rever.boss.components.plugin.panelMenuActions
+import ai.rever.boss.components.plugin.panelMenuItems
 import ai.rever.boss.components.sidebar.rememberSidebarSettingsMenuItems
 import ai.rever.boss.plugin.api.Panel
 import ai.rever.boss.plugin.api.Panel.Companion.opposite
@@ -37,9 +39,6 @@ fun BossDraggableComponent.DraggableActionButton(
 
     var componentPositionInWindow by remember { mutableStateOf<Offset?>(null) }
     var pendingDragStartOffset by remember { mutableStateOf<Offset?>(null) }
-
-    // Right-click (long-press on touch) → "Sidebar settings"
-    val settingsMenuItems = rememberSidebarSettingsMenuItems()
 
     // Log recomposition state
 
@@ -81,8 +80,26 @@ fun BossDraggableComponent.DraggableActionButton(
                     }
                 }.size(40.dp)
                 .alpha(if (isBeingDragged) 0f else 1f)
-                .contextMenu(items = settingsMenuItems)
-                .pointerInput(Unit) {
+                // Right-click (long-press on touch) → this plugin's own menu, i.e. the one its
+                // panel header offers behind the "…" kebab, plus the sidebar's own settings row.
+                // The rail icon IS the plugin as far as the user is concerned, and it is the only
+                // handle the plugin has while its panel is closed - reloading, updating or
+                // uninstalling it used to mean opening the panel first.
+                //
+                // Built lazily: this modifier is on every plugin icon in the rail, and resolving
+                // the menu eagerly held five registry subscriptions per icon and re-queried every
+                // plugin's contributed items on every plugin load, for panels nobody had opened.
+                .contextMenu {
+                    panelMenuItems(
+                        panelId = currentItem.pluginContentId,
+                        actions = panelMenuActions(currentItem.pluginContentId),
+                        onOpenAsTab = { requestOpenAsTab(currentItem.pluginContentId) },
+                        // No Minimize row: the icon's own click already toggles the panel, and this
+                        // menu opens just as often while the panel is closed, where minimising
+                        // means nothing.
+                        trailingItems = rememberSidebarSettingsMenuItems(),
+                    )
+                }.pointerInput(Unit) {
                     // Keep Unit key
                     detectDragGesturesAfterLongPress(
                         onDragStart = { touchOffset ->

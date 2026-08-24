@@ -79,8 +79,16 @@ object PanelMenuRegistryImpl : AccessGatedRegistry {
     /**
      * Resolve the visible menu items for [panelId]: query each targeting
      * contribution (outside any lock, crash-isolated), RBAC-filter, sort by
-     * [PanelMenuItem.order]. Called when a menu opens — contributions must
-     * keep `items()` cheap.
+     * [PanelMenuItem.order].
+     *
+     * Called wherever a panel menu is BUILT, which is not the same as opened -
+     * matching what `PanelMenuContribution.items` already promises callers. The
+     * panel header builds one per composition whether or not anyone opens it;
+     * the sidebar rail icon builds one only while its right-click menu is up,
+     * which is why that menu is passed to `Modifier.contextMenu` as a provider
+     * rather than a list. Each is memoised on (panelId, contributions, access),
+     * so this runs on plugin lifecycle and role changes rather than per frame.
+     * `items()` must still be cheap.
      */
     fun itemsFor(panelId: PanelId): List<Pair<PanelMenuContribution, PanelMenuItem>> {
         val access = _access.value
