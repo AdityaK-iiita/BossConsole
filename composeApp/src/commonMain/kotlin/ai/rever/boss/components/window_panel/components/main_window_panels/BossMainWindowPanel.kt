@@ -32,6 +32,7 @@ import ai.rever.boss.components.plugin.providers.publishSystemEvent
 import ai.rever.boss.components.plugin.tab_types.PanelHostTabInfo
 import ai.rever.boss.components.plugin.tab_types.fluck.FluckTabInfo
 import ai.rever.boss.components.tabs_navigation.TabsNavigation
+import ai.rever.boss.components.window_panel.SplitDirection
 import ai.rever.boss.components.window_panel.SplitOrientation
 import ai.rever.boss.components.workspaces.PredefinedWorkspaces
 import ai.rever.boss.components.workspaces.TabConfig
@@ -477,11 +478,6 @@ fun BossTabsComponent.rememberTabBarState(
     // Coroutine scope for edge scroll animation
     val edgeScrollScope = rememberCoroutineScope()
 
-    // Separate scope for the bar's own settings writes (the Tab Bar Position submenu). Kept
-    // apart from the edge-scroll scope so a settings write is never cancelled by a tab bar that
-    // recomposed mid-drag, and so neither reads as the other's concern.
-    val barSettingsScope = rememberCoroutineScope()
-
     // Current position, read for the submenu's checkmark only - the layout itself is driven by
     // the `vertical` parameter, which the caller resolved.
     val tabBarPosition = appearanceSettings.tabBarPosition
@@ -530,6 +526,29 @@ fun BossTabsComponent.rememberTabBarState(
             }
         }
         pinCreatedTab = false
+    }
+
+    // What the NEW TAB DIALOG does with the tab it just built, as opposed to what
+    // openCreatedTab does with any tab at all.
+    //
+    // Separate because openCreatedTab is also how a FAVOURITE opens (see openBookmark below),
+    // and a pending split belongs to the dialog that asked for it. Sharing one path would let a
+    // favourite opened while the dialog is up land in a new pane instead.
+    val placeNewTab: (TabInfo) -> Unit = { tabInfo ->
+        val split = splitViewState?.consumePendingSplit()
+        if (split == null) {
+            openCreatedTab(tabInfo)
+        } else {
+            // Pinning does not travel: the tab is the only one in a pane of its own, and a
+            // pinned block of one is a rule drawn under nothing.
+            pinCreatedTab = false
+            splitViewState.splitPanel(
+                split.panelId,
+                split.direction.orientation,
+                tabToMove = tabInfo,
+                placeBefore = split.direction.placeBefore,
+            )
+        }
     }
 
     // Opening a favourite. Routed through the WORKSPACE converter rather than a second
@@ -859,65 +878,10 @@ fun BossTabsComponent.rememberTabBarState(
         }
     }
 
-    // Right-click on the bar's own empty chrome (as opposed to on a tab). Hoisted out of the
-    // container below because both orientations offer it and neither owns it - and because the
-    // Tab Bar Position submenu it now carries is the fastest way back for someone who flipped
-    // the bar somewhere it does not suit them.
-    val barContextMenuItems: List<ContextMenuItem> =
-        buildList {
-            add(
-                ContextMenuItem("New Tab", Icons.Default.Add, onClick = openNewTab),
-            )
-
-            add(ContextMenuItem(isDivider = true))
-
-            // Tab bar position. A label-only submenu, so it stays isNativeRepresentable() and
-            // survives the native-NSMenu path on macOS; the checkmark is spelled as a trailing
-            // dot in the label because a native menu item has nowhere else to put one.
-            add(
-                ContextMenuItem(
-                    "Tab Bar Position",
-                    Icons.Outlined.ViewColumn,
-                    subMenu =
-                        TabBarPosition.entries.map { position ->
-                            ContextMenuItem(
-                                if (position == tabBarPosition) "${position.displayName} ✓" else position.displayName,
-                                onClick = {
-                                    barSettingsScope.launch {
-                                        WindowAppearanceSettingsManager.updateSettings(
-                                            WindowAppearanceSettingsManager.currentSettings.value
-                                                .copy(tabBarPosition = position),
-                                        )
-                                    }
-                                },
-                            )
-                        },
-                ),
-            )
-
-            add(ContextMenuItem(isDivider = true))
-
-            // Favorite current workspace
-            val currentWorkspace = workspaceManager.currentWorkspace.value
-            if (currentWorkspace != null) {
-                val isFavorited = BookmarkAPIAccess.isFavorite(currentWorkspace.id)
-                add(
-                    ContextMenuItem(
-                        if (isFavorited) "Unfavorite Workspace" else "Favorite Workspace",
-                        // The icon shows what the action DOES, matching the label: "Unfavorite"
-                        // empties the star, "Favorite" fills it.
-                        if (isFavorited) Icons.Outlined.StarBorder else Icons.Filled.Star,
-                        onClick = {
-                            if (isFavorited) {
-                                BookmarkAPIAccess.removeFavoriteWorkspace(currentWorkspace.id)
-                            } else {
-                                BookmarkAPIAccess.addFavoriteWorkspace(currentWorkspace.id, currentWorkspace.name)
-                            }
-                        },
-                    ),
-                )
-            }
-        }
+    // Right-click on the bar's own empty chrome (as opposed to on a tab). Built by
+    // rememberBarMenuItems because the favicon strip across each pane owes the same menu on ITS
+    // empty space, and that strip has no TabBarState to borrow one from.
+    val barContextMenuItems: List<ContextMenuItem> = rememberBarMenuItems(openNewTab = openNewTab)
 
     return TabBarState(
         items = tabItems,
@@ -946,9 +910,29 @@ fun BossTabsComponent.rememberTabBarState(
                     onDismiss = {
                         showNewTabDialog = false
                         selectedTabType = null
+                        // A split asked for and then abandoned must not fire on the next
+                        // ordinary New Tab.
+                        splitViewState?.cancelPendingSplit()
                     },
                     tabRegistry = tabRegistry,
                     initialTabType = selectedTabType,
+                    // The same option the window's own New Tab offers. A picker that appeared in
+                    // one new-tab dialog and not the other would read as a bug in whichever one
+                    // the user reached first.
+                    splitDirection = splitViewState?.pendingSplit?.direction,
+                    onSplitDirectionChange =
+                        splitViewState?.let { state ->
+                            { direction: SplitDirection? ->
+                                if (direction == null) {
+                                    state.cancelPendingSplit()
+                                } else {
+                                    // THIS pane, not the active one: this dialog belongs to a
+                                    // particular pane's "+", and splitting anything else would
+                                    // put the new pane where the user was not pointing.
+                                    state.requestSplitWithNewTab(currentPanelId ?: state.activePanelId, direction)
+                                }
+                            }
+                        },
                     onCreateTab = { type, path ->
                         when (type) {
                             TabType.URL -> {
@@ -960,7 +944,7 @@ fun BossTabsComponent.rememberTabBarState(
                                         _title = "Loading...",
                                         url = path,
                                     )
-                                openCreatedTab(fluckTab)
+                                placeNewTab(fluckTab)
                             }
 
                             TabType.FILE -> {
@@ -978,7 +962,7 @@ fun BossTabsComponent.rememberTabBarState(
                                                 .Vector(fileIconInfo.icon, fileIconInfo.color),
                                         filePath = path,
                                     )
-                                openCreatedTab(editorTab)
+                                placeNewTab(editorTab)
                             }
 
                             TabType.TERMINAL -> {
@@ -994,18 +978,18 @@ fun BossTabsComponent.rememberTabBarState(
                                         initialCommand = path.ifBlank { null },
                                         workingDirectory = DefaultWorkingDirectory.resolve(projectPath),
                                     )
-                                openCreatedTab(terminalTab)
+                                placeNewTab(terminalTab)
                             }
 
                             TabType.JUPYTER -> {
                                 val jupyterTab = JupyterTabInfo.createUntitled(path)
-                                openCreatedTab(jupyterTab)
+                                placeNewTab(jupyterTab)
                             }
                         }
                     },
                     // Plugin tab types build their own TabInfo; open it the same way.
                     onCreateTabInfo = { tabInfo ->
-                        openCreatedTab(tabInfo)
+                        placeNewTab(tabInfo)
                     },
                     projectPath = windowProjectState?.selectedProject?.value?.path,
                 )
@@ -1168,7 +1152,7 @@ fun BossTabsComponent.BossMainPanel(
     //
     // That one is passed because SplitViewPanel needs the same answer - it is what decides
     // whether the window draws the bar - and two independent reads are two things that can
-    // disagree. Nothing else consults this one: the strip is drawn in exactly this place, so
+    // disagree. Nothing else consults these: the strip is drawn in exactly this place, so
     // there is no second reader to keep in step.
     //
     // collectAsState, NOT `derivedStateOf { currentSettings.value }`. A MutableStateFlow's
@@ -1176,7 +1160,6 @@ fun BossTabsComponent.BossMainPanel(
     // computes once, caches forever, and being inside a `remember` is never rebuilt either.
     // The Settings toggle then writes a value nothing ever reads again.
     val paneAppearance by WindowAppearanceSettingsManager.currentSettings.collectAsState()
-    val showPaneStrip = paneAppearance.showPaneTabStrip
 
     // Track the active panel state to force recomposition
     val activePanelId by splitViewState?.activePanelIdState ?: remember { mutableStateOf("") }
@@ -1280,6 +1263,8 @@ fun BossTabsComponent.BossMainPanel(
             // pane the vertical bar already lists every tab with its name, so the strip would be
             // the same information twice however the setting is set. Turning it on cannot make
             // that case worth drawing.
+            // One action for both: the "+" at the end of the strip and the menu's "New Tab".
+            val paneNewTab = paneNewTabAction(paneWindowId, currentPanelId, splitViewState)
             PaneIndicatedContent(
                 // The strip's tabs carry the same right-click menu their sidebar rows do. Built
                 // here rather than borrowed from the window bar: the bar's per-pane state belongs
@@ -1288,12 +1273,16 @@ fun BossTabsComponent.BossMainPanel(
                 tabs = paneTabs.tabs,
                 activeIndex = paneTabs.activeIndex,
                 pinnedCount = pinnedCount,
-                showStrip = showPaneStrip && (splitViewState?.getAllPanels()?.size ?: 1) > 1,
+                showStrip = paneAppearance.stripShownFor(splitViewState?.getAllPanels()?.size),
                 onSelect = { index ->
                     currentPanelId?.let { splitViewState?.setActivePanel(it) }
                     selectTab(index)
                 },
-                onNewTab = paneNewTabAction(paneWindowId, currentPanelId, splitViewState),
+                onNewTab = paneNewTab,
+                // The strip's empty space offers what the vertical bar's does, this pane's "+"
+                // included - so "New Tab" from a background pane's strip lands in THAT pane
+                // rather than in whichever one the bar happens to lead.
+                menuItems = rememberBarMenuItems(openNewTab = { paneNewTab?.invoke() }),
                 tabDragComponent = tabDragComponent,
                 panelId = currentPanelId,
                 onTabDropResult = onTabDropResult,

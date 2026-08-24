@@ -5,10 +5,12 @@ import ai.rever.boss.components.model.TabDropResult
 import ai.rever.boss.components.overlays.ContextMenuItem
 import ai.rever.boss.components.overlays.HoverTooltipBox
 import ai.rever.boss.components.overlays.TooltipPlacement
+import ai.rever.boss.components.overlays.contextMenu
 import ai.rever.boss.components.window_panel.SplitViewState
 import ai.rever.boss.plugin.api.TabInfo
 import ai.rever.boss.plugin.ui.BossTheme
 import ai.rever.boss.window.MenuActionsHandler
+import ai.rever.boss.window.WindowAppearanceSettings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
@@ -65,8 +67,13 @@ private val PINNED_RULE_HEIGHT = 14.dp
  * bounds, so every landing place is still the bar's rows or a pane's own drop zones. See
  * TabFaviconChip for why a second surface must not register bounds for tabs the bar already has.
  *
- * Only for a window that is actually split. With one pane the sidebar already lists every tab
- * with its name, and this would be the same information twice.
+ * Its own empty space carries the same menu the vertical bar's does, including the entry that
+ * hides this strip - see [rememberBarMenuItems]. That menu is on the ROW, so it opens only where
+ * no chip is: a chip consumes the press for its own menu, and the row checks for that before
+ * opening a second one on top of it.
+ *
+ * For a split window by default, and for an unsplit one too if asked. Whether the pane count
+ * gates it is a setting rather than a rule - see `WindowAppearanceSettings.paneTabStripOnlyWhenSplit`.
  */
 @Composable
 internal fun PaneTabStrip(
@@ -95,6 +102,13 @@ internal fun PaneTabStrip(
     panelId: String?,
     /** The drop, once the pointer is released. */
     onTabDropResult: (TabDropResult) -> Unit,
+    /**
+     * The strip's own right-click menu, for the space between the chips and the end of the row.
+     *
+     * The same menu the vertical bar offers on its empty space, so the two surfaces cannot come
+     * to mean different things, and the way to hide this strip is on the strip itself.
+     */
+    menuItems: List<ContextMenuItem>,
 ) {
     if (tabs.isEmpty()) return
 
@@ -112,7 +126,8 @@ internal fun PaneTabStrip(
             Modifier
                 .fillMaxWidth()
                 .height(PANE_STRIP_HEIGHT)
-                .background(BossTheme.colors.panel),
+                .background(BossTheme.colors.panel)
+                .contextMenu(items = menuItems),
         contentPadding = PaddingValues(horizontal = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -197,10 +212,8 @@ private fun NewTabChip(onClick: () -> Unit) {
 /**
  * A panel's content, under the favicon strip that stands in for its tab bar.
  *
- * @param showStrip only once the window is split. The window bar collapses panes the user is not
- *   working in, so without the strip, switching a background pane's tab meant going to the
- *   sidebar, opening that pane's group and reading names. With ONE pane the sidebar already lists
- *   every tab with its name, and this would say the same thing twice.
+ * @param showStrip the Settings toggle, and nothing else. See [PaneTabStrip] for why the pane
+ *   count is no longer part of the answer.
  */
 @Composable
 internal fun PaneIndicatedContent(
@@ -214,6 +227,8 @@ internal fun PaneIndicatedContent(
     tabDragComponent: TabDraggableComponent?,
     panelId: String?,
     onTabDropResult: (TabDropResult) -> Unit,
+    /** The strip's own right-click menu. See [PaneTabStrip]. */
+    menuItems: List<ContextMenuItem>,
     content: @Composable (Modifier) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -228,12 +243,24 @@ internal fun PaneIndicatedContent(
                 tabDragComponent = tabDragComponent,
                 panelId = panelId,
                 onTabDropResult = onTabDropResult,
+                menuItems = menuItems,
             )
             Divider(color = BossTheme.colors.line)
         }
         content(Modifier.weight(1f).fillMaxWidth())
     }
 }
+
+/**
+ * Whether a pane draws its favicon strip, given how many panes the window has.
+ *
+ * The pane count is a preference rather than a rule - see
+ * [WindowAppearanceSettings.paneTabStripOnlyWhenSplit] for why it stopped being one. A named
+ * predicate rather than an expression at the call site, because that call site is already at
+ * detekt's complexity ceiling and because this is worth being able to test on its own.
+ */
+internal fun WindowAppearanceSettings.stripShownFor(paneCount: Int?): Boolean =
+    showPaneTabStrip && (!paneTabStripOnlyWhenSplit || (paneCount ?: 1) > 1)
 
 /**
  * What a pane's "+" does, or null when there is no window to ask.
