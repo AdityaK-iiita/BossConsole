@@ -253,6 +253,7 @@ private fun runnerEntries() =
 private fun workspaceEntries() =
     section(SettingsSection.WORKSPACE) {
         group("Default Workspace")
+        group("When Switching Workspaces")
         group("About Workspaces")
     }
 
@@ -296,7 +297,11 @@ private fun windowAppearanceEntries() =
         setting("Show Title Bar", "Title Bar", "window", "chrome", "decoration")
         setting("Platform Default", "Title Bar")
         group("Tab Bar")
+        setting("Position", "Tab Bar", "vertical tabs", "left", "top", "sidebar", "tabs")
         setting("Tab Sizing", "Tab Bar", "shrink to fit", "fixed width", "tabs")
+        setting("Vertical Bar Width", "Tab Bar", "vertical tabs", "left", "sidebar", "width")
+        setting("Expand on Hover", "Tab Bar", "vertical tabs", "rail", "collapse", "drawer")
+        setting("Pane Tab Strip", "Tab Bar", "vertical tabs", "split", "favicon", "pane", "tabs")
         group("Bars")
         setting("Show Top Bar", "Bars", "chrome", "window")
         setting("Show Bottom Bar", "Bars", "chrome", "window", "status")

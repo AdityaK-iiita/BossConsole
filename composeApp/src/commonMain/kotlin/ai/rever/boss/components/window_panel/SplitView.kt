@@ -1,16 +1,29 @@
 package ai.rever.boss.components.window_panel
 
+import ai.rever.boss.components.dividers.VDivider
 import ai.rever.boss.components.model.PanelDropZones
 import ai.rever.boss.components.model.TabDraggableComponent
 import ai.rever.boss.components.model.TabDropResult
 import ai.rever.boss.components.model.TabDropTarget
+import ai.rever.boss.components.overlays.OverlayCorner
 import ai.rever.boss.components.plugin.disposePluginBrowsers
 import ai.rever.boss.components.plugin.tab_types.PanelHostTabInfo
 import ai.rever.boss.components.plugin.tab_types.fluck.FluckTabInfo
 import ai.rever.boss.components.window_panel.components.BossResizablePanel
 import ai.rever.boss.components.window_panel.components.main_window_panels.BossMainPanel
 import ai.rever.boss.components.window_panel.components.main_window_panels.BossTabsComponent
+import ai.rever.boss.components.window_panel.components.main_window_panels.TabBarLayout
+import ai.rever.boss.components.window_panel.components.main_window_panels.TabBarRevealState
+import ai.rever.boss.components.window_panel.components.main_window_panels.WindowRevealedTabBarDrawer
+import ai.rever.boss.components.window_panel.components.main_window_panels.WindowVerticalTabBar
 import ai.rever.boss.components.window_panel.components.main_window_panels.createBossAppContext
+import ai.rever.boss.components.window_panel.components.main_window_panels.overlayRegionInWindow
+import ai.rever.boss.components.window_panel.components.main_window_panels.rememberPinDrawerAction
+import ai.rever.boss.components.window_panel.components.main_window_panels.rememberTabBarLayout
+import ai.rever.boss.components.window_panel.components.main_window_panels.rememberTabBarRevealState
+import ai.rever.boss.components.window_panel.components.main_window_panels.rememberTabGroupExpansion
+import ai.rever.boss.components.window_panel.components.main_window_panels.rememberToggleCollapseAction
+import ai.rever.boss.components.window_panel.components.main_window_panels.rememberWindowTabGroups
 import ai.rever.boss.icons.FileIcons
 import ai.rever.boss.platform.bossFileDropTarget
 import ai.rever.boss.plugin.api.Panel
@@ -29,22 +42,47 @@ import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import ai.rever.boss.window.WindowProjectStateRegistry
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.Icon
+import androidx.compose.material.Surface
+import androidx.compose.material.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CloseFullscreen
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.runtime.*
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.arkivanov.decompose.extensions.compose.subscribeAsState
 import kotlinx.coroutines.delay
 import kotlin.random.Random
@@ -66,6 +104,12 @@ sealed class SplitNode {
         val bottom: SplitNode,
     ) : SplitNode()
 }
+
+/** A split that has been asked for and is waiting on the tab that will fill it. */
+data class PendingSplit(
+    val panelId: String,
+    val orientation: SplitOrientation,
+)
 
 enum class SplitOrientation {
     HORIZONTAL, // Split top/bottom
@@ -124,6 +168,98 @@ class SplitViewState(
         )
     val rootNode: SplitNode get() = _rootNode.value
 
+    // One FocusRequester per panel, handed out rather than remembered by whoever needs one.
+    //
+    // A panel attaches its own to the Box it draws, and a tab bar uses it to give focus back to
+    // that panel after closing a tab from a menu. With a bar per panel the two were the same
+    // composition and a local `remember` sufficed; the window-level vertical bar is outside every
+    // panel, so the requester has to live somewhere both can reach.
+    private val panelFocusRequesters = mutableMapOf<String, FocusRequester>()
+
+    /**
+     * The pane shown alone, filling the split area, or null when the split is laid out normally.
+     *
+     * Zoom hides panes; it does not close them. The split tree is untouched, so exiting restores
+     * the arrangement exactly - and every pane's tabs go on existing while zoomed, which is what
+     * lets the window bar keep listing them.
+     *
+     * It follows the active pane rather than pinning one: activating another pane while zoomed
+     * shows that one. Otherwise clicking a tab in another pane's group would appear to do
+     * nothing, which is the same complaint the single bar was built to answer.
+     */
+    var zoomedPanelId by mutableStateOf<String?>(null)
+        private set
+
+    /**
+     * Names the user has given panes, by id.
+     *
+     * A pane has no name of its own: what the map and the group headers show is derived from
+     * where it sits - "Left", "Top right", "Pane 3" - which is true but says nothing about what
+     * is in it. This overrides that for panes someone has bothered to name.
+     *
+     * Held in the window rather than in the split tree, and so NOT persisted: PanelConfig is a
+     * published serialized type and adding a field to it is an ABI change for every plugin that
+     * holds one. A name therefore lasts as long as the window does. See renamePanel.
+     */
+    private val panelNames = mutableStateMapOf<String, String>()
+
+    /** The name someone gave this pane, or null to fall back to its position. */
+    fun panelName(panelId: String): String? = panelNames[panelId]
+
+    /** Name a pane, or clear the name with a blank string. */
+    fun renamePanel(
+        panelId: String,
+        name: String,
+    ) {
+        if (name.isBlank()) panelNames.remove(panelId) else panelNames[panelId] = name.trim()
+    }
+
+    /**
+     * A split waiting on the tab that will fill it.
+     *
+     * Splitting a pane cannot make an EMPTY one: `checkAndCloseEmptyPanels` closes a panel with no
+     * tabs about 50ms later, so the split would appear to do nothing at all. So the pane menu asks
+     * for a tab FIRST and the split happens with that tab in hand, through
+     * `splitPanel(tabToMove = ...)` - the new pane is never empty for even a frame.
+     *
+     * Held here rather than in BossAppState because both ends already have the split state: the
+     * map that requests it and the dialog that fulfils it.
+     */
+    var pendingSplit by mutableStateOf<PendingSplit?>(null)
+        private set
+
+    /** Ask for a tab, then split [panelId] and put that tab in the new pane. */
+    fun requestSplitWithNewTab(
+        panelId: String,
+        orientation: SplitOrientation,
+    ) {
+        pendingSplit = PendingSplit(panelId, orientation)
+    }
+
+    /**
+     * Take the pending split, if there is one. Returns null when the next tab is an ordinary one.
+     *
+     * Consumed rather than read, so a dialog dismissed and reopened later does not split on a tab
+     * nobody asked to be split.
+     */
+    fun consumePendingSplit(): PendingSplit? = pendingSplit.also { pendingSplit = null }
+
+    /** Forget a split that was asked for and then abandoned. */
+    fun cancelPendingSplit() {
+        pendingSplit = null
+    }
+
+    /** Show this pane alone. */
+    fun zoomPanel(panelId: String) {
+        setActivePanel(panelId)
+        zoomedPanelId = panelId
+    }
+
+    /** Put the split back. */
+    fun exitZoom() {
+        zoomedPanelId = null
+    }
+
     // Track active panel for file operations
     private var _activePanelId = mutableStateOf("main")
     val activePanelId: String get() = _activePanelId.value
@@ -136,10 +272,26 @@ class SplitViewState(
     // Maintains order of recently activated panels (most recent first, limited to last 10)
     private val _panelActivationHistory = mutableListOf("main")
 
-    // Track preserved workspace states
-    private val preservedWorkspaceStates = mutableMapOf<String, PreservedWorkspaceState>()
-    private var _currentWorkspaceId: String? = null
+    // Track preserved workspace states.
+    //
+    // A state MAP rather than a plain one: these keys are what `liveWorkspaceIds` reports, and
+    // that is read from composition. A plain map would leave the workspace menu marking whatever
+    // was true when it last happened to recompose.
+    private val preservedWorkspaceStates = mutableStateMapOf<String, PreservedWorkspaceState>()
+    private var _currentWorkspaceId by mutableStateOf<String?>(null)
     val currentWorkspaceId: String? get() = _currentWorkspaceId
+
+    /**
+     * Every workspace this window is actually running, displayed or not.
+     *
+     * Switching workspaces does not tear the old one down: `preserveCurrentState` keeps its whole
+     * split tree, and those are live BossTabsComponents with live tabs - which is why
+     * `collectAllTabs` walks the preserved states too. So one window runs several workspaces at
+     * once and shows one of them, and "which workspaces are running" is this set, not the single
+     * id of the one on screen.
+     */
+    val liveWorkspaceIds: Set<String>
+        get() = preservedWorkspaceStates.keys + setOfNotNull(_currentWorkspaceId)
 
     // Data class to hold preserved state
     data class PreservedWorkspaceState(
@@ -188,6 +340,8 @@ class SplitViewState(
     private val activePanelDebounceMs = 50L
 
     fun setActivePanel(panelId: String) {
+        // Zoom follows. See zoomedPanelId for why it is not a pinned pane.
+        if (zoomedPanelId != null) zoomedPanelId = panelId
         // Skip if already active
         if (panelId == _activePanelId.value) return
 
@@ -752,6 +906,12 @@ class SplitViewState(
             panel.tabsComponent.clearAllTabs()
         }
 
+        // A zoomed pane that is being closed cannot stay zoomed onto nothing.
+        if (zoomedPanelId == panelId) zoomedPanelId = null
+        // Ids are not reused, but a name outliving its pane is a leak with a user-visible tail:
+        // it would reappear if one ever were.
+        panelNames.remove(panelId)
+
         _rootNode.value = removePanel(_rootNode.value, panelId)
 
         // Clean up activation history to prevent accumulation of deleted panel IDs
@@ -925,6 +1085,26 @@ class SplitViewState(
             }
         }
         return null
+    }
+
+    /**
+     * This panel's focus requester, created on first ask.
+     *
+     * Deliberately not tied to a composition: the panel and its tab bar ask on different frames
+     * and in either order, and both must get the same instance or the bar's `requestFocus` lands
+     * on something nothing is attached to.
+     */
+    fun focusRequesterFor(panelId: String): FocusRequester = panelFocusRequesters.getOrPut(panelId) { FocusRequester() }
+
+    /**
+     * Drop a panel's focus requester once that panel is really gone.
+     *
+     * Guarded by the tree rather than by the caller, because the dispose that calls this also
+     * fires when a panel's composition is merely re-keyed - and dropping a live panel's requester
+     * would hand out a second one while the first is still the attached one.
+     */
+    internal fun releaseFocusRequester(panelId: String) {
+        if (findPanel(panelId) == null) panelFocusRequesters.remove(panelId)
     }
 
     fun getAllPanels(): List<SplitNode.Panel> = getAllPanelsInNode(_rootNode.value)
@@ -1282,6 +1462,25 @@ class SplitViewState(
         _currentWorkspaceId = workspaceId
     }
 
+    /**
+     * Stop running the workspace this window is showing, instead of preserving it.
+     *
+     * The opposite of [preserveCurrentState] and the other half of a switch. Two things have to
+     * happen, and neither is implied by simply applying the next workspace over the top:
+     *
+     * - Its tabs are CLEARED. Applying a workspace replaces the root node, which drops the
+     *   reference to the old tree but disposes nothing - so its browsers would keep running with
+     *   nothing on screen pointing at them, which is the memory this is meant to free.
+     * - Any state preserved for it on an EARLIER visit is dropped. Otherwise closing a workspace
+     *   you had previously kept would leave that older copy behind, and switching back would
+     *   restore a layout from two visits ago.
+     */
+    fun closeCurrentWorkspace() {
+        val currentId = _currentWorkspaceId ?: return
+        preservedWorkspaceStates.remove(currentId)
+        getAllPanels().forEach { panel -> panel.tabsComponent.clearAllTabs() }
+    }
+
     fun restorePreservedState(workspaceId: String): Boolean {
         // Check if we have a preserved state for this workspace
         val preservedState = preservedWorkspaceStates[workspaceId]
@@ -1534,17 +1733,57 @@ fun rememberSplitViewState(
     initialTabsComponent: BossTabsComponent? = null,
 ): SplitViewState = remember { SplitViewState(tabRegistry, windowId, initialTabsComponent) }
 
+/**
+ * The window's main area: the split tree, and - in LEFT tab bar position - the one vertical tab
+ * bar that lists every pane's tabs.
+ *
+ * The bar is drawn HERE rather than inside each panel, and that is the whole of the single-bar
+ * change. A panel still owns its own tabs; what it no longer owns is a bar to draw them in, so
+ * splitting adds a group to one bar instead of a second bar beside the first.
+ *
+ * TOP position is untouched: each panel keeps drawing its own strip, because a horizontal strip
+ * has no room to render groups and TOP is the default.
+ */
 @Composable
 fun SplitViewPanel(
     splitViewState: SplitViewState,
     modifier: Modifier = Modifier,
     tabDragComponent: TabDraggableComponent? = null,
     onTabDropResult: (TabDropResult) -> Unit = {},
+    /** Window chrome for the foot of the vertical bar. Ignored in TOP position, which has none. */
+    verticalBarFooter: @Composable () -> Unit = {},
 ) {
+    val density = LocalDensity.current
+
+    // The main area's own width, measured rather than taken from a BoxWithConstraints - see
+    // BossMainPanel for what a SubcomposeLayout around this tree costs. It is the WINDOW's width
+    // now, not a panel's, which is the point: whether there is room for a full bar is a question
+    // about the window, and judging it per panel is what collapsed both bars the moment anyone
+    // split the window.
+    var contentWidthPx by remember { mutableIntStateOf(0) }
+
+    // Which edge, how wide, rail or not. See TabBarLayout.
+    val bar = rememberTabBarLayout(contentWidthPx)
+
+    // The rail/drawer state machine and its timing. See TabBarRevealState.
+    val reveal =
+        rememberTabBarRevealState(
+            railShown = bar.railShown,
+            narrow = bar.narrow,
+            hoverExpand = bar.hoverExpand,
+        )
+    // This area's rectangle in dp relative to the window's content pane, for the drawer's
+    // heavyweight overlay window. Null until measured, and the drawer draws nothing while it is.
+    var contentRegion by remember { mutableStateOf<IntRect?>(null) }
+
     Box(
         modifier =
             modifier
                 .fillMaxSize()
+                .onSizeChanged { size -> contentWidthPx = size.width }
+                .onGloballyPositioned { coordinates ->
+                    contentRegion = overlayRegionInWindow(coordinates.boundsInWindow(), density.density)
+                }
                 // Dropping a file on the main panel opens it, routed by extension exactly as a
                 // click in the sidebar would be. Attached here rather than per-panel so the
                 // whole main area is a target, and it accepts the plain OS file flavour, so a
@@ -1553,12 +1792,123 @@ fun SplitViewPanel(
                     paths.forEach { splitViewState.openFileInActivePanel(it, it.extractFileName()) }
                 },
     ) {
+        val splitTree: @Composable (Modifier) -> Unit = { treeModifier ->
+            Box(modifier = treeModifier) {
+                SplitOrZoomedPane(
+                    splitViewState = splitViewState,
+                    tabDragComponent = tabDragComponent,
+                    onTabDropResult = onTabDropResult,
+                    // A panel draws its own bar only when this one is not drawing it for them.
+                    showPanelTabBar = !bar.vertical,
+                )
+            }
+        }
+
+        if (bar.vertical) {
+            WindowBarRow(
+                splitViewState = splitViewState,
+                bar = bar,
+                reveal = reveal,
+                tabDragComponent = tabDragComponent,
+                onTabDropResult = onTabDropResult,
+                footer = verticalBarFooter,
+                splitTree = splitTree,
+            )
+        } else {
+            splitTree(Modifier.fillMaxSize())
+        }
+
+        if (bar.vertical && bar.railShown) {
+            WindowRevealedTabBarDrawer(
+                splitViewState = splitViewState,
+                bar = bar,
+                reveal = reveal,
+                contentRegion = contentRegion,
+                onPin = rememberPinDrawerAction(reveal, bar),
+            )
+        }
+    }
+}
+
+/**
+ * The window's panes: all of them in their split, or one of them filling the area.
+ *
+ * A zoomed pane is rendered DIRECTLY rather than through the split tree. The tree is left exactly
+ * as it was, so exiting restores the arrangement with nothing having to remember it.
+ */
+@Composable
+private fun SplitOrZoomedPane(
+    splitViewState: SplitViewState,
+    tabDragComponent: TabDraggableComponent?,
+    onTabDropResult: (TabDropResult) -> Unit,
+    showPanelTabBar: Boolean,
+) {
+    val zoomed = splitViewState.zoomedPanelId?.let { splitViewState.getPanel(it) }
+    if (zoomed == null) {
         RenderSplitNode(
             node = splitViewState.rootNode,
             splitViewState = splitViewState,
             tabDragComponent = tabDragComponent,
             onTabDropResult = onTabDropResult,
+            showPanelTabBar = showPanelTabBar,
         )
+        return
+    }
+
+    key(zoomed.id) {
+        zoomed.tabsComponent.BossMainPanel(
+            splitViewState = splitViewState,
+            currentPanelId = zoomed.id,
+            tabDragComponent = tabDragComponent,
+            onTabDropResult = onTabDropResult,
+            showTabBar = showPanelTabBar,
+        )
+    }
+}
+
+/**
+ * The window bar beside the split tree.
+ *
+ * The bar's own hoverable wrapper lives here rather than inside the bar, because what it enables
+ * is the rail's hover reveal - a decision the reveal state owns and the bar does not.
+ */
+@Composable
+private fun WindowBarRow(
+    splitViewState: SplitViewState,
+    bar: TabBarLayout,
+    reveal: TabBarRevealState,
+    tabDragComponent: TabDraggableComponent?,
+    onTabDropResult: (TabDropResult) -> Unit,
+    footer: @Composable () -> Unit,
+    splitTree: @Composable (Modifier) -> Unit,
+) {
+    val listState = rememberLazyListState()
+    val expansion = rememberTabGroupExpansion()
+    val groups =
+        rememberWindowTabGroups(
+            splitViewState = splitViewState,
+            listState = listState,
+            expansion = expansion,
+            tabDragComponent = tabDragComponent,
+            onTabDropResult = onTabDropResult,
+        )
+    Row(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.hoverable(reveal.railHover, enabled = bar.hoverExpand && bar.railShown)) {
+            WindowVerticalTabBar(
+                groups = groups,
+                listState = listState,
+                expansion = expansion,
+                width = bar.width,
+                collapsed = bar.railShown,
+                onToggleCollapse = rememberToggleCollapseAction(bar, reveal),
+                tabDragComponent = tabDragComponent,
+                footer = footer,
+                zoomed = splitViewState.zoomedPanelId != null,
+                onExitZoom = splitViewState::exitZoom,
+            )
+        }
+        VDivider()
+        splitTree(Modifier.weight(1f).fillMaxHeight())
     }
 }
 
@@ -1568,6 +1918,7 @@ private fun RenderSplitNode(
     splitViewState: SplitViewState,
     tabDragComponent: TabDraggableComponent? = null,
     onTabDropResult: (TabDropResult) -> Unit = {},
+    showPanelTabBar: Boolean = true,
 ) {
     when (node) {
         is SplitNode.Panel -> {
@@ -1578,6 +1929,7 @@ private fun RenderSplitNode(
                 DisposableEffect(node.id, tabDragComponent) {
                     onDispose {
                         splitViewState.clearPanelBounds(node.id)
+                        splitViewState.releaseFocusRequester(node.id)
                         tabDragComponent?.unregisterPanel(node.id)
                     }
                 }
@@ -1626,6 +1978,7 @@ private fun RenderSplitNode(
                         currentPanelId = node.id,
                         tabDragComponent = tabDragComponent,
                         onTabDropResult = onTabDropResult,
+                        showTabBar = showPanelTabBar,
                     )
 
                     // Show drop zone highlights when dragging over this panel
@@ -1633,6 +1986,24 @@ private fun RenderSplitNode(
                         PanelDropZoneOverlay(
                             panelId = node.id,
                             dropTarget = dropTarget,
+                            // The zones themselves start after a vertical tab bar that covers
+                            // this panel's leading edge (see PanelDropZones.fromBounds), so the
+                            // highlight has to as well - a left-split band painted over the bar
+                            // would advertise a drop that means something else entirely.
+                            //
+                            // Measured off the ZONES rather than off a bar, which is the only
+                            // reading that cannot disagree with them: a window-level bar is
+                            // registered against every panel and covers none of them, so a
+                            // width taken from it would inset every highlight by a bar that is
+                            // nowhere near the panel.
+                            leadingInset =
+                                tabDragComponent.panelDropZones[node.id]
+                                    ?.let { zones ->
+                                        with(LocalDensity.current) {
+                                            (zones.leftZone.left - zones.panelBounds.left).toDp()
+                                        }
+                                    }?.coerceAtLeast(0.dp)
+                                    ?: 0.dp,
                         )
                     }
                 }
@@ -1653,6 +2024,7 @@ private fun RenderSplitNode(
                         splitViewState = splitViewState,
                         tabDragComponent = tabDragComponent,
                         onTabDropResult = onTabDropResult,
+                        showPanelTabBar = showPanelTabBar,
                     )
                 },
                 sideContent = {
@@ -1661,6 +2033,7 @@ private fun RenderSplitNode(
                         splitViewState = splitViewState,
                         tabDragComponent = tabDragComponent,
                         onTabDropResult = onTabDropResult,
+                        showPanelTabBar = showPanelTabBar,
                     )
                 },
             )
@@ -1680,6 +2053,7 @@ private fun RenderSplitNode(
                         splitViewState = splitViewState,
                         tabDragComponent = tabDragComponent,
                         onTabDropResult = onTabDropResult,
+                        showPanelTabBar = showPanelTabBar,
                     )
                 },
                 sideContent = {
@@ -1688,6 +2062,7 @@ private fun RenderSplitNode(
                         splitViewState = splitViewState,
                         tabDragComponent = tabDragComponent,
                         onTabDropResult = onTabDropResult,
+                        showPanelTabBar = showPanelTabBar,
                     )
                 },
             )
@@ -1702,6 +2077,7 @@ private fun RenderSplitNode(
 private fun PanelDropZoneOverlay(
     panelId: String,
     dropTarget: TabDropTarget?,
+    leadingInset: Dp = 0.dp,
 ) {
     // Check which zone is highlighted
     val isLeftHighlighted =
@@ -1722,7 +2098,7 @@ private fun PanelDropZoneOverlay(
         dropTarget is TabDropTarget.ExistingPanel &&
             dropTarget.panelId == panelId
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize().padding(start = leadingInset)) {
         // Left edge highlight
         if (isLeftHighlighted) {
             Box(

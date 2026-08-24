@@ -26,6 +26,7 @@ import androidx.compose.material.Surface
 import androidx.compose.material.Text
 import androidx.compose.material.TextButton
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Diversity2
 import androidx.compose.runtime.*
@@ -59,6 +60,23 @@ import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+/**
+ * Fill behind the selected tab in the pane being worked in.
+ *
+ * Enough amber to find without scanning, little enough that a column of tabs does not become a
+ * column of colour. The marker beside it is the saturated version of the same statement.
+ */
+private const val SELECTED_FILL_ALPHA = 0.16f
+
+/** Fill behind the selected tab of a pane that is not the active one. Present, but not amber. */
+private const val INACTIVE_FILL_ALPHA = 0.35f
+
+/** Fill under the pointer. Below the selected fill, so hovering the selected tab does not flatten it. */
+private const val HOVER_FILL_ALPHA = 0.55f
+
+/** The pin glyph on a pinned tab. Smaller than the close beside it: it is a state, not a button. */
+private val PIN_INDICATOR_SIZE = 10.dp
+
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun BossTabButton(
@@ -67,6 +85,15 @@ fun BossTabButton(
     iconPainter: Painter? = null,
     tabIcon: TabIcon? = null,
     isSelected: Boolean = false,
+    /**
+     * This tab is pinned.
+     *
+     * Pinning already puts a tab first in its panel and, in a bar showing one pane, under a
+     * "PINNED" heading. Neither survives contact with a split: several panes' pinned blocks run
+     * together down one column, and the headings are dropped there because the rules between
+     * panes are already doing that job. So the tab itself has to say it.
+     */
+    isPinned: Boolean = false,
     isFocused: Boolean = true,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
@@ -80,6 +107,21 @@ fun BossTabButton(
      */
     tabWidth: Dp? = null,
     /**
+     * Lay this tab out as a row in a LEFT tab bar rather than a column in a TOP one.
+     *
+     * Two things change and nothing else does. The tab fills the bar's width and takes a fixed
+     * [tabHeight] instead of filling the bar's height and taking a computed [tabWidth]; and the
+     * active marker moves from a underline at the bottom to a bar down the leading edge, which
+     * is where a vertical list's selection reads.
+     *
+     * Everything the tab DOES - favicon, title badge, hover/selected close button, middle-click
+     * close, right-click menu, drag gestures and the bounds they register - is shared, because
+     * none of it is about which way the bar runs.
+     */
+    vertical: Boolean = false,
+    /** Fixed row height in [vertical] mode. Ignored otherwise. */
+    tabHeight: Dp = 32.dp,
+    /**
      * Optional marker drawn immediately after the title, before the close button. Used for the
      * plugin build tag, which qualifies the title (this panel is not running the released build) and
      * so belongs beside it rather than out at the tab's edge.
@@ -92,6 +134,16 @@ fun BossTabButton(
     tabIndex: Int = -1,
     onDragStart: () -> Unit = {},
     onDragEnd: (TabDropResult?) -> Unit = {},
+    /**
+     * Reports whether this tab's context menu is open.
+     *
+     * Exists for one owner: the vertical bar's hover-reveal drawer, which is disposed when the
+     * pointer leaves it. A right-click opens the menu in its own popup, the pointer moves off the
+     * drawer to reach it, and the drawer would retract and take the menu's composition with it.
+     * So hover cannot be the only vote on whether the drawer stays. Default no-op, which is what
+     * every owner whose lifetime is not tied to the pointer wants.
+     */
+    onContextMenuVisibilityChange: (Boolean) -> Unit = {},
 ) {
     // BOSS design-system tokens — semantic accessors over BossDesignSystem.kt.
     val colors = BossTheme.colors
@@ -183,6 +235,27 @@ fun BossTabButton(
     // State for context menu
     var showContextMenu by remember { mutableStateOf(false) }
 
+    // Read by the long-lived pointer handler below, which must not restart when these change.
+    val currentMenuItems by rememberUpdatedState(contextMenuItems)
+    val currentOnClose by rememberUpdatedState(onClose)
+
+    // Reported on change rather than written from the setter, so a tab disposed with its menu
+    // still open (closing the tab from the menu does exactly that) clears the flag it set.
+    // Strictly paired: one `true` when the menu opens, one `false` when that same effect is
+    // disposed - whether because the menu closed or because the row left composition.
+    //
+    // Reporting `showContextMenu` unconditionally instead looks equivalent and is not. The
+    // listener counts these as deltas, so the `false` every row emits on its FIRST composition
+    // decrements a count it never incremented: a menu open in the hover drawer was cancelled by
+    // any other row mounting - a scroll of the shared column, or a background pane opening a tab
+    // - which retracted the drawer and took the open menu with it. Closing a menu reported
+    // `false` twice for the same reason (once from onDispose, once from the re-run body).
+    val latestContextMenuVisibility by rememberUpdatedState(onContextMenuVisibilityChange)
+    DisposableEffect(showContextMenu) {
+        if (showContextMenu) latestContextMenuVisibility(true)
+        onDispose { if (showContextMenu) latestContextMenuVisibility(false) }
+    }
+
     // Coroutine scope for middle-click close (Issue #328)
     // Using scope.launch because calling onClose directly from pointerInput's
     // awaitPointerEventScope doesn't properly trigger Compose state updates
@@ -227,19 +300,49 @@ fun BossTabButton(
         }
     }
 
+    // The tab's own surface, in order: selected in the pane being worked in, selected in a
+    // background pane, merely under the pointer, none of those.
+    //
+    // A 3dp marker on its own was not enough to find the selected tab at a glance, especially
+    // down a vertical bar where every row is the same width and the marker is a sliver at the
+    // far edge. The fill is what the eye lands on; the marker says which pane it belongs to.
+    //
+    // The second case is neutral rather than amber because the amber is a claim about where the
+    // user IS, and two panes both making it is the confusion the marker's own focused/unfocused
+    // split already exists to avoid.
+    //
+    // ALPHA over the theme's colours rather than a fixed wash: this row is drawn on `panel` in
+    // the tab bar and could be drawn on another surface elsewhere, and a tint composited over
+    // whatever is behind it is right in both places, in either theme. signalWash is the fixed
+    // amber-on-ink equivalent and would be a hair off wherever ink is not what is underneath.
+    val tabSurface =
+        when {
+            isSelected && isFocused -> colors.signal.copy(alpha = SELECTED_FILL_ALPHA)
+            isSelected -> colors.lineStrong.copy(alpha = INACTIVE_FILL_ALPHA)
+            isHovered -> colors.raised.copy(alpha = HOVER_FILL_ALPHA)
+            else -> Color.Transparent
+        }
+
     Box(
         modifier =
             modifier
-                .fillMaxHeight()
                 .let { base ->
-                    if (tabWidth != null) {
+                    when {
+                        // Vertical bar: the bar's width, a fixed row height. There is no width
+                        // to negotiate, so tabWidth is not consulted at all.
+                        vertical -> base.fillMaxWidth().height(tabHeight)
+
                         // Explicit width from the parent (Safari-style shrink-to-fit).
-                        base.width(tabWidth)
-                    } else {
+                        tabWidth != null -> base.fillMaxHeight().width(tabWidth)
+
                         // Legacy sizing: content-driven width clamped to 180–450 dp.
-                        base.width(IntrinsicSize.Min).widthIn(min = 180.dp, max = 450.dp)
+                        else -> base.fillMaxHeight().width(IntrinsicSize.Min).widthIn(min = 180.dp, max = 450.dp)
                     }
-                }.hoverable(interactionSource)
+                }
+                // Under the content and under the marker, which is drawn last so it stays a hard
+                // edge against the fill rather than being tinted by it.
+                .background(color = tabSurface, shape = RoundedCornerShape(radii.input))
+                .hoverable(interactionSource)
                 .onGloballyPositioned { coordinates ->
                     val pos = coordinates.positionInParent()
                     buttonPositionRef[0] = pos.x
@@ -252,8 +355,18 @@ fun BossTabButton(
                         val bounds = coordinates.boundsInWindow()
                         tabDragComponent.registerTabBounds(compositeTabId, bounds, tabIndex)
                     }
-                }.pointerInput(contextMenuItems) {
+                }.pointerInput(Unit) {
                     // Handle right-click for context menu and middle-click to close (Issue #328)
+                    //
+                    // Keyed on Unit, and the two things it needs are read through
+                    // rememberUpdatedState instead.
+                    //
+                    // It used to be keyed on contextMenuItems, which is a fresh list of freshly
+                    // built lambdas on every composition - so the key differed every time and
+                    // this coroutine was cancelled and restarted on every recomposition of the
+                    // tab (hover, favicon load, any tab-state change). A right-click landing in
+                    // that gap found no handler here, went unconsumed, and the tab bar's own
+                    // menu answered it instead. That is the "sometimes the wrong menu" bug.
                     awaitPointerEventScope {
                         while (true) {
                             val event = awaitPointerEvent(PointerEventPass.Initial)
@@ -263,10 +376,10 @@ fun BossTabButton(
                                 if (awtEvent?.button == 2) {
                                     // Launch on the composable's coroutine scope to properly trigger state updates
                                     closeScope.launch {
-                                        onClose()
+                                        currentOnClose()
                                     }
                                     event.changes.forEach { it.consume() }
-                                } else if (awtEvent?.button == 3 && contextMenuItems.isNotEmpty()) {
+                                } else if (awtEvent?.button == 3 && currentMenuItems.isNotEmpty()) {
                                     // Right-click (button 3): show context menu
                                     showContextMenu = true
                                     event.changes.forEach { it.consume() }
@@ -366,6 +479,20 @@ fun BossTabButton(
                     softWrap = false,
                 )
                 titleBadge?.invoke()
+
+                // Always drawn, unlike the close icon beside it: a tab is pinned whether or not
+                // the pointer is anywhere near it, and an indicator you have to hover to see
+                // cannot answer "which of these are pinned" at a glance - which is the only
+                // question it exists for.
+                if (isPinned) {
+                    Icon(
+                        imageVector = Icons.Filled.PushPin,
+                        contentDescription = "Pinned",
+                        tint = colors.textSecondary,
+                        modifier = Modifier.size(PIN_INDICATOR_SIZE),
+                    )
+                }
+
                 // Only show close icon when needed to save space
                 if (isSelected || isHovered) {
                     Icon(
@@ -384,10 +511,17 @@ fun BossTabButton(
             Box(
                 modifier =
                     Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .height(4.dp)
-                        .background(
+                        .let { base ->
+                            // The marker runs along the edge the bar is anchored to, so it reads
+                            // as "this row of the list" in a column and "this column of the strip"
+                            // in a row. A bottom underline on a vertical tab would sit between two
+                            // stacked tabs and belong to neither.
+                            if (vertical) {
+                                base.align(Alignment.CenterStart).fillMaxHeight().width(3.dp)
+                            } else {
+                                base.align(Alignment.BottomCenter).fillMaxWidth().height(4.dp)
+                            }
+                        }.background(
                             // Signature element: the active-tab marker wears the amber
                             // signal when focused, and a quiet line when not.
                             color = if (isFocused) colors.signal else colors.line,

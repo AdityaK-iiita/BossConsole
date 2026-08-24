@@ -80,6 +80,14 @@ fun BossActionButton(
     hintText: String? = null,
     showHintWithDelay: Boolean = true,
     hintDirection: Panel = bottom,
+    /**
+     * Sized for a narrow column rather than the top bar.
+     *
+     * The vertical tab bar is 200dp wide and its own rows are 24dp of 10sp text; a control built
+     * for a 40dp horizontal bar sits in it like furniture in the wrong room. Opt-in, so the top
+     * bar - where every one of these numbers was chosen - is untouched.
+     */
+    compact: Boolean = false,
     onClick: () -> Unit = {},
 ) {
     // Resolved icon color - use iconColor if provided, otherwise fall back to color
@@ -118,16 +126,23 @@ fun BossActionButton(
     // State for hover popup - use class-level state holder to survive recomposition
     val hoverState = remember { HoverPopupState() }
 
+    // Beside, not below, once these are rows of a narrow column.
+    //
+    // The default puts the hover hint directly under the button - which in a stacked column is
+    // directly over the NEXT button. Under HARDWARE that hint is a native window, so it does not
+    // merely look wrong: it sits in front of a control the user is about to click.
+    val resolvedHintDirection = if (compact) right else hintDirection
+
     fun computeHoverPopupPosition(): IntOffset =
         IntOffset(
             buttonPositionRef[0].toInt() +
-                when (hintDirection) {
+                when (resolvedHintDirection) {
                     right -> buttonSizeRef[0]
                     left -> -hintPopupSizeRef[0]
                     else -> (buttonSizeRef[0] - hintPopupSizeRef[0]) / 2
                 },
             buttonPositionRef[1].toInt() +
-                when (hintDirection) {
+                when (resolvedHintDirection) {
                     top -> -hintPopupSizeRef[1]
                     bottom -> buttonSizeRef[1]
                     else -> 0
@@ -237,7 +252,7 @@ fun BossActionButton(
         Text(
             text = text,
             color = if (isActive) color else color.copy(alpha = 0.8f),
-            fontSize = fontSize,
+            fontSize = if (compact) COMPACT_FONT_SIZE else fontSize,
             fontWeight = if (isActive) FontWeight.Medium else FontWeight.Normal,
             textAlign = TextAlign.Center,
             maxLines = 1,
@@ -249,7 +264,7 @@ fun BossActionButton(
     @Composable
     fun MainIcon(
         icon: ImageVector = Icons.Outlined.KeyboardArrowDown,
-        size: Dp = 16.dp,
+        size: Dp = if (compact) COMPACT_ICON_SIZE else 16.dp,
     ) {
         Icon(
             imageVector = icon,
@@ -262,10 +277,14 @@ fun BossActionButton(
     var _leftLogo = leftLogo
     var _contentPadding = contentPadding
 
+    // A leading slot sets the padding, because the numbers differ between a logo and an icon and
+    // no caller was picking them. Compact keeps that arrangement and only tightens it.
     leftLogo?.let {
-        _contentPadding = PaddingValues(vertical = 2.dp, horizontal = 10.dp)
+        _contentPadding =
+            if (compact) COMPACT_PADDING else PaddingValues(vertical = 2.dp, horizontal = 10.dp)
     } ?: leftIcon?.let {
-        _contentPadding = PaddingValues(vertical = 6.dp, horizontal = 10.dp)
+        _contentPadding =
+            if (compact) COMPACT_PADDING else PaddingValues(vertical = 6.dp, horizontal = 10.dp)
         _leftLogo = { MainIcon(it) }
     }
 
@@ -301,6 +320,14 @@ fun BossActionButton(
         modifier =
             modifier
                 .defaultMinSize(minHeight = 2.dp, minWidth = 2.dp)
+                // A FIXED height, not a smaller minimum.
+                //
+                // This is a Material TextButton, and Material sizes its content Row with
+                // defaultMinSize(MinHeight = 36.dp) from the inside. The defaultMinSize above is
+                // not enough to undo that - measured on screen, compact rows still came out 36dp
+                // tall, which is half again the height of the bar's own rows. A fixed height sets
+                // min == max, which the inner minimum cannot argue with.
+                .then(if (compact) Modifier.height(COMPACT_ROW_HEIGHT) else Modifier)
                 .run {
                     if (imageVector != null) {
                         size(28.dp).hoverable(interactionSource)
@@ -317,7 +344,7 @@ fun BossActionButton(
     ) {
         if (_leftLogo != null) {
             _leftLogo()
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(if (compact) COMPACT_GAP else 8.dp))
             MainText()
             MainIcon()
         } else if (imageVector != null) {
@@ -327,3 +354,18 @@ fun BossActionButton(
         }
     }
 }
+
+/** Text size in [BossActionButton]'s compact mode, matching the vertical bar's own rows. */
+private val COMPACT_FONT_SIZE = 11.sp
+
+/** Leading icon and chevron in compact mode. */
+private val COMPACT_ICON_SIZE = 13.dp
+
+/** Padding in compact mode: enough to click, little enough to read as a row rather than a button. */
+private val COMPACT_PADDING = PaddingValues(vertical = 1.dp, horizontal = 6.dp)
+
+/** Gap between the leading slot and the label in compact mode. */
+private val COMPACT_GAP = 6.dp
+
+/** Row height in compact mode, matching the vertical bar's group headers and summary rows. */
+private val COMPACT_ROW_HEIGHT = 24.dp

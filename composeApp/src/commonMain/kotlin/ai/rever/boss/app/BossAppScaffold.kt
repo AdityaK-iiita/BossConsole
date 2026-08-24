@@ -23,6 +23,7 @@ import ai.rever.boss.components.plugin.providers.WindowProjectStateProviderImpl
 import ai.rever.boss.components.plugin.registries.HomeToolAccess
 import ai.rever.boss.components.window_panel.BossWindow
 import ai.rever.boss.components.window_panel.components.main_window_panels.TabCycleOverlayHost
+import ai.rever.boss.components.workspaces.LayoutWorkspace
 import ai.rever.boss.components.workspaces.applyWorkspace
 import ai.rever.boss.components.workspaces.extractCurrentWorkspace
 import ai.rever.boss.components.workspaces.workspaceManager
@@ -357,6 +358,26 @@ internal fun BossAppScaffold(
                     )
                 }
 
+                // Tell the manager every workspace THIS window is running, so the workspace menu
+                // can mark them all rather than only the one on screen. Read from the window's
+                // own split state, which is where the live ones actually are - the manager's
+                // currentWorkspace is one value shared by every window and knows about neither
+                // the others' nor the ones running behind this one.
+                val liveWorkspaceIds = splitViewState.liveWorkspaceIds
+                DisposableEffect(state.windowId, liveWorkspaceIds) {
+                    workspaceManager.setWindowWorkspaces(state.windowId, liveWorkspaceIds)
+                    onDispose { workspaceManager.releaseWindow(state.windowId) }
+                }
+
+                // Switching workspaces, in one place: the top bar offers it and so does the
+                // vertical tab bar's foot when the top bar is off. Two copies of "preserve, load,
+                // apply" is two places for that order to drift, and the order is the whole of why
+                // switching away and back does not lose a layout. See WorkspaceSwitch.kt for why
+                // a switch is two decisions rather than one.
+                val workspaceSwitch = rememberWorkspaceSwitch(state, splitViewState)
+                val applyWorkspaceAndPreserve = workspaceSwitch.request
+                WorkspaceSwitchPrompt(state, workspaceSwitch)
+
                 // Top bar - hidden in focus mode with smooth expand/shrink animation, and switched
                 // off outright by the appearance preference. Both have to agree for a bar to show:
                 // focus mode is the transient posture, the preference is the standing choice.
@@ -378,20 +399,7 @@ internal fun BossAppScaffold(
                     ) {
                         BossTopBar(
                             workspaceManager = workspaceManager,
-                            onApplyWorkspace = { workspace ->
-                                coroutineScope.launch {
-                                    // Preserve current state before switching
-                                    val currentWorkspace = workspaceManager.currentWorkspace.value
-                                    if (currentWorkspace != null && currentWorkspace.id.isNotEmpty()) {
-                                        splitViewState.preserveCurrentState(currentWorkspace.id, currentWorkspace.name)
-                                    }
-
-                                    // First load the workspace to reset dirty state
-                                    workspaceManager.loadWorkspace(workspace)
-                                    // Then apply it to the UI (which will try to restore preserved state)
-                                    applyWorkspace(workspace, splitViewState, state.windowProjectState)
-                                }
-                            },
+                            onApplyWorkspace = applyWorkspaceAndPreserve,
                             getCurrentWorkspace = {
                                 extractCurrentWorkspace(splitViewState, selectedProject.path)
                             },
@@ -456,6 +464,23 @@ internal fun BossAppScaffold(
                             tabDragComponent = state.tabDragComponent,
                             onTabDropResult = { result ->
                                 handleTabDropResult(result, splitViewState)
+                            },
+                            // Composed HERE rather than inside the bar: this is where the
+                            // workspace manager and the window's project dialog already are, and
+                            // a tab bar has no business knowing about either. It reaches the bar
+                            // as a slot. See VerticalBarWindowControls.
+                            verticalBarFooter = {
+                                VerticalBarWindowControls(
+                                    topBarHidden = !appearance.showTopBar,
+                                    project = selectedProject,
+                                    onOpenProject = { state.showProjectDialog = true },
+                                    workspaceManager = workspaceManager,
+                                    onApplyWorkspace = applyWorkspaceAndPreserve,
+                                    getCurrentWorkspace = {
+                                        extractCurrentWorkspace(splitViewState, selectedProject.path)
+                                    },
+                                    onShowTopOfMind = { state.showTopOfMindDialog = true },
+                                )
                             },
                         )
 
