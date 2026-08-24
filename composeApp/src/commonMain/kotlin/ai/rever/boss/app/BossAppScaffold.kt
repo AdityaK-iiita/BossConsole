@@ -29,6 +29,7 @@ import ai.rever.boss.components.workspaces.extractCurrentWorkspace
 import ai.rever.boss.components.workspaces.workspaceManager
 import ai.rever.boss.focusmode.FocusModeSettings
 import ai.rever.boss.handleTabDropResult
+import ai.rever.boss.layout.BossChrome
 import ai.rever.boss.layout.ChromeBudgetReadout
 import ai.rever.boss.plugin.api.LocalBookmarkDataProvider
 import ai.rever.boss.plugin.api.LocalProjectPath
@@ -281,13 +282,15 @@ internal fun BossAppScaffold(
     // Renders nothing; reports what the chrome costs the page when BOSS_CHROME_BUDGET is set.
     // Here rather than inside a bar so it still reports with every bar switched off.
     //
-    // Anything that provides LocalChromeDimens must sit ABOVE this call. Provide it lower - between
-    // here and the bars - and the readout reports Comfortable while the bars draw Compact, which is
-    // exactly the drift ChromeMetrics exists to make impossible.
+    // The metrics are read once here and handed to both the readout and the bars, so a provider
+    // installed anywhere above this line reaches them together. Resolving them separately inside the
+    // readout is what would let it report Comfortable while the bars drew Compact.
+    val chromeDimens = BossChrome.dimens
     ChromeBudgetReadout(
         windowId = state.windowId,
         appearance = appearance,
         focusMode = focusModeSettings,
+        dimens = chromeDimens,
     )
 
     with(state.draggablePanelComponent) {

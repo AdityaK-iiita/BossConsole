@@ -72,6 +72,16 @@ data class ChromeDimens(
         val MIN_TITLE_BAR = 26.dp
 
         /**
+         * The floor for [topBarHeight]: the bar is built from icon-only `BossActionButton`s at
+         * `BOSS_ACTION_BUTTON_ICON_SIZE`, so anything under 32 starts clipping them.
+         *
+         * An earlier version of the [Compact] comment said the tallest thing in the top bar was the
+         * 22.dp logo, which is not the binding constraint - the same species of mistake the
+         * [MIN_STRIP_WIDTH] KDoc warns about. Pinned in `ChromeMetricsTest` against the button size.
+         */
+        val MIN_TOP_BAR = 32.dp
+
+        /**
          * The floor for [tabBarHeight]: `NEW_TAB_BUTTON_SIZE` is 32.dp, so anything under 36 leaves
          * the "+" button less than 2.dp of breathing room on each side. `ChromeMetricsTest` pins
          * this against that constant rather than trusting the arithmetic in this sentence.
@@ -112,8 +122,7 @@ data class ChromeDimens(
         val Compact =
             ChromeDimens(
                 titleBarHeight = MIN_TITLE_BAR,
-                // The tallest thing in the top bar is the 22.dp logo plus 2.dp of padding.
-                topBarHeight = 32.dp,
+                topBarHeight = MIN_TOP_BAR,
                 tabBarHeight = MIN_TAB_BAR,
                 bottomBarHeight = 24.dp,
                 stripWidth = MIN_STRIP_WIDTH,

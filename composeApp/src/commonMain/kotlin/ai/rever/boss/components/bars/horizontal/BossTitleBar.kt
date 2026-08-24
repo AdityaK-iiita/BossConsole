@@ -44,5 +44,5 @@ fun BossTitleBar(
                     .align(Alignment.Center),
         )
     }
-    Divider(color = BossTheme.colors.line)
+    Divider(color = BossTheme.colors.line, thickness = BossChrome.dimens.dividerThickness)
 }

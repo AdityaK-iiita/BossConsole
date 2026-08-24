@@ -50,7 +50,7 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun BossBottomBar(tabsComponent: BossTabsComponent? = null) {
-    Divider(color = BossTheme.colors.line)
+    Divider(color = BossTheme.colors.line, thickness = BossChrome.dimens.dividerThickness)
     HorizontalBar(
         modifier = Modifier.contextMenu(items = rememberBarContextMenuItems(ChromeBar.BOTTOM)),
         height = BossChrome.dimens.bottomBarHeight,

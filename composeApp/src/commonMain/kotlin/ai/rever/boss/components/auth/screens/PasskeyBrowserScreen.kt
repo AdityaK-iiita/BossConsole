@@ -1,6 +1,7 @@
 package ai.rever.boss.components.auth.screens
 
 import ai.rever.boss.components.bars.horizontal.HorizontalBar
+import ai.rever.boss.layout.BossChrome
 import ai.rever.boss.plugin.ui.BossTheme
 import ai.rever.boss.utils.DeepLinkHandler
 import ai.rever.boss.utils.logging.BossLogger
@@ -76,8 +77,10 @@ fun PasskeyBrowserScreen(
                 .fillMaxSize()
                 .background(BossTheme.colors.panel),
     ) {
-        // Title Bar - matches BossTitleBar
-        HorizontalBar(height = 26.dp) {
+        // Title Bar - matches BossTitleBar, and reads the same metric so it keeps matching. The
+        // literals here were copied from those bars; once ChromeDimens owns them, a copy is a copy
+        // that drifts the first time a density other than Comfortable is selected.
+        HorizontalBar(height = BossChrome.dimens.titleBarHeight) {
             Text(
                 text = "Boss Console",
                 color = BossTheme.colors.textPrimary,
@@ -90,10 +93,10 @@ fun PasskeyBrowserScreen(
                         .align(Alignment.Center),
             )
         }
-        Divider(color = BossTheme.colors.line)
+        Divider(color = BossTheme.colors.line, thickness = BossChrome.dimens.dividerThickness)
 
-        // Top bar - matches main BossTopBar structure
-        HorizontalBar(height = 40.dp) {
+        // Top bar - matches main BossTopBar structure. See above for why this is not a literal.
+        HorizontalBar(height = BossChrome.dimens.topBarHeight) {
             Row(
                 modifier =
                     Modifier
@@ -124,7 +127,7 @@ fun PasskeyBrowserScreen(
                 Spacer(modifier = Modifier.weight(1f))
             }
         }
-        Divider(color = BossTheme.colors.line)
+        Divider(color = BossTheme.colors.line, thickness = BossChrome.dimens.dividerThickness)
 
         // Browser content area
         Box(

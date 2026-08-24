@@ -33,8 +33,10 @@ internal fun chromeBudgetReadoutEnabled(
     property: String?,
 ): Boolean {
     val raw = env?.takeIf { it.isNotBlank() } ?: property
-    return raw?.trim()?.lowercase() in setOf("1", "true", "yes", "on")
+    return raw?.trim()?.lowercase() in TRUTHY
 }
+
+private val TRUTHY = setOf("1", "true", "yes", "on")
 
 /**
  * Read once, not per composition: the flag is a developer's launch decision, and re-reading the
@@ -64,21 +66,21 @@ private val SIZE_BUCKET = 50.dp
  * cannot report that. A visible readout belongs next to the density control in Settings, which is
  * reachable whatever the chrome is doing - that arrives with the density setting itself.
  *
- * **Must be composed below whatever provides [LocalChromeDimens].** It resolves the metrics the same
- * way the bars do, and the whole point of [ChromeMetrics] is that the measurement cannot drift from
- * what is drawn. A provider sitting *between* this call and the bars would have it report
- * `Comfortable` while the bars drew `Compact`, and the density setting would look like it did
- * nothing.
+ * [dimens] is a parameter rather than a `BossChrome.dimens` read inside this function, for the same
+ * reason [ChromeMetrics.mainPanelBudget] refuses a default for it. Resolving it here would silently
+ * report `Comfortable` if a provider were ever installed *between* this call and the bars, which is
+ * the natural place to put one; taking it as an argument makes the caller name it from the same
+ * scope that provides it.
  */
 @Composable
 fun ChromeBudgetReadout(
     windowId: String?,
     appearance: WindowAppearanceSettings,
     focusMode: FocusModeSettings,
+    dimens: ChromeDimens,
 ) {
     if (!readoutEnabled) return
 
-    val dimens = BossChrome.dimens
     val budget = ChromeMetrics.mainPanelBudget(appearance, focusMode, dimens)
 
     // containerSize is the window's content area in px; on macOS that includes the area the traffic
@@ -88,7 +90,10 @@ fun ChromeBudgetReadout(
     val windowHeight = with(density) { containerSize.height.toDp() }
     val windowWidth = with(density) { containerSize.width.toDp() }
 
-    LaunchedEffect(windowId, budget, windowHeight.bucket(), windowWidth.bucket()) {
+    // `windowHeight > 0.dp` is in the key list because bucket 0 covers both the degenerate
+    // mid-layout size and any real size under 50dp: without it, a window whose first real size
+    // landed in that bucket would never re-key and never log.
+    LaunchedEffect(windowId, budget, windowHeight > 0.dp, windowHeight.bucket(), windowWidth.bucket()) {
         if (windowHeight <= 0.dp || windowWidth <= 0.dp) return@LaunchedEffect
 
         val heightPercent = budget.verticalFractionOf(windowHeight) * 100

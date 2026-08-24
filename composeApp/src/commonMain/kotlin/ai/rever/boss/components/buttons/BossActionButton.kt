@@ -330,7 +330,7 @@ fun BossActionButton(
                 .then(if (compact) Modifier.height(COMPACT_ROW_HEIGHT) else Modifier)
                 .run {
                     if (imageVector != null) {
-                        size(28.dp).hoverable(interactionSource)
+                        size(BOSS_ACTION_BUTTON_ICON_SIZE).hoverable(interactionSource)
                     } else {
                         hoverable(interactionSource)
                     }
@@ -369,3 +369,12 @@ private val COMPACT_GAP = 6.dp
 
 /** Row height in compact mode, matching the vertical bar's group headers and summary rows. */
 private val COMPACT_ROW_HEIGHT = 24.dp
+
+/**
+ * Rendered size of an icon-only action button.
+ *
+ * Named because it is the real floor on the top bar's height: `BossTopBar` and `BossTopRunBar` are
+ * built from these, so a top bar shorter than this clips them. `ChromeDimens.MIN_TOP_BAR` is pinned
+ * against it in `ChromeMetricsTest` rather than restating the number in prose.
+ */
+internal val BOSS_ACTION_BUTTON_ICON_SIZE = 28.dp

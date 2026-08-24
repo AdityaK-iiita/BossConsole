@@ -89,7 +89,7 @@ fun BossDraggableComponent.BossTopBar(
             BossTopRightBar(onShowSettings = onShowSettings, onShowSearch = onShowSearch, onSignOut = onSignOut)
         }
     }
-    Divider(color = BossTheme.colors.line)
+    Divider(color = BossTheme.colors.line, thickness = BossChrome.dimens.dividerThickness)
 }
 
 @Composable

@@ -1313,7 +1313,7 @@ fun BossTabsComponent.BossMainPanel(
                 tabDragComponent = tabDragComponent,
                 onTabDropResult = onTabDropResult,
             )
-            Divider(color = BossTheme.colors.line)
+            Divider(color = BossTheme.colors.line, thickness = BossChrome.dimens.dividerThickness)
             panelContent(Modifier.weight(1f).fillMaxWidth())
         }
     }
