@@ -14,6 +14,7 @@ import ai.rever.boss.components.window_panel.components.main_window_panels.BossM
 import ai.rever.boss.components.window_panel.components.main_window_panels.BossTabsComponent
 import ai.rever.boss.components.window_panel.components.main_window_panels.TabBarLayout
 import ai.rever.boss.components.window_panel.components.main_window_panels.TabBarRevealState
+import ai.rever.boss.components.window_panel.components.main_window_panels.VerticalTabBarResizeHandle
 import ai.rever.boss.components.window_panel.components.main_window_panels.WindowRevealedTabBarDrawer
 import ai.rever.boss.components.window_panel.components.main_window_panels.WindowVerticalTabBar
 import ai.rever.boss.components.window_panel.components.main_window_panels.createBossAppContext
@@ -40,6 +41,7 @@ import ai.rever.boss.topofmind.ActiveTab
 import ai.rever.boss.utils.extractFileName
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
+import ai.rever.boss.window.WindowAppearanceSettingsManager
 import ai.rever.boss.window.WindowProjectStateRegistry
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -67,6 +69,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -85,6 +90,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arkivanov.decompose.extensions.compose.subscribeAsState
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.random.Random
 
 // Sealed class representing the split tree structure
@@ -1934,13 +1940,21 @@ private fun WindowBarRow(
             tabDragComponent = tabDragComponent,
             onTabDropResult = onTabDropResult,
         )
+
+    // The width being dragged, or null when nobody is dragging. Local for the length of the
+    // gesture and written to settings once, on release - see VerticalTabBarResizeHandle for why
+    // persisting each frame is the wrong shape.
+    var draggedWidth by remember { mutableStateOf<Float?>(null) }
+    val barWidthScope = rememberCoroutineScope()
+    val barWidth = draggedWidth?.dp ?: bar.width
+
     Row(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.hoverable(reveal.railHover, enabled = bar.hoverExpand && bar.railShown)) {
             WindowVerticalTabBar(
                 groups = groups,
                 listState = listState,
                 expansion = expansion,
-                width = bar.width,
+                width = barWidth,
                 collapsed = bar.railShown,
                 onToggleCollapse = rememberToggleCollapseAction(bar, reveal),
                 tabDragComponent = tabDragComponent,
@@ -1949,7 +1963,22 @@ private fun WindowBarRow(
                 onExitZoom = splitViewState::exitZoom,
             )
         }
-        VDivider()
+        VerticalTabBarResizeHandle(
+            // Not while the bar is a rail: the rail's width is a different number, and a drag
+            // that appeared to work would be moving one nothing on screen was showing.
+            enabled = !bar.railShown,
+            currentWidth = barWidth.value,
+            onPreview = { width -> draggedWidth = width },
+            onCommit = { width ->
+                draggedWidth = null
+                barWidthScope.launch {
+                    WindowAppearanceSettingsManager.updateSettings(
+                        WindowAppearanceSettingsManager.currentSettings.value
+                            .copy(tabBarVerticalWidth = width),
+                    )
+                }
+            },
+        )
         splitTree(Modifier.weight(1f).fillMaxHeight())
     }
 }

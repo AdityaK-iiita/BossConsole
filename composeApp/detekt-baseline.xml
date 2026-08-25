@@ -965,6 +965,7 @@
     <ID>PackageNaming:TabMenuVisibilityReportTest.kt$package ai.rever.boss.components.window_panel</ID>
     <ID>PackageNaming:BookmarksDialogProviderImpl.kt$package ai.rever.boss.components.plugin.panels.left_top</ID>
     <ID>PackageNaming:BarMenuItems.kt$package ai.rever.boss.components.window_panel.components.main_window_panels</ID>
+    <ID>PackageNaming:VerticalTabBarResizeHandle.kt$package ai.rever.boss.components.window_panel.components.main_window_panels</ID>
     <ID>PackageNaming:BossMainWindowPanel.kt$package ai.rever.boss.components.window_panel.components.main_window_panels</ID>
     <ID>PackageNaming:BossPanelTopBar.kt$package ai.rever.boss.components.window_panel.components</ID>
     <ID>PackageNaming:BossPanelTopBarLayoutTest.kt$package ai.rever.boss.components.window_panel.components</ID>
@@ -1006,6 +1007,7 @@
     <ID>PackageNaming:PaneGlyphTest.kt$package ai.rever.boss.components.window_panel</ID>
     <ID>PackageNaming:PaneTabStrip.kt$package ai.rever.boss.components.window_panel.components.main_window_panels</ID>
     <ID>PackageNaming:PaneTabStripVisibilityTest.kt$package ai.rever.boss.components.window_panel</ID>
+    <ID>PackageNaming:BarResizeTest.kt$package ai.rever.boss.components.window_panel</ID>
     <ID>PackageNaming:PaneZoomTest.kt$package ai.rever.boss.components.window_panel</ID>
     <ID>PackageNaming:PanelHostTab.kt$package ai.rever.boss.components.plugin.tab_types</ID>
     <ID>PackageNaming:PromoteSidebarToTab.kt$package ai.rever.boss.components.window_panel</ID>
