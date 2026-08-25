@@ -20,6 +20,10 @@ fun LspSettings() {
     if (provider != null) {
         provider.LspSettingsPanel(modifier = Modifier.fillMaxSize())
     } else {
-        PluginSettingsUnavailableNotice("Language-server settings are provided by the Code Editor plugin, which isn't loaded yet.")
+        PluginSettingsUnavailableNotice(
+            what = "Language-server settings",
+            pluginName = "Code Editor",
+            pluginId = SettingsPluginIds.EDITOR_TAB,
+        )
     }
 }

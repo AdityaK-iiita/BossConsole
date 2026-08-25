@@ -19,6 +19,10 @@ fun BossEditorSettings() {
     if (provider != null) {
         provider.EditorSettingsPanel(modifier = Modifier.fillMaxSize())
     } else {
-        PluginSettingsUnavailableNotice("Editor settings are provided by the Code Editor plugin, which isn't loaded yet.")
+        PluginSettingsUnavailableNotice(
+            what = "Editor settings",
+            pluginName = "Code Editor",
+            pluginId = SettingsPluginIds.EDITOR_TAB,
+        )
     }
 }

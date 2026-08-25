@@ -238,6 +238,62 @@ deletes the jar it rejected - so an entry-only check made Retry close the dialog
 success with nothing installed, and silenced the prompt for every other dependent of that
 plugin. The check is an entry whose `jarPath` still exists.
 
+### A settings section can offer to install the plugin that serves it
+
+Three sections render a panel that belongs to a plugin - `Settings > AI Providers` (secret-manager),
+`Editor` and `Language servers` (both editor-tab). All three used to say "isn't loaded yet" for
+every reason there was no panel, which is true of exactly one of them. A plugin that was never
+installed, or that the user switched off, does not arrive however long they look at it.
+
+`PluginSettingsUnavailableNotice` now tells the four apart and offers an Install button for the one
+case where that is the answer. It leans on `MissingPluginOffer`, so no second install path exists:
+the press raises the host's own `MissingDependencyDialog`, which names the plugin **from the store**
+and shows the id it will install by, rather than installing on the button's say-so.
+
+**`PluginState.DISABLED` is not one state, and that is why the decision is a pure function.**
+`DynamicPluginManager` writes it for at least three unrelated reasons - `disablePlugin`, a
+registration that failed as binary incompatible (`:1118`), and a plugin hidden because the user
+lacks access (`:1120`, `:2293`) - and "enable it in the Toolbox" is true for only the first. So
+`pluginSectionAbsence` takes the crash registry's `isIncompatible` and the manager's
+`getInaccessiblePlugins()` alongside the state, and its **order is load-bearing twice**:
+
+- permissions are asked **first**, because an inaccessible plugin is recorded DISABLED too, and
+  telling that user to switch it on points them at a row that is not listed for them;
+- `isIncompatible` and DISABLED are asked **before** `installed`, because
+  `MissingPluginOffer.isInstalled` counts both as installed (the jar is on disk, which
+  `MissingDependencyInstaller` documents deliberately) - so the other order offers an Install button
+  to someone whose problem a download cannot fix. That exact bug has shipped here once already with
+  the bookmarks shelf.
+
+All three orderings are mutation-verified: reversing each one fails a named test.
+
+**The section supplies exactly one fact the manager cannot answer**, `servesNoPanel` - the API is
+registered but this version has no panel for that section. Without it a loaded plugin reported
+"isn't loaded yet" forever. Everything else, permissions included, is derived from the plugin id, so
+a new section gets the whole behaviour by naming its plugin. An earlier version took the permissions
+as a parameter and only one of the three sections passed it, which left the other two telling a user
+who cannot access the plugin to go and switch it on.
+
+**The notice gates on `MissingPluginOffer.isInstalled`, not on "can I reach the API".** Those are
+different questions and they disagree exactly when the plugin is installed but not running - which
+is the state where a button that appears does nothing. Same rule the tab bar's bookmarks shelf
+states.
+
+`null` from `isInstalled` means the question cannot be answered here (no active manager, no injected
+installer factory), and it must not become an offer: the section falls back to the neutral wait.
+
+**Known: the consent dialog opens over the main window, not the Settings window.** `SettingsWindow`
+is composed inside the main window's subtree and opts *its own* dialogs out of heavyweight overlay
+routing precisely so they do not open centred on the main window - but the dependency dialog is
+raised through `PluginDependencyEventBus` and composed by `BossAppDialogs`, outside that opt-out. It
+is always-on-top so it is not lost, just not where the press happened. Routing it would mean the
+prompt carrying a window id, which is the same change `MissingDependencyPrompt` already records as
+not built for the two-window case.
+
+**A raised offer is not a shown dialog.** `PluginDependencyEventBus.report` drops silently when a
+prompt for that plugin is already queued, so `offerIfMissing` returning true is not proof anything
+appeared. The press therefore logs whatever happens, matching the bookmarks shelf's call site.
+
 ## Retiring a plugin into another one
 
 `RetiredPlugins.sweep()` uninstalls a plugin whose job another plugin has taken over. It runs at
