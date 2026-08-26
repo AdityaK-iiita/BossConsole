@@ -1,5 +1,6 @@
 package ai.rever.boss.window
 
+import ai.rever.boss.utils.SystemUtils
 import kotlinx.serialization.Serializable
 
 /**
@@ -10,12 +11,19 @@ data class WindowAppearanceSettings(
     /**
      * Whether to show the Boss Console title bar.
      *
-     * Off everywhere now, macOS included. On Windows and Linux it was always a plain bar above
-     * the content. On macOS it was something else: the window sets `apple.awt.fullWindowContent`,
-     * so the traffic lights are drawn OVER the content and this row existed to hold them - its own
-     * content is a centred title string. Reserving the window's full width to protect one 78dp
-     * corner is the wrong shape, so the clearance moved onto whichever column is leftmost. See
-     * `macTrafficLightInset`, which also names the one case that still wants the row.
+     * **On by default on macOS, off elsewhere.** On Windows and Linux it is a plain bar above the
+     * content and the OS draws its own frame. On macOS it is something else: the window sets
+     * `apple.awt.fullWindowContent`, so the close / minimise / zoom buttons are drawn OVER the
+     * content, and this row is what holds them.
+     *
+     * It was briefly off there too, with the clearance moved onto whichever column is leftmost
+     * (see `macTrafficLightInset`). That works only while a column is wide enough to hold a 78dp
+     * box: a collapsed tab bar is one 40dp rail, and the fallback for everything narrower was to
+     * draw this row anyway - so "off" was not a state a macOS window could reliably be in.
+     *
+     * The class default stays false, and macOS is switched on by `getDefaultSettings` for a fresh
+     * install and by the 1 -> 2 migration for an existing one. Flipping the class default instead
+     * would turn the row on for Windows and Linux too, whose files do not mention it either.
      */
     val showTitleBar: Boolean = false,
     /**
@@ -169,7 +177,7 @@ data class WindowAppearanceSettings(
 ) {
     companion object {
         /** Bump when a step is added to [WindowAppearanceMigrations.migrate]. */
-        const val CURRENT_SETTINGS_VERSION = 1
+        const val CURRENT_SETTINGS_VERSION = 2
     }
 }
 
@@ -208,6 +216,17 @@ object WindowAppearanceMigrations {
      * deliberately chose the value that used to be the default is indistinguishable from someone
      * who never touched it, and moves with everyone else.
      *
+     * **1 -> 2: the title bar comes back on macOS.** Turning it off there left the window with no
+     * reliable place for the traffic lights: the clearance moved onto the leftmost column, and a
+     * collapsed tab bar is a 40dp rail against a 78dp light box, so narrow configurations fell back
+     * to drawing the row regardless. A row that appears and disappears with the window's width is
+     * worse than one that is simply on. Windows and Linux are untouched - the row is an ordinary
+     * bar there and the OS draws its own frame.
+     *
+     * This step, like 0 -> 1, cannot tell somebody who deliberately switched the row off from
+     * somebody who never touched it: `encodeDefaults` is false, so the value that equals the class
+     * default is never written. Both move.
+     *
      * One thing this reasons over that it cannot actually see: it tests decoded VALUES, not what
      * the file said. A key that is absent decodes to the field's default, so a file written
      * before [WindowAppearanceSettings.showTopBar] existed is indistinguishable here from one
@@ -215,13 +234,20 @@ object WindowAppearanceMigrations {
      * belong on the new defaults anyway - but a future step that needs "absent" to differ from
      * "false" cannot get it from this signature, and will need the field to be nullable.
      */
-    fun migrate(loaded: WindowAppearanceSettings): WindowAppearanceSettings? {
+    fun migrate(
+        loaded: WindowAppearanceSettings,
+        isMacOs: Boolean = SystemUtils.isMacOS,
+    ): WindowAppearanceSettings? {
         if (loaded.settingsVersion >= WindowAppearanceSettings.CURRENT_SETTINGS_VERSION) return null
 
-        val onOldShippedDefaults = loaded.showTopBar && loaded.tabBarPosition == TabBarPosition.TOP
+        val onOldShippedDefaults =
+            loaded.settingsVersion < 1 && loaded.showTopBar && loaded.tabBarPosition == TabBarPosition.TOP
         return loaded.copy(
             showTopBar = if (onOldShippedDefaults) false else loaded.showTopBar,
             tabBarPosition = if (onOldShippedDefaults) TabBarPosition.LEFT else loaded.tabBarPosition,
+            // 1 -> 2, macOS only. A default flip cannot do this one: the class default has to stay
+            // false for Windows and Linux, whose files do not mention the field either.
+            showTitleBar = if (isMacOs) true else loaded.showTitleBar,
             settingsVersion = WindowAppearanceSettings.CURRENT_SETTINGS_VERSION,
         )
     }

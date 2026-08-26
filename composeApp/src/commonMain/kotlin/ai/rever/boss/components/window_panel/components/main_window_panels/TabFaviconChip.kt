@@ -136,7 +136,14 @@ internal fun TabFaviconChip(
     // about a third of the tabs it can show - the density is the whole reason the strip exists.
     // The pointer is over the favicon when the cross appears to its RIGHT, so the chip under the
     // pointer never moves out from under it.
-    val showClose = onClose != null && hovered
+    // Always shown, not revealed on hover. A cross that appears under the pointer is a cross you
+    // cannot see before you go looking for it: closing a tab from the strip meant hovering each
+    // chip to find out whether it could be closed at all. It also made the chip change WIDTH on
+    // hover, so the strip reflowed under the pointer.
+    //
+    // The cost is real and accepted: every chip is now wider by the cross, so fewer fit before the
+    // strip scrolls. A pane with many tabs is exactly where closing one from here is most useful.
+    val showClose = onClose != null
 
     HoverTooltipBox(
         text = tab.title,
@@ -258,7 +265,7 @@ private fun Modifier.tabChipDrag(
     }
 
 /**
- * The cross beside a hovered chip.
+ * The cross beside a chip, whenever that chip can be closed.
  *
  * Its own click target rather than a gesture on the chip, because the chip already answers a
  * click by selecting the tab and a drag by picking it up. Sized to the chip so the two read as

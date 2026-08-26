@@ -1,6 +1,7 @@
 package ai.rever.boss.window
 
 import ai.rever.boss.plugin.pathutils.BossDirectories
+import ai.rever.boss.utils.SystemUtils
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import kotlinx.coroutines.Dispatchers
@@ -118,13 +119,17 @@ actual object WindowAppearanceSettingsManager {
     }
 
     actual fun getDefaultSettings(): WindowAppearanceSettings {
-        // No platform branch any more: the title row is off everywhere, macOS included, and the
-        // traffic lights are handled by insetting the leftmost column instead. See
-        // `macTrafficLightInset`.
+        // The title row is ON for macOS and off elsewhere. macOS draws the close / minimise / zoom
+        // buttons over the window's content (`apple.awt.fullWindowContent`), and this row is what
+        // holds them; on Windows and Linux the OS draws its own frame and the row is just a bar.
+        //
+        // The branch lives here rather than in the class default, which has to stay false so that
+        // a Windows or Linux file - which does not mention the field either - keeps the row off.
         //
         // Stamped current: a fresh file is already on this build's defaults and must not be
         // migrated on the next launch as though it were an older one.
         return WindowAppearanceSettings(
+            showTitleBar = SystemUtils.isMacOS,
             settingsVersion = WindowAppearanceSettings.CURRENT_SETTINGS_VERSION,
         )
     }
