@@ -154,6 +154,12 @@ class UpdateCoordinator internal constructor(
             logger.warn(LogCategory.SYSTEM, "Ignoring update start request after shutdown")
             return
         }
+
+        // Ahead of the auto-check gate on purpose: turning automatic checks off
+        // does not stop a MANUAL check from starting a download, and that download
+        // still belongs in the bottom bar. Idempotent, so every window may ask.
+        UpdateDownloadCenterMirror.start(this)
+
         if (!UpdateSettings.autoCheckEnabled) return
 
         val startedNow =
@@ -216,7 +222,10 @@ class UpdateCoordinator internal constructor(
 
     fun downloadSpecificVersionInBackground(versionInfo: VersionInfo) {
         if (isShutDown) return
-        manager.launchInBackground { manager.downloadSpecificVersion(versionInfo) }
+        // Through the manager's own launcher, which records the job: a download
+        // started from the version list is as cancellable as one started from the
+        // banner, and launching it here directly would leave nothing to cancel.
+        manager.downloadSpecificVersionInBackground(versionInfo)
     }
 
     fun installUpdateInBackground(downloadPath: String) {

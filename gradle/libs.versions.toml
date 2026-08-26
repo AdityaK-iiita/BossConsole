@@ -116,7 +116,16 @@ intellij-platform = "243.21565.199"
 # exists**.
 #
 # Superset of 1.0.83: the field is additive with a "" default and nothing was withdrawn.
-boss-plugin-api = "1.0.84"
+#
+# 1.0.85 adds DownloadCenterProvider and PluginContext.downloadCenterProvider, the one place
+# every in-flight transfer is reported so the bottom bar can show all of them. The host needs it
+# to hand the Toolbox a center to report into: before it, the only visible download progress was
+# a status-bar widget that plugin owned, so every download the host started ran silently. Same
+# forced order as above: api first, then this, **and this pin 404s CI until that release exists**.
+#
+# Superset of 1.0.84: both additions are new declarations with a null default on PluginContext,
+# so nothing a host module or an installed plugin resolves has been withdrawn.
+boss-plugin-api = "1.0.85"
 
 [libraries]
 kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }

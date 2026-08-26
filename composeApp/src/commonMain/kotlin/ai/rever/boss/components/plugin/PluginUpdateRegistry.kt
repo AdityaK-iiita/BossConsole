@@ -71,6 +71,32 @@ object PluginUpdateRegistry {
     fun clear(pluginId: String) {
         _updates.update { it - pluginId }
     }
+
+    /**
+     * Drop entries for plugins that are no longer at the version the update was
+     * computed against.
+     *
+     * The badge and its "Update Available" prompt used to be cleared only by the
+     * host's OWN update path, so updating a plugin from the Toolbox (or from its
+     * update toast) left the badge offering a version that was already installed,
+     * and the prompt that badge opened offered to install it again.
+     *
+     * Compares against `currentVersion`, NOT `newVersion`, so no semver ordering
+     * is needed and a downgrade invalidates the entry too: what makes an entry
+     * stale is the plugin no longer being where the check found it. A plugin that
+     * is absent from [installedVersions] is left alone - plugins are all unloaded
+     * during an api hot swap, and treating that as "updated" would wipe every
+     * badge in the app.
+     */
+    fun reconcile(installedVersions: Map<String, String>) {
+        if (installedVersions.isEmpty()) return
+        _updates.update { map ->
+            map.filterNot { (pluginId, update) ->
+                val installed = installedVersions[pluginId]
+                installed != null && installed != update.currentVersion
+            }
+        }
+    }
 }
 
 /**

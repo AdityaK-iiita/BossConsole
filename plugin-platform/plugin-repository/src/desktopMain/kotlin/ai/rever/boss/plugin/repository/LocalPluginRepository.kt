@@ -137,6 +137,7 @@ class LocalPluginRepository(
         pluginId: String,
         version: String?,
         targetPath: String,
+        onProgress: ((Float) -> Unit)?,
     ): Result<String> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -151,6 +152,11 @@ class LocalPluginRepository(
 
                 val targetFile = File(targetPath)
                 sourceJar.copyTo(targetFile, overwrite = true)
+
+                // A local copy is instant, but a caller showing progress still
+                // needs to be told it finished: without this its row would sit
+                // at "Downloading" until the phase after it moved on.
+                onProgress?.invoke(1f)
 
                 targetFile.absolutePath
             }

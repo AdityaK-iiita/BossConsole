@@ -14,6 +14,7 @@ import io.ktor.client.engine.cio.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.utils.io.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -310,6 +311,7 @@ class RemotePluginRepository(
         pluginId: String,
         version: String?,
         targetPath: String,
+        onProgress: ((Float) -> Unit)?,
     ): Result<String> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -348,6 +350,9 @@ class RemotePluginRepository(
                     )
                     cachedFile.copyTo(File(targetPath), overwrite = true)
                     PluginSignatureSidecar.persist(targetPath, downloadInfo.signature)
+                    // Nothing was fetched, but the caller's progress row exists and
+                    // would otherwise sit at 0% until the next phase moved it.
+                    onProgress?.invoke(1f)
                     return@runCatching targetPath
                 }
 
@@ -371,6 +376,11 @@ class RemotePluginRepository(
                         val channel = response.bodyAsChannel()
                         val totalBytes = response.headers[io.ktor.http.HttpHeaders.ContentLength]?.toLongOrNull() ?: downloadInfo.size
                         var downloadedBytes = 0L
+                        // The callback drives UI state that is copied on every write,
+                        // and an 8KB buffer means thousands of writes for one jar - so
+                        // it fires on whole-percent steps only. The flow keeps its
+                        // per-chunk resolution, which nothing re-renders.
+                        var lastPercent = -1
 
                         File(targetPath).outputStream().use { output ->
                             val buffer = ByteArray(8192)
@@ -380,7 +390,13 @@ class RemotePluginRepository(
                                     output.write(buffer, 0, bytes)
                                     downloadedBytes += bytes
                                     if (totalBytes > 0) {
-                                        progressFlow.value = downloadedBytes.toFloat() / totalBytes
+                                        val fraction = downloadedBytes.toFloat() / totalBytes
+                                        progressFlow.value = fraction
+                                        val percent = ((downloadedBytes * 100) / totalBytes).toInt()
+                                        if (percent != lastPercent) {
+                                            lastPercent = percent
+                                            onProgress?.invoke(fraction)
+                                        }
                                     }
                                 }
                             }
@@ -422,6 +438,7 @@ class RemotePluginRepository(
                     downloadCache.cacheJar(pluginId, downloadInfo.version, File(targetPath))
 
                     progressFlow.value = 1f
+                    onProgress?.invoke(1f)
 
                     logger.info(
                         LogCategory.NETWORK,
@@ -441,6 +458,11 @@ class RemotePluginRepository(
                     downloadProgress.remove(pluginId, progressFlow)
                 }
             }.onFailure { e ->
+                // A cancellation is not a download failure, and it must not arrive as
+                // one: `runCatching` catches Throwable, so a cancelled download used to
+                // come back as Result.failure and every caller above reported it as a
+                // fault - and stopped propagating, so nobody's cancellation handler ran.
+                if (e is CancellationException) throw e
                 logger.error(LogCategory.NETWORK, "Failed to download plugin", mapOf("pluginId" to pluginId), e)
             }
         }

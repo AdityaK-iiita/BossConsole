@@ -11,6 +11,7 @@ import ai.rever.boss.plugin.api.ClipboardProvider
 import ai.rever.boss.plugin.api.ContextMenuProvider
 import ai.rever.boss.plugin.api.DashboardContentProvider
 import ai.rever.boss.plugin.api.DiagnosticProvider
+import ai.rever.boss.plugin.api.DownloadCenterProvider
 import ai.rever.boss.plugin.api.DownloadDataProvider
 import ai.rever.boss.plugin.api.EditorContentProvider
 import ai.rever.boss.plugin.api.FilePickerProvider
@@ -101,6 +102,9 @@ class SandboxedPluginContext(
 
     override val downloadDataProvider: DownloadDataProvider?
         get() = delegate.downloadDataProvider
+
+    override val downloadCenterProvider: DownloadCenterProvider?
+        get() = delegate.downloadCenterProvider
 
     override val bookmarkDataProvider: BookmarkDataProvider?
         get() = delegate.bookmarkDataProvider

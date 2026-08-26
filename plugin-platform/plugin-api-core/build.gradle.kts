@@ -43,6 +43,10 @@ val fetchApiPluginJar =
                 rootDir.resolve("../boss_plugins/boss-plugin-api/build/libs/boss-plugin-api-$version.jar").absolutePath,
                 // Worktree layout: Boss/.worktrees/<name> + Boss/boss_plugins
                 rootDir.resolve("../../boss_plugins/boss-plugin-api/build/libs/boss-plugin-api-$version.jar").absolutePath,
+                // Where BossConsole worktrees actually live: Boss/BossConsole/.worktrees/<name>.
+                // Without this one a host worktree cannot see a locally built api jar at all, so
+                // every api-and-host change had to wait for the api release before it would compile.
+                rootDir.resolve("../../../boss_plugins/boss-plugin-api/build/libs/boss-plugin-api-$version.jar").absolutePath,
             )
         outputs.file(targetPath)
         doLast {

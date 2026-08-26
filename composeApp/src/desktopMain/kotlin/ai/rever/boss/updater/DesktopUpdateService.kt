@@ -18,6 +18,7 @@ import io.ktor.client.plugins.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.utils.io.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.delay
@@ -221,8 +222,14 @@ actual class UpdateService {
         assetSize: Long,
         sha256: String?,
         onProgress: (progress: Float) -> Unit,
-    ): String? =
-        try {
+    ): String? {
+        // Held outside the try so a cancellation can clean up the partial file. A
+        // cancelled download otherwise leaves a half-written installer in the staging
+        // directory under the exact name the next attempt checks for, and the next
+        // one deletes it before writing anyway - so the disk cost is silent until it
+        // is a whole DMG.
+        var partial: File? = null
+        return try {
             logger.info(LogCategory.SYSTEM, "Starting update download", mapOf("asset" to assetName, "size" to assetSize))
 
             // The asset name comes off the remote release row, and everything below
@@ -245,6 +252,7 @@ actual class UpdateService {
             if (downloadFile.exists()) {
                 downloadFile.delete()
             }
+            partial = downloadFile
 
             streamToFile(url, assetSize, downloadFile, onProgress)
 
@@ -276,6 +284,13 @@ actual class UpdateService {
                 logger.error(LogCategory.SYSTEM, "Download failed - file is empty or doesn't exist")
                 null
             }
+        } catch (e: CancellationException) {
+            // Caught ahead of the general clause, which would otherwise swallow it and
+            // return null - reporting the user's own Cancel as "Failed to download
+            // update" and leaving the partial file behind.
+            runCatching { partial?.delete() }
+            logger.info(LogCategory.SYSTEM, "Update download cancelled", mapOf("asset" to assetName))
+            throw e
         } catch (e: Exception) {
             val errorMessage =
                 when (e) {
@@ -284,9 +299,14 @@ actual class UpdateService {
                     is SocketTimeoutException -> "Network timeout: Download interrupted"
                     else -> e.message ?: "Unknown error"
                 }
+            // The partial goes here too, not only on the cancellation path: a dropped
+            // connection otherwise leaves a DMG's worth of disk occupied until the next
+            // attempt happens to overwrite it. Same asymmetry the plugin side closed.
+            runCatching { partial?.delete() }
             logger.error(LogCategory.NETWORK, "Error downloading update", mapOf("error" to errorMessage))
             null
         }
+    }
 
     /** Resolve the GitHub Releases asset URL for [version] — the download-time backup. */
     private suspend fun gitHubAssetUrlFor(version: Version): String? =
@@ -387,6 +407,44 @@ actual class UpdateService {
             // Ensure 100% is reported on completion, on the main thread.
             withContext(Dispatchers.Main) {
                 onProgress(1f)
+            }
+        }
+    }
+
+    actual fun discardDownload(downloadPath: String) {
+        val file = File(downloadPath)
+        // Containment first, exactly as the installer does before it touches an
+        // artifact: this path arrives from update state as a plain string, and a
+        // delete that trusted it would remove any file the user can write. A path
+        // that cannot be resolved is one that is already gone, so absence is the
+        // postcondition either way.
+        val realStagingDir = runCatching { defaultStagingDir().toPath().toRealPath() }.getOrNull()
+        val realPath = runCatching { file.toPath().toRealPath() }.getOrNull()
+        val contained =
+            realStagingDir != null &&
+                realPath != null &&
+                realPath != realStagingDir &&
+                realPath.startsWith(realStagingDir)
+        when {
+            realStagingDir == null || realPath == null -> {
+                Unit
+            }
+
+            !contained -> {
+                logger.error(
+                    LogCategory.SYSTEM,
+                    "Refusing to discard a download outside the staging directory",
+                    mapOf("expected" to realStagingDir.toString(), "actual" to realPath.toString()),
+                )
+            }
+
+            else -> {
+                val deleted = runCatching { file.delete() }.getOrDefault(false)
+                logger.info(
+                    LogCategory.SYSTEM,
+                    "Discarded a downloaded update",
+                    mapOf("path" to file.absolutePath, "deleted" to deleted.toString()),
+                )
             }
         }
     }

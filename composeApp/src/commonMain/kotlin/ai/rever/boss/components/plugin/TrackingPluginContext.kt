@@ -1,5 +1,6 @@
 package ai.rever.boss.components.plugin
 
+import ai.rever.boss.downloads.DownloadCenterProviderImpl
 import ai.rever.boss.plugin.api.ActiveTabsProvider
 import ai.rever.boss.plugin.api.ApplicationEventBus
 import ai.rever.boss.plugin.api.AuthDataProvider
@@ -11,6 +12,7 @@ import ai.rever.boss.plugin.api.ClipboardProvider
 import ai.rever.boss.plugin.api.ContextMenuProvider
 import ai.rever.boss.plugin.api.DashboardContentProvider
 import ai.rever.boss.plugin.api.DiagnosticProvider
+import ai.rever.boss.plugin.api.DownloadCenterProvider
 import ai.rever.boss.plugin.api.DownloadDataProvider
 import ai.rever.boss.plugin.api.EditorContentProvider
 import ai.rever.boss.plugin.api.FilePickerProvider
@@ -312,6 +314,17 @@ class TrackingPluginContext(
     // Service providers - delegate to underlying context
     override val performanceDataProvider: PerformanceDataProvider? get() = delegate.performanceDataProvider
     override val downloadDataProvider: DownloadDataProvider? get() = delegate.downloadDataProvider
+
+    // Download center (bottom-bar transfer progress). NOT a bare delegate: the ids a
+    // plugin reports are namespaced with its plugin id, and this is the only layer
+    // that knows which plugin is asking. See DownloadCenterProviderImpl.idPrefix.
+    // The delegate's own provider is deliberately NOT read: reading the property is
+    // what forces it, so a presence test built one unread instance with its own
+    // collector per window. The center is a process-wide object, so a prefixed view
+    // of it is always available - there is nothing to test for.
+    override val downloadCenterProvider: DownloadCenterProvider by lazy {
+        DownloadCenterProviderImpl.forPlugin(pluginId)
+    }
     override val bookmarkDataProvider: BookmarkDataProvider? get() = delegate.bookmarkDataProvider
     override val workspaceDataProvider: WorkspaceDataProvider? get() = delegate.workspaceDataProvider
     override val splitViewOperations: SplitViewOperations? get() = delegate.splitViewOperations

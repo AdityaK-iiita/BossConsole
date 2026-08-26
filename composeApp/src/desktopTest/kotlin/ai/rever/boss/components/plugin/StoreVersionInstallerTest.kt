@@ -56,6 +56,7 @@ class StoreVersionInstallerTest {
             pluginId: String,
             version: String?,
             targetPath: String,
+            onProgress: ((Float) -> Unit)?,
         ): Result<String> {
             File(targetPath).writeText("store bytes")
             onDownload(targetPath)

@@ -1,6 +1,7 @@
 package ai.rever.boss.app
 
 import ai.rever.boss.components.plugin.DefaultPlugin
+import ai.rever.boss.components.plugin.PluginUpdateRegistry
 import ai.rever.boss.components.plugin.tab_types.fluck.FluckTabInfo
 import ai.rever.boss.components.plugin.tab_types.registerPanelHostTab
 import ai.rever.boss.components.registery.PanelComponentStoreRegistry
@@ -695,6 +696,19 @@ internal fun BossAppStartupEffects(state: BossAppState) {
         if (refs.isNotEmpty()) {
             ai.rever.boss.components.plugin.PluginUpdateBridge
                 .refreshAll(refs)
+        }
+    }
+
+    // Keep the badges honest whoever applies an update. The registry used to be
+    // cleared only by the host's own update path, so a plugin updated from the
+    // Toolbox or from its update toast kept offering a version it was already
+    // running. Not gated on isFirstWindow: this outlives the window that started
+    // it only if some window is still collecting, and the reconcile is an
+    // idempotent filter, so several windows running it costs nothing.
+    LaunchedEffect(state.currentDefaultPlugin) {
+        val manager = state.currentDefaultPlugin?.dynamicPluginManager ?: return@LaunchedEffect
+        manager.pluginStates.collect { states ->
+            PluginUpdateRegistry.reconcile(states.mapValues { (_, info) -> info.manifest.version })
         }
     }
 

@@ -1,15 +1,20 @@
 package ai.rever.boss.components.plugin
 
+import ai.rever.boss.downloads.DownloadCenter
 import ai.rever.boss.plugin.KeyedDetachedJobs
 import ai.rever.boss.plugin.PluginStoreSetup
 import ai.rever.boss.plugin.api.PluginState
 import ai.rever.boss.plugin.api.PluginUnloadIntent
+import ai.rever.boss.plugin.api.TransferKind
+import ai.rever.boss.plugin.api.TransferPhase
 import ai.rever.boss.plugin.repository.shortFailureReason
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 
 /**
  * Desktop implementation of the store-version bridge.
@@ -96,20 +101,39 @@ actual object PluginStoreVersionBridge {
                             "The plugin store is not available. Check your connection and try again.",
                         ),
                     )
-            installer.install(
-                store = store,
-                request =
-                    StoreVersionRequest(
-                        pluginId = pluginId,
-                        version = version,
-                        sourceUrl = sourceUrl,
-                        runningJarPath = manager.getPluginInfo(pluginId)?.jarPath,
-                    ),
-                unload = { id -> manager.uninstallPlugin(id, force = true).map { } },
-                load = { path ->
-                    manager.installPlugin(path, enabled = true).map { it.state == PluginState.LOADED }
-                },
-            )
+            // The center's row is opened inside the detached job, so the Cancel it
+            // offers cancels THAT job - the one actually downloading. Cancelling the
+            // window's coroutine would only abandon the wait: the swap is detached
+            // precisely so closing a window cannot stop it mid-flight.
+            val job = currentCoroutineContext()[Job]
+            val ownsTransfer =
+                DownloadCenter.begin(
+                    id = pluginId,
+                    title = displayName,
+                    kind = TransferKind.PLUGIN_INSTALL,
+                    detail = "Store version v$version",
+                    onCancel = { job?.cancel() },
+                )
+            try {
+                installer.install(
+                    store = store,
+                    request =
+                        StoreVersionRequest(
+                            pluginId = pluginId,
+                            version = version,
+                            sourceUrl = sourceUrl,
+                            runningJarPath = manager.getPluginInfo(pluginId)?.jarPath,
+                        ),
+                    unload = { id -> manager.uninstallPlugin(id, force = true).map { } },
+                    load = { path ->
+                        manager.installPlugin(path, enabled = true).map { it.state == PluginState.LOADED }
+                    },
+                    onProgress = { DownloadCenter.progress(pluginId, it) },
+                    onInstalling = { DownloadCenter.phase(pluginId, TransferPhase.INSTALLING) },
+                )
+            } finally {
+                if (ownsTransfer) DownloadCenter.end(pluginId)
+            }
         }
     }
 }

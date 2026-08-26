@@ -265,12 +265,14 @@ class PluginRepositoryManager {
      * @param pluginId The plugin ID
      * @param version The version to download (null for latest)
      * @param targetPath Path to save the downloaded JAR
+     * @param onProgress Called with the download fraction (0.0 to 1.0) as bytes arrive
      * @return Result with the path to the downloaded file
      */
     suspend fun downloadPlugin(
         pluginId: String,
         version: String? = null,
         targetPath: String,
+        onProgress: ((Float) -> Unit)? = null,
     ): Result<String> {
         // Find the plugin and its source. A lookup that FAILED is propagated as itself: reporting
         // "not found" here would re-create, one method along, exactly the wrong diagnosis that
@@ -288,7 +290,7 @@ class PluginRepositoryManager {
                     RepositoryException("Repository not found", pluginWithSource.source.repositoryId),
                 )
 
-        return repository.downloadPlugin(pluginId, version, targetPath)
+        return repository.downloadPlugin(pluginId, version, targetPath, onProgress)
     }
 
     /**

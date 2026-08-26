@@ -5,9 +5,11 @@ import ai.rever.boss.plugin.logging.BossLogger
 import ai.rever.boss.plugin.logging.LogCategory
 import ai.rever.boss.plugin.repository.PluginInfo
 import ai.rever.boss.plugin.repository.PluginRepositoryManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -16,6 +18,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Callback interface for update events.
@@ -345,11 +348,15 @@ class PluginUpdateManager(
      *
      * @param pluginId Plugin to update
      * @param targetPath Path to download the update to
+     * @param onProgress Called with the download fraction (0.0 to 1.0) as bytes arrive.
+     *   The listener callbacks below only ever report 0f and 1f, which is enough to
+     *   know a download started but not enough to draw a bar.
      * @return Result with the downloaded file path
      */
     suspend fun downloadUpdate(
         pluginId: String,
         targetPath: String,
+        onProgress: ((Float) -> Unit)? = null,
     ): Result<String> {
         val update =
             _availableUpdates.value.find { it.pluginId == pluginId }
@@ -364,6 +371,7 @@ class PluginUpdateManager(
                     pluginId = pluginId,
                     version = update.newVersion,
                     targetPath = targetPath,
+                    onProgress = onProgress,
                 )
 
             if (result.isSuccess) {
@@ -376,6 +384,13 @@ class PluginUpdateManager(
             }
 
             result
+        } catch (e: CancellationException) {
+            // Ahead of the general clause, and rethrown rather than reported: the user
+            // pressed Cancel. Reported as a failure it became "update failed:
+            // StandaloneCoroutine was cancelled" in the Toolbox, AND it stopped the
+            // cancellation propagating - so the caller's cleanup, which is what removes
+            // the truncated jar, never ran.
+            throw e
         } catch (e: Exception) {
             val error = e.message ?: "Download failed"
             _state.value = UpdateState.Failed(pluginId, error, e)
@@ -397,6 +412,10 @@ class PluginUpdateManager(
      * @param downloadPath Path to download the new version
      * @param unloadPlugin Function to unload the old plugin
      * @param loadPlugin Function to load the new plugin
+     * @param onProgress Called with the download fraction (0.0 to 1.0) during step 1
+     * @param onInstalling Called once the download is done and the swap begins. The
+     *   caller uses it to withdraw its Cancel: from here on, cancelling would leave
+     *   the plugin unloaded.
      * @return Result indicating success or failure
      */
     suspend fun updatePlugin(
@@ -404,6 +423,8 @@ class PluginUpdateManager(
         downloadPath: String,
         unloadPlugin: suspend (String) -> Result<Unit>,
         loadPlugin: suspend (String) -> Result<Unit>,
+        onProgress: ((Float) -> Unit)? = null,
+        onInstalling: (() -> Unit)? = null,
     ): Result<Unit> {
         val update =
             _availableUpdates.value.find { it.pluginId == pluginId }
@@ -420,7 +441,7 @@ class PluginUpdateManager(
         )
 
         // Download new version
-        val downloadResult = downloadUpdate(pluginId, downloadPath)
+        val downloadResult = downloadUpdate(pluginId, downloadPath, onProgress)
         if (downloadResult.isFailure) {
             return Result.failure(downloadResult.exceptionOrNull() ?: Exception("Download failed"))
         }
@@ -430,7 +451,30 @@ class PluginUpdateManager(
         // Install
         _state.value = UpdateState.Installing(pluginId)
         listeners.forEach { it.onUpdateInstalling(pluginId) }
+        onInstalling?.invoke()
 
+        // From here to the end of the load, NonCancellable. Cancellation is
+        // cooperative, so a Cancel pressed between the last progress tick and this
+        // point would otherwise throw out of `unloadPlugin` or `loadPlugin` and leave
+        // the plugin unloaded with nothing in its place - exactly the harm the caller
+        // withdraws its Cancel button to prevent. Withdrawing the button is necessary
+        // and not sufficient: the button is UI state, this is the work.
+        return withContext(NonCancellable) { swapPlugin(pluginId, update, downloadedPath, unloadPlugin, loadPlugin) }
+    }
+
+    /**
+     * Unload the old version and load [downloadedPath], reporting either outcome.
+     *
+     * Split out so the whole swap can run under `NonCancellable` in one expression;
+     * see the comment at the call site for why it must.
+     */
+    private suspend fun swapPlugin(
+        pluginId: String,
+        update: UpdateInfo,
+        downloadedPath: String,
+        unloadPlugin: suspend (String) -> Result<Unit>,
+        loadPlugin: suspend (String) -> Result<Unit>,
+    ): Result<Unit> {
         // Unload old version
         val unloadResult = unloadPlugin(pluginId)
         if (unloadResult.isFailure) {

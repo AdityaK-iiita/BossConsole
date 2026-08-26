@@ -90,6 +90,16 @@ expect class UpdateService() {
 
     suspend fun installUpdate(downloadPath: String): InstallOutcome
 
+    /**
+     * Delete a staged download the user decided not to install.
+     *
+     * Containment is checked against the same staging directory the installer
+     * validates against: the path travels through [UpdateState] and is the only
+     * argument here, so a deletion that trusted it would be an arbitrary-file
+     * delete primitive rather than a cleanup.
+     */
+    fun discardDownload(downloadPath: String)
+
     fun getCurrentPlatform(): String
 
     fun getExpectedAssetName(version: Version): String

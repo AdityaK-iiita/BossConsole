@@ -235,6 +235,11 @@ fun BossRightBottomBar() {
         )
     }
 
+    // Live download/update progress, and the way into the download dialog. Ahead of
+    // the performance indicator so a transfer sits next to the plugin status items
+    // it used to be one of, rather than at the far edge of the bar.
+    DownloadCenterStatusItem()
+
     // Performance indicator (shows memory/CPU usage)
     val showIndicator = PerformanceState.shouldShowIndicator()
     if (showIndicator) {

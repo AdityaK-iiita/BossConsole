@@ -66,12 +66,19 @@ interface PluginRepository {
      * @param pluginId The plugin ID
      * @param version The version to download (null for latest)
      * @param targetPath Path to save the downloaded JAR
+     * @param onProgress Called with the download fraction (0.0 to 1.0) as bytes
+     *   arrive. Pushed rather than polled through [getDownloadProgress]: that
+     *   flow only exists once a download has started, so a caller wanting to
+     *   show progress has to race it into existence. Every host install path
+     *   funnels through here, which is why the callback is here and not on one
+     *   of them.
      * @return Result with the path to the downloaded file
      */
     suspend fun downloadPlugin(
         pluginId: String,
         version: String? = null,
         targetPath: String,
+        onProgress: ((Float) -> Unit)? = null,
     ): Result<String>
 
     /**

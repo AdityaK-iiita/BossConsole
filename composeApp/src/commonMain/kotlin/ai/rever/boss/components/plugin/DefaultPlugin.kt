@@ -34,6 +34,7 @@ import ai.rever.boss.components.plugin.providers.createSemanticTokenProvider
 import ai.rever.boss.components.plugin.providers.createUrlHistoryProvider
 import ai.rever.boss.components.plugin.providers.createZoomSettingsProvider
 import ai.rever.boss.components.plugin.tab_types.fluck.SecretChangeNotifier
+import ai.rever.boss.downloads.DownloadCenterProviderImpl
 import ai.rever.boss.git.GitDataProviderImpl
 import ai.rever.boss.plugin.api.ActiveTabData
 import ai.rever.boss.plugin.api.ActiveTabsProvider
@@ -47,6 +48,7 @@ import ai.rever.boss.plugin.api.ContextMenuProvider
 import ai.rever.boss.plugin.api.DashboardContentProvider
 import ai.rever.boss.plugin.api.DiagnosticEntry
 import ai.rever.boss.plugin.api.DiagnosticProvider
+import ai.rever.boss.plugin.api.DownloadCenterProvider
 import ai.rever.boss.plugin.api.EditorContentProvider
 import ai.rever.boss.plugin.api.FileNodeData
 import ai.rever.boss.plugin.api.FilePickerProvider
@@ -726,6 +728,16 @@ class DefaultPlugin(
     // Phase 4: Notification provider for plugin toasts/notifications
     override val notificationProvider: NotificationProvider by lazy {
         createNotificationProvider(pluginToastState)
+    }
+
+    // Bottom-bar download center, so a plugin's own long fetches show up in the
+    // same progress item and dialog as the host's (and the Toolbox stops needing
+    // a status-bar widget of its own).
+    override val downloadCenterProvider: DownloadCenterProvider by lazy {
+        // Unprefixed: this is the host's own view. A plugin never gets this one -
+        // TrackingPluginContext hands out a prefixed view instead - and it lives on
+        // the center's process-wide scope rather than this per-window pluginScope.
+        DownloadCenterProviderImpl.forHost()
     }
 
     // Phase 4: Application event bus for state change events

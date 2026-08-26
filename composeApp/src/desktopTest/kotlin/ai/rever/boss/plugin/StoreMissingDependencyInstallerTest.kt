@@ -77,6 +77,7 @@ class StoreMissingDependencyInstallerTest {
             pluginId: String,
             version: String?,
             targetPath: String,
+            onProgress: ((Float) -> Unit)?,
         ): Result<String> {
             val target = File(targetPath)
             target.parentFile?.mkdirs()
@@ -563,6 +564,7 @@ class StoreMissingDependencyInstallerTest {
             pluginId: String,
             version: String?,
             targetPath: String,
+            onProgress: ((Float) -> Unit)?,
         ): Result<String> {
             downloads.incrementAndGet()
             // Long enough that a second, uncoalesced install would overlap this one.
@@ -597,6 +599,7 @@ class StoreMissingDependencyInstallerTest {
             pluginId: String,
             version: String?,
             targetPath: String,
+            onProgress: ((Float) -> Unit)?,
         ): Result<String> = error("offline")
 
         override fun getDownloadProgress(pluginId: String): Flow<Float>? = null

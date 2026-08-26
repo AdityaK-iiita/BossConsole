@@ -154,6 +154,7 @@ private class FakeRepository(
         pluginId: String,
         version: String?,
         targetPath: String,
+        onProgress: ((Float) -> Unit)?,
     ): Result<String> = Result.success(targetPath)
 
     override fun getDownloadProgress(pluginId: String): Flow<Float>? = null

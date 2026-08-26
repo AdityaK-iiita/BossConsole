@@ -764,8 +764,10 @@ internal fun BossAppDialogs(state: BossAppState) {
                         // runCatching rather than a catch block: a throw instead of a failed
                         // Result would otherwise leave the dialog open with no message and an
                         // "Install" button, looking like the click did nothing. Cancellation is
-                        // rethrown - the install is detached and continues, so nothing went wrong
-                        // and there is no longer anywhere to report it to.
+                        // rethrown rather than reported, and means one of two things, neither of
+                        // them a fault: the window closed while the detached install carried on,
+                        // or the user cancelled the download from the bottom bar - in which case
+                        // the dependency really is still missing and this prompt is still true.
                         runCatching { prompt.installer.install(prompt.missing.missingPluginId) }
                             .getOrElse { error ->
                                 if (error is CancellationException) throw error
