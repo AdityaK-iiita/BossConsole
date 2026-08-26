@@ -1,5 +1,6 @@
 package ai.rever.boss.components.settings.search
 
+import ai.rever.boss.components.plugin.PanelIds
 import ai.rever.boss.components.settings.sidebar.SettingsSection
 import ai.rever.boss.components.settings.sidebar.SettingsSidebar
 import androidx.compose.runtime.getValue
@@ -92,6 +93,38 @@ class SettingsSidebarSearchTest {
         assertEquals("Panel Scrollbar Thickness", picked?.label)
         assertEquals("Scrollbar Thickness", picked?.group)
         assertEquals(SettingsSection.SCROLLBAR, picked?.section)
+    }
+
+    /**
+     * The signpost has to read as a signpost, and only the rail can show that.
+     *
+     * Its label is "AI Providers", the same words the removed section used, so on the label alone a
+     * reader has no way to tell this row from the one that used to open inside this window. The
+     * breadcrumb is the entire difference - and a breadcrumb is a second `Text` node under the
+     * label, which every non-visual gate in this repo is happy to let go missing.
+     */
+    @Test
+    fun `the AI provider signpost names the panel it will open`() {
+        var picked: SettingsSearchEntry? = null
+        val hits = SettingsSearchMatcher.search("anthropic", SettingsSearchIndex.builtIn)
+
+        compose.setContent {
+            SettingsSidebar(
+                selectedSection = SettingsSection.FLUCK,
+                onSectionChange = {},
+                query = "anthropic",
+                hits = hits,
+                onHitPicked = { picked = it.entry },
+            )
+        }
+
+        compose.onNodeWithText("AI Providers").assertExists()
+        compose.onAllNodesWithText("Plugins > Secret Manager panel").onFirst().assertExists()
+
+        compose.onNodeWithText("AI Providers").performClick()
+
+        assertEquals(PanelIds.SECRET_MANAGER, picked?.panel)
+        assertEquals(null, picked?.section, "a signpost that names a section would navigate this window instead")
     }
 
     @Test

@@ -14,9 +14,13 @@ package ai.rever.boss.components.settings.sections
  * change than this one.
  */
 internal object SettingsPluginIds {
-    /** Owns AI provider settings, and the credential vault they are stored in. */
-    const val SECRET_MANAGER = "ai.rever.boss.plugin.dynamic.secretmanager"
-
-    /** Bundles BossEditor, and serves both the editor and language-server sections. */
+    /**
+     * Bundles BossEditor, and serves both the editor and language-server sections.
+     *
+     * The only entry since `Settings > AI Providers` left. secret-manager's id lived here too, for
+     * that section's notice; Settings search reaches its panel through a signpost now, and that is
+     * gated on the panel being registered rather than on an id - one read that answers not
+     * installed, switched off, incompatible and no-access together. See `withoutUnreachableSignposts`.
+     */
     const val EDITOR_TAB = "ai.rever.boss.plugin.dynamic.editortab"
 }

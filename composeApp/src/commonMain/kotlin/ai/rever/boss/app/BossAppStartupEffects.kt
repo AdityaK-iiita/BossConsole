@@ -409,11 +409,6 @@ internal fun BossAppStartupEffects(state: BossAppState) {
         ai.rever.boss.services.editor.EditorAPIAccess
             .initialize(plugin)
 
-        // Initialize LlmProviderAPIAccess so Settings → AI Providers and
-        // PluginContext.llmProvider can reach the plugin that owns provider config
-        ai.rever.boss.services.llm.LlmProviderAPIAccess
-            .initialize(plugin)
-
         onDispose {
             // NOTE: Browser disposal moved to main.kt onCloseRequest handler
             // Browsers must be disposed BEFORE Compose disposal begins, not during it

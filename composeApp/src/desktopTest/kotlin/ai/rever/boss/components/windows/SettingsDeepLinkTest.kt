@@ -60,6 +60,17 @@ class SettingsDeepLinkTest {
     }
 
     @Test
+    fun `the retired AI Providers section resolves to nothing`() {
+        // Not a synonym for the test above. `LLM_PROVIDERS` is a string that used to resolve, is
+        // still baked into shipped secret-manager builds and into any bookmarked
+        // `boss://settings?section=LLM_PROVIDERS`, and AGENTS.md now states what it does. Pinning
+        // it also guards the reverse: a future section or plugin page taking that name would
+        // silently resurrect the old target, and nothing else in the tree would notice.
+        assertEquals(SettingsDeepLink.Unresolved, resolveSettingsDeepLink("LLM_PROVIDERS", pages))
+        assertEquals(SettingsDeepLink.Unresolved, resolveSettingsDeepLink("llm_providers", pages))
+    }
+
+    @Test
     fun `no section at all resolves to nothing`() {
         // A plain open() passes null. It must not be a navigation - that is the property the state
         // holder is careful about, and it would be undone here.

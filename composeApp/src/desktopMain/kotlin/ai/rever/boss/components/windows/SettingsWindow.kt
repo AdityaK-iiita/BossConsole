@@ -1,6 +1,7 @@
 package ai.rever.boss.components.windows
 
 import BossTheme
+import ai.rever.boss.components.home.LocalPanelRegistry
 import ai.rever.boss.components.plugin.registries.SettingsPageRegistryImpl
 import ai.rever.boss.components.settings.keymap.EditableKeymapSettings
 import ai.rever.boss.components.settings.search.LocalSettingsHighlight
@@ -11,6 +12,8 @@ import ai.rever.boss.components.settings.search.SettingsSearchMatcher
 import ai.rever.boss.components.settings.search.SettingsSearchState
 import ai.rever.boss.components.settings.search.handleSettingsSearchKey
 import ai.rever.boss.components.settings.search.pluginPageEntry
+import ai.rever.boss.components.settings.search.revealPanel
+import ai.rever.boss.components.settings.search.withReachableSignposts
 import ai.rever.boss.components.settings.sections.*
 import ai.rever.boss.components.settings.shared.SettingsTheme.AccentColor
 import ai.rever.boss.components.settings.shared.SettingsTheme.BackgroundColor
@@ -33,6 +36,8 @@ import ai.rever.boss.startup.StartupSettingsManager
 import ai.rever.boss.terminal.TerminalLinkSettingsManager
 import ai.rever.boss.updater.UpdateSettingsSection
 import ai.rever.boss.utils.DisplayUtils
+import ai.rever.boss.utils.logging.BossLogger
+import ai.rever.boss.utils.logging.LogCategory
 import ai.rever.boss.window.ApplyBossWindowIcon
 import ai.rever.boss.window.BossWindowIcon
 import androidx.compose.foundation.background
@@ -54,6 +59,8 @@ import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.rememberWindowState
 import kotlinx.coroutines.launch
 import java.awt.Frame
+
+private val logger = BossLogger.forComponent("SettingsWindow")
 
 @Composable
 actual fun SettingsWindow(
@@ -140,6 +147,11 @@ private fun SettingsContent(
     var showResetConfirmation by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
 
+    // Inherited from BossAppCompositionLocals: SettingsWindow composes inside BossAppDialogs, which
+    // is inside that provider, so this is the MAIN window's registry - which is the one whose
+    // sidebar a signpost opens.
+    val panelRegistry = LocalPanelRegistry.current
+
     // Plugin-contributed settings pages: reactive to plugin lifecycle + RBAC.
     val registryPages by SettingsPageRegistryImpl.pages.collectAsState()
     val registryAccess by SettingsPageRegistryImpl.access.collectAsState()
@@ -154,9 +166,13 @@ private fun SettingsContent(
     // What the search can find. Plugin pages are merged in here rather than declared in the index,
     // which is what keeps results honest about RBAC and plugin lifecycle for free: a page the user
     // cannot see is not in `pluginPages`, so it is not searchable either.
+    // Signposts are filtered here rather than declared conditionally, for the same reason plugin
+    // pages are merged here rather than indexed: reachability is a live fact about this window, and
+    // the index is a compile-time list. See withReachableSignposts.
+    val reachableBuiltIns = SettingsSearchIndex.builtIn.withReachableSignposts()
     val searchEntries =
-        remember(pluginPages) {
-            SettingsSearchIndex.builtIn +
+        remember(pluginPages, reachableBuiltIns) {
+            reachableBuiltIns +
                 pluginPages.map { pluginPageEntry(it.pageId, it.displayName, it.description) }
         }
     val hits =
@@ -178,6 +194,14 @@ private fun SettingsContent(
     val applyHit: (SettingsSearchHit) -> Unit = { hit ->
         val entry = hit.entry
         when {
+            // Asked FIRST, because a signpost is the one hit that does not navigate this window at
+            // all - and leaving `selectedSection` where it was is deliberate. The user is being
+            // sent to another window; changing this one behind them would be a second navigation
+            // they did not ask for, waiting for them when they come back.
+            entry.panel != null -> {
+                revealPanel(entry.panel, entry.label, panelRegistry, coroutineScope)
+            }
+
             entry.pluginPageId != null -> {
                 selectedPluginPageId = entry.pluginPageId
                 highlight = null
@@ -224,7 +248,22 @@ private fun SettingsContent(
             }
 
             SettingsDeepLink.Unresolved -> {
-                Unit
+                // Nothing to show, and nothing visible happens - so this is the only record that
+                // the request arrived at all. Worth having: the population that reaches it is a
+                // plugin deep-linking to a section or page this build does not have, and from the
+                // outside that is indistinguishable from the window ignoring the plugin.
+                //
+                // Gated on a section having been ASKED for. A plain open() passes null, which
+                // resolves to Unresolved as well and runs through here on first composition - so
+                // logging unconditionally would file a "deep link named nothing" line every time
+                // anyone opened Settings from the menu, drowning the one case this is for.
+                if (initialSection != null) {
+                    logger.debug(
+                        LogCategory.UI,
+                        "Settings deep link named nothing this build can show; leaving the window where it was",
+                        mapOf("requested" to initialSection),
+                    )
+                }
             }
         }
     }
@@ -523,7 +562,6 @@ private fun SettingsContentArea(
             SettingsSection.TERMINAL,
             SettingsSection.BOSS_EDITOR,
             SettingsSection.KEYMAP, // Uses LazyColumn for shortcuts list
-            SettingsSection.LLM_PROVIDERS, // Panel served by the secret-manager plugin; scrolls itself
         )
     val isEmbeddedPanel = section in embeddedPanelSections
 
@@ -560,10 +598,6 @@ private fun SettingsContentArea(
 
                     SettingsSection.KEYMAP -> {
                         EditableKeymapSettings()
-                    }
-
-                    SettingsSection.LLM_PROVIDERS -> {
-                        LLMProvidersSettings()
                     }
 
                     else -> {}

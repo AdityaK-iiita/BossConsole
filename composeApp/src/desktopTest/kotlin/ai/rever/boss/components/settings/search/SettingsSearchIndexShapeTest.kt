@@ -2,6 +2,7 @@ package ai.rever.boss.components.settings.search
 
 import ai.rever.boss.components.bars.ChromeBar
 import ai.rever.boss.components.bars.displayName
+import ai.rever.boss.components.plugin.PanelIds
 import ai.rever.boss.components.settings.sidebar.SettingsSection
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -80,7 +81,6 @@ class SettingsSearchIndexShapeTest {
                 SettingsSection.TERMINAL,
                 SettingsSection.BOSS_EDITOR,
                 SettingsSection.LANGUAGE_SERVERS,
-                SettingsSection.LLM_PROVIDERS,
             )
 
         delegated.forEach { section ->
@@ -111,17 +111,101 @@ class SettingsSearchIndexShapeTest {
     /**
      * A curated entry has no `label =` line behind it, so the staleness check has to skip it. Keeping
      * that set small matters: every curated entry is one the drift guard cannot verify.
+     *
+     * Panel signposts are the second admitted shape. They are curated for a stronger reason than the
+     * catch-alls - there is no host source to drift *from*, the target being in another window - so
+     * they are exempted by carrying a panel rather than by name.
      */
     @Test
-    fun `only section-level catch-alls are curated`() {
+    fun `only section-level catch-alls and panel signposts are curated`() {
         val curated = SettingsSearchIndex.builtIn.filter { it.curated }
-        val offenders = curated.filter { it.label != it.section?.displayName || it.group != null }
+        val offenders =
+            curated
+                .filter { it.panel == null }
+                .filter { it.label != it.section?.displayName || it.group != null }
 
         assertTrue(
             offenders.isEmpty(),
             "these entries opt out of the staleness check without being section-level catch-alls: " +
                 offenders.map { it.resultKey },
         )
+    }
+
+    /**
+     * The words a user types when they go looking for AI provider settings must find something.
+     *
+     * `Settings > AI Providers` was removed when the section moved into the Secret Manager panel,
+     * and removing the section took its search entry with it - so "api key", "anthropic" and
+     * "claude" matched nothing at all, and Settings search answered "No matching settings" for a
+     * feature that exists one window away. Nothing else guards this: a panel is not a settings page,
+     * so the query-time merge that covers plugin pages does not reach it.
+     *
+     * Pinned by search rather than by reading the index, because a keyword that is present but
+     * unmatchable is the failure worth catching - `pluginPageEntry` drops everything shorter than
+     * four characters, which is what "api" and "key" would have hit had this gone that route.
+     */
+    @Test
+    fun `AI provider searches still land somewhere`() {
+        listOf("api key", "anthropic", "openai", "claude", "gateway", "llm").forEach { query ->
+            val hits = SettingsSearchMatcher.search(query, SettingsSearchIndex.builtIn)
+
+            assertTrue(
+                hits.any { it.entry.panel == PanelIds.SECRET_MANAGER },
+                "searching '$query' no longer offers the Secret Manager panel: ${hits.map { it.entry.label }}",
+            )
+        }
+    }
+
+    /**
+     * A signpost must not outlive the panel it points at.
+     *
+     * This is the RBAC invariant the rest of the search box already keeps - `SettingsContent` says
+     * "a page the user cannot see is not in `pluginPages`, so it is not searchable either" - and a
+     * signpost is the one entry that could break it, being declared in the index rather than merged
+     * in from a registry. It is also what keeps the click from being a dead end: an unregistered
+     * panel means the plugin is missing, off, incompatible or not permitted, and the row would
+     * raise an empty main window over the Settings window the user was reading.
+     */
+    @Test
+    fun `a signpost is dropped when its panel is not registered`() {
+        val entries = SettingsSearchIndex.builtIn
+        val signposts = entries.filter { it.panel != null }
+        assertTrue(signposts.isNotEmpty(), "nothing to test - the AI provider signpost has gone missing")
+
+        val nothingRegistered = entries.withoutUnreachableSignposts { false }
+        assertTrue(
+            nothingRegistered.none { it.panel != null },
+            "a signpost survived with no panel registered, so a user without the plugin can still " +
+                "click it: ${nothingRegistered.filter { it.panel != null }.map { it.label }}",
+        )
+        assertEquals(
+            entries.size - signposts.size,
+            nothingRegistered.size,
+            "dropping signposts must not drop anything else",
+        )
+
+        // The other direction, so the filter cannot pass by dropping everything.
+        assertEquals(entries, entries.withoutUnreachableSignposts { true })
+    }
+
+    /** A signpost navigates out of this window, so it must claim no section, page or control. */
+    @Test
+    fun `a panel signpost targets a panel and claims no control`() {
+        val signposts = SettingsSearchIndex.builtIn.filter { it.panel != null }
+
+        assertTrue(signposts.isNotEmpty(), "the AI provider signpost has gone missing")
+        signposts.forEach { entry ->
+            assertEquals(null, entry.section, "${entry.label} claims a section it cannot navigate to")
+            assertEquals(null, entry.pluginPageId, "${entry.label} claims a plugin page as well as a panel")
+            assertTrue(
+                entry.highlightable.not(),
+                "${entry.label} is in another window, so there is no host control here to highlight",
+            )
+            assertTrue(
+                entry.context != null,
+                "${entry.label} must name its panel in the breadcrumb - it is what says 'not in this window'",
+            )
+        }
     }
 
     @Test

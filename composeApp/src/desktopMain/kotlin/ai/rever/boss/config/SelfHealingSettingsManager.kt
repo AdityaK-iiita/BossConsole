@@ -177,8 +177,8 @@ object SelfHealingSettingsManager {
      * spawns services before the window opens and long before any plugin registers, and the
      * store needs a signed-in session the kernel does not have. The legacy file is still read
      * so existing installs keep working, including after the file has been renamed by the
-     * plugin's one-shot import — but a key rotated in Settings → AI Providers will *not* be
-     * reflected there, so treat it as a fallback, not a source of truth.
+     * plugin's one-shot import — but a key rotated in the Secret Manager panel's AI section will
+     * *not* be reflected there, so treat it as a fallback, not a source of truth.
      */
     private fun resolveApiKey(provider: SelfHealingProvider): String? =
         System.getenv("AI_REPAIR_API_KEY")?.ifBlank { null }

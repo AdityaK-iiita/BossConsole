@@ -34,7 +34,7 @@ else, and still holds no `secret.share.role`.)
 `organisation.create`, `organisation.read` and `secret.read`. Each of those is a
 deliberate kill switch: revoking one from `user` disables that capability
 deployment-wide without touching any other role. `secret.read` is what makes the
-Secret Manager panel - and with it `Settings > AI Providers`, which that plugin owns -
+Secret Manager panel - and with it the AI section that plugin owns -
 available to ordinary users. It was admin-only until `20260809000000`; see that
 migration's header for why that was a leftover from the pre-RBAC `requiresAdmin` flag
 rather than a security posture. The vault's RPCs are granted to `authenticated` and

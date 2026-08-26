@@ -631,13 +631,13 @@ class DefaultPlugin(
      * and [ai.rever.boss.plugin.api.LlmProvider.activeConfig] is null again when no
      * provider is fully set up.
      *
-     * Resolved against **this** instance's registry, not through LlmProviderAPIAccess.
-     * DefaultPlugin is created per window and [apiRegistry] is per instance, while that
-     * object's cached reference is a singleton overwritten by each window's
-     * `initialize()` — routing through it would hand window 1's plugins whatever window
-     * 2 registered, or null if window 2 hasn't registered yet, which is the exact
-     * failure this relay exists to avoid. The settings UI still needs the singleton
-     * because host composables have no plugin handle; this member already has `this`.
+     * Resolved against **this** instance's registry. There used to be a singleton
+     * (`LlmProviderAPIAccess`) as well, for the host's Settings > AI Providers section,
+     * and this relay deliberately did not use it: DefaultPlugin is created per window and
+     * [apiRegistry] is per instance, while that cached reference was overwritten by each
+     * window's `initialize()` - so routing through it would hand window 1's plugins
+     * whatever window 2 registered. The section now lives in the plugin's own panel, so
+     * the singleton is gone and this is the only path.
      *
      * A `get()` rather than `by lazy` on purpose: registration is asynchronous, so a
      * lazy would cache null forever.

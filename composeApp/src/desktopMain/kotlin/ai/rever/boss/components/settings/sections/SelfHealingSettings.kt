@@ -63,9 +63,9 @@ fun SelfHealingSettings(kernelMode: Boolean) {
     // API key" as soon as one becomes resolvable — that is the one thing this card exists to get
     // right, and keying it on the provider alone left it stale until the screen was recreated.
     //
-    // Note the key does NOT come from Settings → AI Providers: that store belongs to a plugin and
-    // the kernel spawns repair services before plugins load. An environment variable is the
-    // supported path — see SelfHealingSettingsManager.resolveApiKey.
+    // Note the key does NOT come from the Secret Manager panel's AI section: that store belongs to
+    // a plugin and the kernel spawns repair services before plugins load. An environment variable
+    // is the supported path — see SelfHealingSettingsManager.resolveApiKey.
     val hasKey by produceState(initialValue = true, settings) {
         value = withContext(Dispatchers.IO) { SelfHealingSettingsManager.hasApiKey(provider) }
     }

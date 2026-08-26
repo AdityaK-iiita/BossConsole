@@ -150,11 +150,11 @@ class PluginSectionAbsenceTest {
         val message =
             pluginSectionMessage(
                 PluginSectionAbsence.NO_ACCESS,
-                "AI provider settings",
-                "Secret Manager",
-                listOf("secret.read", "secret.write"),
+                "Language-server settings",
+                "Code Editor",
+                listOf("editor.read", "editor.save"),
             )
-        assertTrue(message.contains("secret.read, secret.write"), message)
+        assertTrue(message.contains("editor.read, editor.save"), message)
         assertFalse(pluginSectionOffersInstall(PluginSectionAbsence.NO_ACCESS))
     }
 }

@@ -129,11 +129,13 @@ class SettingsSearchIndexDriftTest {
     private val scannedSections =
         SettingsSection.entries.toSet() -
             setOf(
-                // Rendered by BossTerm, BossEditor, editor-tab and secret-manager.
+                // Rendered by BossTerm, BossEditor and editor-tab. (AI providers used to be here
+                // too, served by secret-manager. That section now lives in the plugin's own panel
+                // and the host has no section for it - only the curated signpost that opens the
+                // panel, which carries no section and so never reaches this scan.)
                 SettingsSection.TERMINAL,
                 SettingsSection.BOSS_EDITOR,
                 SettingsSection.LANGUAGE_SERVERS,
-                SettingsSection.LLM_PROVIDERS,
                 // commonMain UpdateUI.kt, built from raw Text rather than the shared controls.
                 SettingsSection.UPDATES,
             )

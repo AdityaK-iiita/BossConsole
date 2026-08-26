@@ -2,7 +2,9 @@
 
 package ai.rever.boss.components.settings.search
 
+import ai.rever.boss.components.plugin.PanelIds
 import ai.rever.boss.components.settings.sidebar.SettingsSection
+import ai.rever.boss.plugin.api.PanelId
 
 /*
  * Every settings entry, declared one section per function.
@@ -93,9 +95,9 @@ private fun delegated(
 )
 
 /**
- * The four sections whose bodies belong to BossTerm, BossEditor, editor-tab and secret-manager.
+ * The three sections whose bodies belong to BossTerm, BossEditor and editor-tab.
  *
- * Roughly 330 labels live behind those panels and the host cannot enumerate a single one: the
+ * Roughly 300 labels live behind those panels and the host cannot enumerate a single one: the
  * API surface is one opaque `@Composable fun ...SettingsPanel(modifier)`. Curated keywords are
  * the honest stopgap - searching "cursor" lands the user on Terminal rather than on the control,
  * and the result row says so.
@@ -135,14 +137,66 @@ private fun delegatedEntries() =
             "hover",
             "format",
         ),
-        delegated(
-            SettingsSection.LLM_PROVIDERS,
+    )
+
+/**
+ * A curated pointer to something the Settings window does not contain at all.
+ *
+ * [delegated] covers a page the host still frames; this covers one that has left. Picking it opens
+ * [panel] in the main window and raises that window - see `applyHit` in `SettingsWindow`.
+ *
+ * Keywords are hand-written for the same reason as [delegated]'s, and here it is the only way: a
+ * panel is not a settings page, so nothing merges it into the index at query time, and even the
+ * page path would not help - `pluginPageEntry` keeps only words longer than three characters, so a
+ * description reading "API key" would index neither half of it.
+ *
+ * @param owner what the breadcrumb says after "Plugins", naming the panel rather than the plugin -
+ *   the reader is being sent somewhere, and the panel is the thing they will see.
+ */
+private fun panelSignpost(
+    label: String,
+    panel: PanelId,
+    owner: String,
+    vararg keywords: String,
+) = SettingsSearchEntry(
+    label = label,
+    panel = panel,
+    context = owner,
+    keywords = keywords.toList(),
+    highlightable = false,
+    curated = true,
+)
+
+/**
+ * Settings that used to be in this window and are now somewhere else.
+ *
+ * AI providers were `Settings > AI Providers` until the section was removed: the credentials live
+ * in the Secret Manager panel's vault and the page that manages them moved beside them. Deleting
+ * the section without this left the words a user actually types - "api key", "anthropic", "claude"
+ * - matching nothing, so Settings search answered "No matching settings" for a feature that exists.
+ *
+ * The first six keywords are the ones the deleted `delegated(LLM_PROVIDERS, ...)` entry carried.
+ * The rest name the panel itself, because [SettingsSearchMatcher] scores label, group, section
+ * display name and keywords - **not** `context`. Without them the breadcrumb reads "Secret Manager
+ * panel" and yet "secret manager" matched nothing, which is the likeliest thing to be typed by
+ * someone who half-remembers that the keys live in a vault.
+ */
+private fun signpostEntries() =
+    listOf(
+        panelSignpost(
+            label = "AI Providers",
+            panel = PanelIds.SECRET_MANAGER,
+            owner = "Secret Manager panel",
             "api key",
             "anthropic",
             "openai",
             "model",
             "claude",
             "gateway",
+            "llm",
+            "secret manager",
+            "vault",
+            "credentials",
         ),
     )
 
@@ -439,5 +493,6 @@ internal val builtInEntries: List<SettingsSearchEntry> by lazy {
         scrollbarEntries() +
         advancedEntries() +
         updatesEntries() +
-        delegatedEntries()
+        delegatedEntries() +
+        signpostEntries()
 }

@@ -73,11 +73,6 @@ enum class SettingsSection(
         description = "Default layout and workspace templates",
         icon = Icons.Outlined.GridView,
     ),
-    LLM_PROVIDERS(
-        displayName = "AI Providers",
-        description = "API keys and model selection for AI providers",
-        icon = Icons.Outlined.AutoAwesome,
-    ),
     UPDATES(
         displayName = "Updates",
         description = "Auto-update preferences and version information",

@@ -1,6 +1,7 @@
 package ai.rever.boss.components.settings.search
 
 import ai.rever.boss.components.settings.sidebar.SettingsSection
+import ai.rever.boss.plugin.api.PanelId
 
 /**
  * One searchable thing in the Settings window.
@@ -16,6 +17,9 @@ import ai.rever.boss.components.settings.sidebar.SettingsSection
  * @param keywords words a user might search that the label does not contain ("passkey" for
  *   "Platform Authenticator"). Deliberately scored below a label hit - see [SettingsSearchMatcher].
  * @param pluginPageId set instead of [section] for a plugin page, which navigates by page id.
+ * @param panel set instead of both for something that is not in this window at all: picking it
+ *   opens that sidebar panel in the main window. The one target that navigates *out* - see
+ *   `panelSignpost`, which is the only thing that builds one.
  * @param highlightable false when landing on the section is all this entry can do - either the page
  *   belongs to another module, or the control is built from a local composable that carries no
  *   search target (the Shortcuts tab-switching chips live in commonMain, which cannot reach the
@@ -34,17 +38,24 @@ data class SettingsSearchEntry(
     val group: String? = null,
     val keywords: List<String> = emptyList(),
     val pluginPageId: String? = null,
+    val panel: PanelId? = null,
     val highlightable: Boolean = true,
     val curated: Boolean = false,
     val context: String? = null,
 ) {
     init {
-        require(section != null || pluginPageId != null) {
-            "a search entry must name either a built-in section or a plugin page: $label"
+        require(section != null || pluginPageId != null || panel != null) {
+            "a search entry must name a built-in section, a plugin page or a panel: $label"
         }
     }
 
-    /** "Browser > User Agent", or just "Browser" for a group header. Shown under the result. */
+    /**
+     * "Browser > User Agent", or just "Browser" for a group header. Shown under the result.
+     *
+     * A [panel] entry has no section, so it falls to [PLUGIN_BREADCRUMB] and leans on [context] to
+     * name the panel - "Plugins > Secret Manager panel". That second half is the whole point of the
+     * row: the thing is not in this window, and the breadcrumb is what says so before the click.
+     */
     val breadcrumb: String
         get() =
             listOfNotNull(section?.displayName ?: PLUGIN_BREADCRUMB, group ?: context)
@@ -59,7 +70,7 @@ data class SettingsSearchEntry(
      * also have highlighted each other.
      */
     val resultKey: String
-        get() = "${section?.name ?: pluginPageId}|${group.orEmpty()}|$label"
+        get() = "${section?.name ?: pluginPageId ?: panel?.panelId}|${group.orEmpty()}|$label"
 
     companion object {
         const val PLUGIN_BREADCRUMB = "Plugins"
