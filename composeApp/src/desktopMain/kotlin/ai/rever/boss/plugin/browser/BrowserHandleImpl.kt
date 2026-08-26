@@ -94,6 +94,7 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -695,6 +696,43 @@ internal class BrowserHandleImpl(
                 },
         )
 
+    // Off-thread executor for the per-commit renderer-pid capture and page-helper injection.
+    //
+    // Same hazard the two above are built around, and the one place that was still running it
+    // unguarded. Both of those round trips were made straight from the NavigationFinished
+    // callback, which JxBrowser delivers on its RPC thread — the same thread that has to pump
+    // the reply. `executeJavaScript` there re-enters RpcThreadCallExecutor and parks on a queue
+    // only the thread it is blocking could drain, so the call can never be answered. Every later
+    // blocking call on that browser then waits behind it: the EDT freezes inside its own
+    // executeJavaScript, and the AppKit main thread freezes behind the EDT, taking the menu bar
+    // with it. A single unanswerable round trip is enough to hang the whole app.
+    //
+    // One thread, and daemon, for the reason contextMenuExecutor spells out: nothing can
+    // interrupt a call already inside executeJavaScript, so a wedged renderer costs one parked
+    // thread and later injections queue behind it.
+    private val pageInjectExecutor =
+        Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "boss-page-inject-$id").apply { isDaemon = true }
+        }
+    private val pageInjectDispatcher = pageInjectExecutor.asCoroutineDispatcher()
+
+    private val pageInjectScope =
+        CoroutineScope(
+            SupervisorJob() +
+                Dispatchers.Default +
+                CoroutineExceptionHandler { _, error ->
+                    logger.warn(LogCategory.BROWSER, "Page-helper injection failed", error = error)
+                },
+        )
+
+    /**
+     * The in-flight commit follow-up, swapped atomically.
+     *
+     * A redirect chain fires NavigationFinished repeatedly and only the document that finally
+     * sticks is worth injecting into, exactly as for [frameStallJob].
+     */
+    private val pageInjectJob = AtomicReference<Job?>(null)
+
     // Lock for thread-safe browser operations
     private val browserLock = ReentrantReadWriteLock()
 
@@ -1106,14 +1144,36 @@ internal class BrowserHandleImpl(
                     // value in place. Either produces the "wrong number that looks right" the
                     // whole design is built to avoid. Refreshing on every commit makes the only
                     // failure mode "unknown".
+                    //
+                    // `mainFrame()` is the one call still made here: it is what names the
+                    // document this commit is about, so reading it later would race the next
+                    // navigation. Everything after it is a blocking round trip and moves to
+                    // [pageInjectDispatcher] — see the note there for what running them on this
+                    // thread does.
                     val frame = browser.mainFrame().orElse(null)
-                    rendererPid.onCommit(frame?.let { runCatching { it.renderProcess().pid() }.getOrNull() })
+
+                    // Cleared synchronously, so the previous document's renderer is never the
+                    // answer for this one even while the real capture is still in flight. That
+                    // is the refresh-on-every-commit rule above, and "unknown" is the failure
+                    // mode RendererPid is built to prefer.
+                    rendererPid.onCommit(null)
 
                     // Skip injection for about:blank pages (used for dashboard display)
                     // Only inject into actual web pages
-                    if (frame != null && url.isNotEmpty() && url != "about:blank") {
-                        injectPageHelpers(frame)
-                    }
+                    val injectTarget = frame?.takeIf { url.isNotEmpty() && url != "about:blank" }
+                    val followUp =
+                        pageInjectScope.launch(pageInjectDispatcher) {
+                            val pid = frame?.let { runCatching { it.renderProcess().pid() }.getOrNull() }
+                            // A superseded commit must not write: by now the pid names a
+                            // document that is no longer current, which is precisely the
+                            // plausible-looking wrong number RendererPid exists to refuse. The
+                            // supersede below cannot interrupt a call already inside JxBrowser,
+                            // so the check has to happen here, after it returns.
+                            ensureActive()
+                            rendererPid.onCommit(pid)
+                            if (injectTarget != null) injectPageHelpers(injectTarget)
+                        }
+                    pageInjectJob.getAndSet(followUp)?.cancel()
                 }
             }
 
@@ -3302,6 +3362,13 @@ internal class BrowserHandleImpl(
         // exit, and interrupting it would buy nothing.
         contextMenuScope.cancel()
         contextMenuExecutor.shutdown()
+        // A pending commit follow-up outlives the tab otherwise, and its next act is a blocking
+        // round trip against a browser being torn down. shutdown() not shutdownNow(), for the
+        // reason the two above give: the thread is daemon and a call already inside JxBrowser
+        // cannot be interrupted, so interrupting would buy nothing.
+        pageInjectJob.getAndSet(null)?.cancel()
+        pageInjectScope.cancel()
+        pageInjectExecutor.shutdown()
         // Drop this browser's injectors, WITHOUT unclaiming the shared callback slot - that slot
         // belongs to BrowserInjectDispatcher on behalf of every registered injector, and removing
         // it here would tear down another feature's hook as a side effect of this teardown.
