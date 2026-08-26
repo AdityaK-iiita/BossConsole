@@ -55,11 +55,14 @@ enum class TrafficLightInset {
     LEFT_COLUMNS,
 
     /**
-     * Nothing is up there but content, so there is no chrome to inset.
+     * Nothing down the left is wide enough to hold the box, so there is no column to inset.
      *
-     * The caller keeps the full-width title row for this case. Padding the content instead would
-     * cost the same height across the whole width - no saving - and the content is where a
-     * browser's native surface lives, which is not something to leave a hole in.
+     * The caller draws the full-width title row for this, which is what keeps the buttons off the
+     * content. Two alternatives were tried and are worse. Padding the content costs the same
+     * height across the whole width, and the content is where a browser's native surface lives.
+     * Indenting whatever row happens to be in the corner - the leftmost pane's tab strip - moves
+     * that row's contents but leaves the buttons ON the pane: its focus boundary is drawn behind
+     * them, so the active pane loses the top-left corner of its own outline.
      */
     CONTENT,
 
@@ -73,10 +76,8 @@ enum class TrafficLightInset {
      * banner, above the tab bar's Favorites shelf - clearance for lights that were no longer
      * there.
      *
-     * It does NOT replace [CONTENT] or [NONE]: both of those draw the title row, and the row is
-     * ABOVE the banner, so the row still holds the lights and the banner needs nothing. Mapping
-     * them here would drop a row the layout keeps permanently, shifting the whole window by its
-     * height every time a banner appeared.
+     * It does NOT replace [NONE], which is what a title row being on produces: that row is ABOVE
+     * the banner, so it goes on holding the lights and the banner needs nothing.
      */
     BANNER,
 }
@@ -89,22 +90,13 @@ enum class TrafficLightInset {
  * first control, or a 28dp gap above a column that needed none - and all of them are only visible
  * on macOS, which is not where most of this is developed.
  */
+// Six inputs and a table of cases, which is the shape this wants: each one is a piece of chrome
+// that can be over, beside or under the buttons, and folding any of them into a data class would
+// put the case analysis somewhere the tests cannot reach it as directly.
+@Suppress("LongParameterList")
 fun macTrafficLightInset(
     appearance: WindowAppearanceSettings,
     isMacOs: Boolean,
-    /**
-     * Whether the vertical bar is down to its slim rail, which changes what it can cover.
-     *
-     * A rail is one [ChromeDimens.stripWidth], so on its own it is narrower than the light box and
-     * cannot protect the corner - the lights spill onto whatever is beside it, which is a browser
-     * pane and cannot be inset at all. That case falls back to the title row.
-     *
-     * Take it from the MEASURED rail state (`SplitViewPanel.onBarRailedChange`), not from the
-     * `tabBarCollapsed` preference: a bar also rails itself when the window is too narrow for a
-     * full one, and a window that asked the preference read an auto-railed bar as a full column
-     * and let the lights land on the pane beside it.
-     */
-    barCollapsed: Boolean = false,
     /**
      * Whether the update banner is currently drawing. See [TrafficLightInset.BANNER].
      *
@@ -113,6 +105,22 @@ fun macTrafficLightInset(
      * same empty band by another route.
      */
     bannerVisible: Boolean = false,
+    /**
+     * Whether the vertical bar is down to its slim rail.
+     *
+     * Take it from the MEASURED rail state (`SplitViewPanel.onBarRailedChange`), not from the
+     * `tabBarCollapsed` preference: a bar also rails itself when the window is too narrow for a
+     * full one, and a window that asked the preference read an auto-railed bar as a full column
+     * and let the buttons land on the pane beside it.
+     */
+    barCollapsed: Boolean = false,
+    /**
+     * Whether a plugin panel is open on the left.
+     *
+     * It counts as a column, and a wide one - which is what lets a window with a collapsed rail
+     * carry the clearance in its columns instead of falling back to the title row.
+     */
+    leftPanelOpen: Boolean = false,
     /** One icon rail's width at the current density. See [leftChromeWidth]. */
     stripWidth: Dp = ChromeDimens.MIN_STRIP_WIDTH,
 ): TrafficLightInset {
@@ -135,10 +143,11 @@ fun macTrafficLightInset(
                 TrafficLightInset.TOP_BAR
             }
 
-            // Only when the columns are actually wide enough to hold the box. Insetting chrome that
-            // is narrower than the lights protects part of the corner and leaves the rest over the
-            // content, which is worse than not trying: it looks deliberate.
-            leftChromeWidth(appearance, barCollapsed, stripWidth) >= TRAFFIC_LIGHT_WIDTH -> {
+            // Only when the columns can actually hold the box. Insetting chrome narrower than
+            // the lights protects part of the corner and leaves the rest on the pane behind it,
+            // which is worse than not trying: the buttons end up over content that cannot be
+            // inset, and over the active pane's own focus outline.
+            leftChromeWidth(appearance, barCollapsed, stripWidth, leftPanelOpen) >= TRAFFIC_LIGHT_WIDTH -> {
                 TrafficLightInset.LEFT_COLUMNS
             }
 
@@ -152,8 +161,21 @@ fun macTrafficLightInset(
     return if (bannerVisible && coverable) TrafficLightInset.BANNER else base
 }
 
-/** The top inset for a left-hand column, which is the height of the box or nothing. */
-fun TrafficLightInset.columnInset(): Dp = if (this == TrafficLightInset.LEFT_COLUMNS) TRAFFIC_LIGHT_HEIGHT else 0.dp
+/**
+ * The top inset for a left-hand column that starts [offsetFromLeft] in from the window's edge.
+ *
+ * The offset is what makes this per-COLUMN rather than one answer for all of them. They run strip,
+ * then an open plugin panel, then the vertical tab bar, and the box is only 78dp wide - so which
+ * of them it covers depends on what is switched on. Insetting "the columns" as a group was right
+ * only while the tab bar was second: open a plugin panel and the panel is second, and the lights
+ * landed on its header while the bar behind it kept a 28dp gap it did not need.
+ */
+fun TrafficLightInset.columnInset(offsetFromLeft: Dp = 0.dp): Dp =
+    if (this == TrafficLightInset.LEFT_COLUMNS && offsetFromLeft < TRAFFIC_LIGHT_WIDTH) {
+        TRAFFIC_LIGHT_HEIGHT
+    } else {
+        0.dp
+    }
 
 /**
  * The start indent for the update banner.
@@ -168,54 +190,78 @@ fun TrafficLightInset.bannerStartInset(): Dp = if (this == TrafficLightInset.BAN
 fun TrafficLightInset.barStartInset(): Dp = if (this == TrafficLightInset.TOP_BAR) TRAFFIC_LIGHT_WIDTH else 0.dp
 
 /**
- * Whether the full-width title row still has to be drawn.
+ * Whether the full-width title row has to be drawn.
  *
- * True when the user asked for it, and true for [TrafficLightInset.CONTENT] - there is no chrome
- * to inset, so the row is what keeps the lights off the content.
+ * True when the user asked for it, and true for [TrafficLightInset.CONTENT] - there is no column
+ * wide enough to inset, so the row is what keeps the buttons off the pane.
  *
- * **The CONTENT answer is reached dynamically, and the row therefore appears and disappears.** Two
- * ways in, both of them a user gesture rather than a setting:
- *
- * - **Narrowing the window.** The default configuration is [TrafficLightInset.LEFT_COLUMNS]; drag
- *   past `TAB_BAR_AUTO_COLLAPSE_WIDTH` and the bar rails itself, the left chrome drops under
- *   [TRAFFIC_LIGHT_WIDTH], and a 26dp row appears at the top - moving the whole window's content
- *   down mid-drag. Widen again and it goes.
- * - **Focus mode**, when the top bar was what held them: clearing it leaves nothing up there, so
- *   focus mode ADDS a row, which is the opposite of what it is for.
- *
- * Both are the honest answer to "where do the lights go" and neither is what anyone wants to see.
- * Kept, rather than papered over, because the alternatives are worse: leaving the lights over a
- * browser pane makes them unreadable and unclickable-looking, and insetting a column narrower than
- * the box protects half the corner and looks deliberate. Closing it properly means a transparent
- * clearance region over the content rather than a row above it, which is a change to how the
- * window composes its top edge and does not belong to the change that found it.
+ * The row is a real cost: it is 26dp of the window's full width to protect one 78x28dp corner, and
+ * because the bar rails itself as a window narrows, it appears and disappears during a resize
+ * drag. Both were the reason for trying to remove it. The reason it stays is that the alternatives
+ * put the buttons on the pane itself, where they cover the active pane's focus outline and cannot
+ * be moved out of the way - so the answer is to make CONTENT rarer, by counting every column that
+ * can hold them, rather than to stop drawing the row.
  */
 fun TrafficLightInset.needsTitleRow(showTitleBar: Boolean): Boolean = showTitleBar || this == TrafficLightInset.CONTENT
 
+/** Where each left-hand column starts, for [columnInset]. */
+data class LeftColumnOffsets(
+    /** An open plugin panel, which follows the icon strip. */
+    val panel: Dp,
+    /** The vertical tab bar, which follows the panel when there is one. */
+    val bar: Dp,
+)
+
 /**
- * How much chrome runs down the window's left edge, which is what decides whether the corner can
- * be protected by insetting columns at all.
+ * Where the left columns start, given what is on screen.
+ *
+ * Pure, and here rather than inline in the scaffold, because the ORDER is the whole point and it
+ * is not obvious from the composition: the strip is outermost, an open plugin panel comes next,
+ * and the vertical tab bar is behind the panel - so the bar is only second when no panel is open.
+ * Getting that backwards is what put the lights on a panel header while the bar, out of reach
+ * behind it, kept a 28dp gap for them.
+ */
+fun leftColumnOffsets(
+    showLeftStrip: Boolean,
+    leftPanelOpen: Boolean,
+    stripWidth: Dp,
+): LeftColumnOffsets {
+    val panel = if (showLeftStrip) stripWidth else 0.dp
+    // TRAFFIC_LIGHT_WIDTH rather than the panel's measured width: a panel narrower than the box
+    // would leave the remainder on the bar, but a sidebar panel is hundreds of dp and the floor a
+    // user can drag it to is 20dp, so treating "a panel is open" as "the bar is clear" is right
+    // everywhere except a deliberately collapsed sliver.
+    val bar = if (leftPanelOpen) TRAFFIC_LIGHT_WIDTH else panel
+    return LeftColumnOffsets(panel = panel, bar = bar)
+}
+
+/**
+ * How much chrome runs down the window's left edge, which decides whether the corner can be
+ * protected by insetting columns at all.
  *
  * The icon strip is one [stripWidth]; the vertical tab bar is its configured width, or the same
- * rail width when collapsed. A bar in TOP position contributes nothing.
+ * rail width when collapsed; an open plugin panel is counted as [TRAFFIC_LIGHT_WIDTH], since it is
+ * a sidebar hundreds of dp wide and the only way to make it narrower than the box is to drag it to
+ * its 20dp floor deliberately. A bar in TOP position contributes nothing.
  *
  * [stripWidth] is passed in rather than read here, because it is the DENSITY's value and this is
- * pure: the shipped Comfortable preset is 40dp, not the 36dp floor. Measuring with the floor gave
- * a strip plus a rail as 72dp and fell back to the title row, where what is actually drawn is
- * 80dp and could have been inset. The default is the floor, which is the conservative direction:
- * it can only over-reserve, never leave the lights over a column too narrow to hold them.
+ * pure: the shipped Comfortable preset is 40dp, not the 36dp floor. Measuring with the floor made
+ * a strip plus a rail 72dp and fell back to the title row, where what is drawn is 80dp and fits.
+ * The default is the floor, which is the conservative direction: it can only over-reserve.
  */
 internal fun leftChromeWidth(
     appearance: WindowAppearanceSettings,
     barCollapsed: Boolean,
     stripWidth: Dp = ChromeDimens.MIN_STRIP_WIDTH,
+    leftPanelOpen: Boolean = false,
 ): Dp {
     val strip = if (appearance.showLeftStrip) stripWidth else 0.dp
+    val panel = if (leftPanelOpen) TRAFFIC_LIGHT_WIDTH else 0.dp
     val bar =
         when {
             appearance.tabBarPosition != TabBarPosition.LEFT -> 0.dp
             barCollapsed -> stripWidth
             else -> appearance.tabBarVerticalWidth.dp
         }
-    return strip + bar
+    return strip + panel + bar
 }

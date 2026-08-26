@@ -12,12 +12,14 @@ import ai.rever.boss.plugin.api.Panel.Companion.bottom
 import ai.rever.boss.plugin.api.Panel.Companion.left
 import ai.rever.boss.plugin.api.Panel.Companion.right
 import ai.rever.boss.plugin.api.Panel.Companion.top
+import ai.rever.boss.plugin.ui.BossTheme
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -48,6 +50,13 @@ fun BossDraggableComponent.BossWindow(
     onDrawerVisibleChange: (Boolean) -> Unit = {},
     /** See `SplitViewPanel.onBarRailedChange`. */
     onBarRailedChange: (Boolean) -> Unit = {},
+    /**
+     * Clearance at the top of an open LEFT plugin panel, for the macOS traffic lights.
+     *
+     * The panel sits between the icon strip and the vertical tab bar, so whenever one is open it -
+     * not the bar - is the column the lights are drawn over. Its own header was under them.
+     */
+    leftPanelTopInset: Dp = 0.dp,
 ) {
     // Process any pending panel opens (for two-phase transitions)
     // This is critical for JxBrowser-based plugins to avoid BrowserViewState conflicts
@@ -116,7 +125,13 @@ fun BossDraggableComponent.BossWindow(
     }
 
     WithPanel(bottom) {
-        WithNestedPanel(left) {
+        WithNestedPanel(
+            left,
+            // Painted before it is padded: an unpainted inset shows the raw native window surface
+            // through, which reads as a white band at the top of the panel.
+            firstPanel = { InsetSidePanel(left.bottom, panelComponentStore, leftPanelTopInset) },
+            lastPanel = { InsetSidePanel(left.top, panelComponentStore, leftPanelTopInset) },
+        ) {
             WithNestedPanel(right) {
                 // Central tab area — also the drop target for a header drag-out (open as tab).
                 Box(
@@ -161,5 +176,23 @@ fun BossDraggableComponent.BossWindow(
                 }
             }
         }
+    }
+}
+
+/**
+ * A side panel with the macOS traffic-light clearance above it.
+ *
+ * Painted BEFORE it is padded. An unpainted inset shows the raw native window surface through,
+ * which reads as a white band across the top of the panel - the same trap `WindowBarRow` documents
+ * for the bar's own inset.
+ */
+@Composable
+private fun BossDraggableComponent.InsetSidePanel(
+    panel: Panel,
+    panelComponentStore: PanelComponentStore,
+    topInset: Dp,
+) {
+    Box(modifier = Modifier.background(BossTheme.colors.panel).padding(top = topInset)) {
+        SidePanel(panel, panelComponentStore)
     }
 }
