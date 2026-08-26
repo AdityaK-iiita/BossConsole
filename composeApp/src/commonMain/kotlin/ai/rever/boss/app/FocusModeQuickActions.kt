@@ -2,6 +2,7 @@ package ai.rever.boss.app
 
 import ai.rever.boss.components.buttons.BossActionButton
 import ai.rever.boss.components.buttons.QuickActionHints
+import ai.rever.boss.components.buttons.ToolboxButton
 import ai.rever.boss.components.overlays.OverlayCorner
 import ai.rever.boss.components.overlays.overlayCornerIsHeavyweight
 import ai.rever.boss.focusmode.FocusModeEdge
@@ -53,7 +54,7 @@ import androidx.compose.ui.unit.dp
  *
  * The margin is deliberately NOT in here; it rides in the inset (see [QUICK_ACTIONS_MARGIN]).
  */
-internal val QUICK_ACTIONS_OVERLAY_SIZE = DpSize(100.dp, 34.dp)
+internal val QUICK_ACTIONS_OVERLAY_SIZE = DpSize(132.dp, 34.dp)
 
 /**
  * The same bound with the tools launcher in the row, when both icon strips are gone.
@@ -61,7 +62,7 @@ internal val QUICK_ACTIONS_OVERLAY_SIZE = DpSize(100.dp, 34.dp)
  * See `toolLauncherPlacement` for when that happens, and [QUICK_ACTIONS_OVERLAY_SIZE] for why the
  * two are separate rather than one number wide enough for both.
  */
-internal val QUICK_ACTIONS_OVERLAY_SIZE_WITH_LAUNCHER = DpSize(132.dp, 34.dp)
+internal val QUICK_ACTIONS_OVERLAY_SIZE_WITH_LAUNCHER = DpSize(164.dp, 34.dp)
 
 /**
  * Gap between the cluster and the corner it sits in.
@@ -213,6 +214,7 @@ internal fun focusQuickActionsRail(
     onShowSettings: () -> Unit,
     onShowSearch: () -> Unit,
     onSignOut: () -> Unit,
+    toolbox: (@Composable (hintDirection: Panel, modifier: Modifier) -> Unit)? = null,
 ): List<@Composable () -> Unit> =
     if (placement != FocusQuickActionsPlacement.RIGHT_RAIL) {
         emptyList()
@@ -228,6 +230,7 @@ internal fun focusQuickActionsRail(
             // imageVector mode, because a fixed constraint coerces what it wraps.
             modifier = Modifier.size(SIDEBAR_ICON_SIZE),
             onShowSettings = onShowSettings,
+            toolbox = toolbox,
             onShowSearch = onShowSearch,
             onSignOut = onSignOut,
         )
@@ -291,7 +294,7 @@ private fun railExists(
  * build the buttons. `FocusQuickActionsPlacementTest` pins it against the rendered list, so the
  * reserve and the render cannot drift apart.
  */
-internal const val FOCUS_QUICK_ACTION_COUNT = 3
+internal const val FOCUS_QUICK_ACTION_COUNT = 4
 
 /**
  * Settings, Search and Sign Out as three separate composables, in the order both hosts want them.
@@ -317,6 +320,7 @@ internal fun focusQuickActionButtons(
     onShowSettings: () -> Unit,
     onShowSearch: () -> Unit,
     onSignOut: () -> Unit,
+    toolbox: (@Composable (hintDirection: Panel, modifier: Modifier) -> Unit)? = null,
     /**
      * The tools launcher, when both icon strips are switched off and there is no strip to put it
      * in - see `toolLauncherPlacement`. Rendered between Settings and Search, so the two things
@@ -353,6 +357,13 @@ internal fun focusQuickActionButtons(
                 onClick = onShowSettings,
             )
         },
+        // Directly after Settings: both are "go and configure the app", where Search and the tools
+        // launcher open something.
+        //
+        // Wrapped so it takes this group's direction and modifier like every other button in it.
+        // Null only if the Toolbox plugin is not registered at all, which a bundled system plugin
+        // normally is - FOCUS_QUICK_ACTION_COUNT counts it, so the rail reserves a row for it.
+        toolbox?.let { button -> { button(hintDirection, modifier) } },
         // Wrapped rather than passed straight through: the launcher takes this group's hint
         // direction and modifier like every other button in it. Handed a ready-made composable,
         // it kept whatever the scaffold had baked in - which pointed its hint off the bottom of
@@ -441,6 +452,7 @@ internal fun BoxScope.FocusModeQuickActions(
     onShowSettings: () -> Unit,
     onShowSearch: () -> Unit,
     onSignOut: () -> Unit,
+    toolbox: (@Composable (hintDirection: Panel, modifier: Modifier) -> Unit)? = null,
     /** The tools launcher, when both strips are gone - see `toolLauncherPlacement`. */
     toolLauncher: (@Composable (hintDirection: Panel, modifier: Modifier) -> Unit)? = null,
 ) {
@@ -448,7 +460,14 @@ internal fun BoxScope.FocusModeQuickActions(
 
     if (!LocalWindowInfo.current.isWindowFocused) {
         Box(modifier = Modifier.align(Alignment.BottomEnd)) {
-            QuickActions(QUICK_ACTIONS_MARGIN, onShowSettings, onShowSearch, onSignOut, toolLauncher)
+            QuickActions(
+                QUICK_ACTIONS_MARGIN,
+                onShowSettings,
+                onShowSearch,
+                onSignOut,
+                toolbox,
+                toolLauncher,
+            )
         }
         return
     }
@@ -480,6 +499,7 @@ internal fun BoxScope.FocusModeQuickActions(
             onShowSettings,
             onShowSearch,
             onSignOut,
+            toolbox,
             toolLauncher,
         )
     }
@@ -531,6 +551,7 @@ private fun QuickActions(
     onShowSettings: () -> Unit,
     onShowSearch: () -> Unit,
     onSignOut: () -> Unit,
+    toolbox: (@Composable (hintDirection: Panel, modifier: Modifier) -> Unit)? = null,
     toolLauncher: (@Composable (hintDirection: Panel, modifier: Modifier) -> Unit)?,
 ) {
     Surface(
@@ -559,6 +580,7 @@ private fun QuickActions(
             focusQuickActionButtons(
                 hintDirection = top,
                 onShowSettings = onShowSettings,
+                toolbox = toolbox,
                 onShowSearch = onShowSearch,
                 onSignOut = onSignOut,
                 toolLauncher = toolLauncher,

@@ -1,13 +1,19 @@
 package ai.rever.boss.components.bars.vertical
 
+import ai.rever.boss.app.FOCUS_QUICK_ACTION_COUNT
 import ai.rever.boss.app.FocusQuickActionsPlacement
 import ai.rever.boss.app.focusQuickActionsRail
+import ai.rever.boss.components.buttons.ToolboxButton
+import ai.rever.boss.components.plugin.PanelIds
 import ai.rever.boss.components.sidebar.SidebarIconRail
+import ai.rever.boss.plugin.api.SidebarItem
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -93,6 +99,22 @@ class SidebarBottomActionsLayoutTest {
         onShowSettings = onShowSettings,
         onShowSearch = onShowSearch,
         onSignOut = onSignOut,
+        // A REAL button, not an empty lambda: this test measures rendered height against the
+        // reserve, so a stand-in that draws nothing makes the section come up one row short and
+        // the assertion fail for a reason that has nothing to do with the arithmetic.
+        toolbox = { hint, mod ->
+            ToolboxButton(
+                item =
+                    SidebarItem(
+                        pluginContentId = PanelIds.PLUGIN_MANAGER,
+                        icon = Icons.Outlined.Extension,
+                        label = "Toolbox",
+                    ),
+                onClick = {},
+                hintDirection = hint,
+                modifier = mod,
+            )
+        },
     )
 
     private fun boundsOf(tag: String): Rect = rule.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
@@ -111,7 +133,7 @@ class SidebarBottomActionsLayoutTest {
         // The divider is emitted above the tagged Column and is outside it, so it is added back
         // rather than measured - bottomSectionHeight counts it, and the rail pays for it.
         val rendered = (rail.bottom - section.top).toDp() + SidebarIconRail.SectionDivider
-        val reserved = SidebarIconRail.bottomSectionHeight(3)
+        val reserved = SidebarIconRail.bottomSectionHeight(FOCUS_QUICK_ACTION_COUNT)
 
         // A tolerance, not exact equality: the span is measured back out of integer pixels at the
         // harness's density, so a fraction of a dp is rounding rather than a wrong reserve. 1dp
@@ -204,7 +226,7 @@ class SidebarBottomActionsLayoutTest {
             "the section is $section but the rail it has to stay inside is $rail",
         )
         assertEquals(
-            SidebarIconRail.bottomSectionHeight(3).value - SidebarIconRail.SectionDivider.value,
+            SidebarIconRail.bottomSectionHeight(FOCUS_QUICK_ACTION_COUNT).value - SidebarIconRail.SectionDivider.value,
             (section.bottom - section.top).toDp().value,
             1f,
             "and it is not squashed to fit either - the slots are what give way",

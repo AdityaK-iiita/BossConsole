@@ -109,13 +109,13 @@ class QuickActionsFooterPlacementTest {
             .filter { it != FocusQuickActionsPlacement.TAB_BAR_FOOTER }
             .forEach { placement ->
                 assertTrue(
-                    focusQuickActionsFooter(placement, {}, {}, {}).isEmpty(),
+                    focusQuickActionsFooter(placement, {}, {}, {}, { _, _ -> }).isEmpty(),
                     "$placement should contribute no footer actions",
                 )
             }
         assertEquals(
             FOCUS_QUICK_ACTION_COUNT,
-            focusQuickActionsFooter(FocusQuickActionsPlacement.TAB_BAR_FOOTER, {}, {}, {}).size,
+            focusQuickActionsFooter(FocusQuickActionsPlacement.TAB_BAR_FOOTER, {}, {}, {}, { _, _ -> }).size,
         )
     }
 
@@ -129,11 +129,12 @@ class QuickActionsFooterPlacementTest {
                 {},
                 {},
                 {},
+                toolbox = { _, _ -> },
                 toolLauncher = { _, _ -> },
             )
 
         assertEquals(FOCUS_QUICK_ACTION_COUNT + 1, withLauncher.size)
-        val rail = focusQuickActionsRail(FocusQuickActionsPlacement.RIGHT_RAIL, {}, {}, {})
+        val rail = focusQuickActionsRail(FocusQuickActionsPlacement.RIGHT_RAIL, {}, {}, {}, { _, _ -> })
         assertEquals(FOCUS_QUICK_ACTION_COUNT, rail.size)
     }
 

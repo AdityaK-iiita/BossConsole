@@ -171,11 +171,15 @@ internal const val VERTICAL_BAR_HOST_ACTIONS_TAG = "vertical-bar-host-actions"
  *
  * Empty for every other placement, so the bar can call it unconditionally and render nothing.
  */
+// One parameter per action plus the placement and the launcher slot. Folding them into a holder
+// would put the actions somewhere a caller has to build before it can name one, for no gain.
+@Suppress("LongParameterList")
 internal fun focusQuickActionsFooter(
     placement: FocusQuickActionsPlacement,
     onShowSettings: () -> Unit,
     onShowSearch: () -> Unit,
     onSignOut: () -> Unit,
+    toolbox: (@Composable (hintDirection: Panel, modifier: Modifier) -> Unit)? = null,
     toolLauncher: (@Composable (hintDirection: Panel, modifier: Modifier) -> Unit)? = null,
 ): List<@Composable () -> Unit> =
     if (placement != FocusQuickActionsPlacement.TAB_BAR_FOOTER) {
@@ -185,6 +189,7 @@ internal fun focusQuickActionsFooter(
             hintDirection = top,
             modifier = Modifier.size(SIDEBAR_ICON_SIZE),
             onShowSettings = onShowSettings,
+            toolbox = toolbox,
             onShowSearch = onShowSearch,
             onSignOut = onSignOut,
             toolLauncher = toolLauncher,

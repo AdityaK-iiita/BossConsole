@@ -111,7 +111,9 @@ class FocusQuickActionsPlacementTest {
         // gap torn out of the icon budget of a bar that is not hosting anything.
         assertEquals(0, railFor(FocusQuickActionsPlacement.NONE).size)
         assertEquals(0, railFor(FocusQuickActionsPlacement.FLOATING).size)
-        assertEquals(3, railFor(FocusQuickActionsPlacement.RIGHT_RAIL).size)
+        // The constant, not a literal: it is what the rail reserves height from, so a test that
+        // repeats the number cannot notice the two drifting apart - which is the whole job here.
+        assertEquals(FOCUS_QUICK_ACTION_COUNT, railFor(FocusQuickActionsPlacement.RIGHT_RAIL).size)
     }
 
     @Test
@@ -229,5 +231,8 @@ class FocusQuickActionsPlacementTest {
             onShowSettings = {},
             onShowSearch = {},
             onSignOut = {},
+            // The row production draws: the Toolbox is a bundled system plugin, so
+            // FOCUS_QUICK_ACTION_COUNT counts it and the rail reserves a row for it.
+            toolbox = { _, _ -> },
         )
 }

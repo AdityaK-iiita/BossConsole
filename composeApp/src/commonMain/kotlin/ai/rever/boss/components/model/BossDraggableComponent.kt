@@ -1,5 +1,7 @@
 package ai.rever.boss.components.model
 
+import ai.rever.boss.components.plugin.PanelIds
+import ai.rever.boss.components.sidebar.SidebarVisibilitySettings
 import ai.rever.boss.components.window_panel.SplitOrientation
 import ai.rever.boss.plugin.api.Panel
 import ai.rever.boss.plugin.api.Panel.Companion.bottom
@@ -294,6 +296,22 @@ class BossDraggableComponent(
      * user has hidden (and let them un-hide).
      */
     fun getItemsForSlotUnfiltered(slot: Panel): List<SidebarItem> = itemsBySlot[slot].orEmpty()
+
+    /**
+     * The Toolbox's own sidebar item, or null if the plugin is not registered.
+     *
+     * Unfiltered, on purpose: a user who hid the Toolbox from their sidebar has not asked to lose
+     * the way to reinstall or re-enable a plugin, which is the one thing only the Toolbox does.
+     *
+     * Matched on [PanelId.panelId] rather than on the plugin id - the plugin kept the id
+     * `plugin-manager` when it was renamed to Toolbox, so the two differ for exactly this one.
+     */
+    fun toolboxSidebarItem(): SidebarItem? =
+        SidebarVisibilitySettings.ALL_SLOT_IDS
+            .map(SidebarVisibilitySettings::panelFor)
+            .firstNotNullOfOrNull { slot ->
+                getItemsForSlotUnfiltered(slot).find { it.pluginContentId.panelId == PanelIds.PLUGIN_MANAGER.panelId }
+            }
 
     // Called when dragging starts
     fun startDragging(
