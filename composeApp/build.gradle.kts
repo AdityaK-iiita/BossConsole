@@ -335,6 +335,19 @@ val downloadBundledPlugins =
         // picked up.
         outputs.upToDateWhen { false }
 
+        // A Provider, not a captured value: `ciProvider.orNull` below is read at
+        // EXECUTION time, and what makes that configuration-cache safe is that
+        // Gradle tracks a Provider read as an input -- not that the value was
+        // captured early. (The sibling gate on `prepareBundledPluginsResources`
+        // still uses System.getenv at configuration time; the two agree today by
+        // different mechanisms, and only that one decides whether this task is in
+        // the graph at all.)
+        //
+        // `prepareBundledPluginsResources` only routes here when CI == "true", so
+        // the release path always has it set; a developer invoking this task by
+        // hand does not.
+        val ciProvider = providers.environmentVariable("CI")
+
         doLast {
             val bundledPluginsDir = destDir.get().asFile
             bundledPluginsDir.mkdirs()
@@ -373,33 +386,71 @@ val downloadBundledPlugins =
                     val tagNameMatch = Regex(""""tag_name"\s*:\s*"([^"]+)"""").find(responseText)
                     val tagName = tagNameMatch?.groupValues?.get(1) ?: "unknown"
 
-                    // Find the JAR download URL (look for browser_download_url ending in .jar)
-                    val jarUrlMatch = Regex(""""browser_download_url"\s*:\s*"([^"]+$artifactPrefix[^"]*\.jar)"""").find(responseText)
+                    // Find the JAR download URL.
+                    //
+                    // `findAll` + the `-thin.jar` filter, not `find`: a plugin
+                    // release publishes BOTH `<prefix>-<version>.jar` (what
+                    // buildPluginJar produces, with the plugin's dependencies
+                    // bundled) and `<prefix>-<version>-thin.jar` (the module's
+                    // bare `:jar` output, which is given that classifier purely
+                    // so it stops clobbering the real one). Whichever GitHub
+                    // happens to list first won here, and for fluck-browser that
+                    // was the thin one -- every shipped bundle through 9.4.33
+                    // contains `boss-plugin-fluck-browser-1.2.24-thin.jar`,
+                    // 1 MB of a 4 MB plugin, missing everything it needs to run.
+                    //
+                    // This is exactly PluginStoreSetup.pickPluginJarUrl, which
+                    // the host uses for the same decision and which
+                    // PluginStoreSetupMinVersionGateTest already guards against
+                    // picking a thin JAR. The two pickers must not disagree.
+                    val jarUrl =
+                        Regex(""""browser_download_url"\s*:\s*"([^"]+${Regex.escape(artifactPrefix)}[^"]*\.jar)"""")
+                            .findAll(responseText)
+                            .map { it.groupValues[1] }
+                            .firstOrNull { !it.endsWith("-thin.jar") }
 
-                    if (jarUrlMatch == null) {
+                    if (jarUrl == null) {
                         logger.warn("⚠️  No JAR asset found in release for $repo")
                         continue
                     }
 
-                    val jarUrl = jarUrlMatch.groupValues[1]
                     val jarFileName = jarUrl.substringAfterLast("/")
                     val destFile = File(bundledPluginsDir, jarFileName)
+
+                    // Clean up other versions of THIS plugin.
+                    //
+                    // `startsWith(artifactPrefix)` is not a plugin-name boundary.
+                    // "boss-plugin-terminal" is a prefix of
+                    // "boss-plugin-terminal-tab-2.5.59.jar", and terminal is
+                    // processed one entry after terminal-tab in the list above --
+                    // so this deleted the 35 MB terminal plugin it had just
+                    // downloaded, logged it as an "old version", and finished
+                    // green. terminal-tab is absent from every shipped bundle.
+                    //
+                    // A plugin JAR is `<prefix>-<version>.jar`, so requiring the
+                    // version separator (a hyphen followed by a digit) is what
+                    // makes the prefix a boundary: "-tab-2.5.59.jar" does not
+                    // start with a digit, "-1.0.10.jar" does. A stale
+                    // `-thin.jar` still matches and is still cleaned up.
+                    //
+                    // Runs BEFORE the already-have-it check, and never touches
+                    // the file about to be kept: a directory left holding both
+                    // the real JAR and a thin one from before the previous
+                    // commit needs the thin one gone even on a no-op run.
+                    val ownVersionedJar = Regex("""^${Regex.escape(artifactPrefix)}-\d.*\.jar$""")
+                    bundledPluginsDir
+                        .listFiles()
+                        ?.filter { ownVersionedJar.matches(it.name) && it.name != jarFileName }
+                        ?.forEach { oldFile ->
+                            logger.lifecycle("🗑️  Removing old version: ${oldFile.name}")
+                            oldFile.delete()
+                        }
 
                     // Check if we already have this version
                     if (destFile.exists()) {
                         logger.lifecycle("✅ $jarFileName already exists (version: $tagName)")
                         continue
                     }
-
-                    // Clean up old versions of this plugin
-                    bundledPluginsDir
-                        .listFiles()
-                        ?.filter {
-                            it.name.startsWith(artifactPrefix) && it.name.endsWith(".jar")
-                        }?.forEach { oldFile ->
-                            logger.lifecycle("🗑️  Removing old version: ${oldFile.name}")
-                            oldFile.delete()
-                        }
 
                     // Download the JAR using curl
                     logger.lifecycle("⬇️  Downloading $jarFileName...")
@@ -412,6 +463,37 @@ val downloadBundledPlugins =
                     logger.lifecycle("✅ Downloaded $jarFileName (version: $tagName, size: ${destFile.length()} bytes)")
                 } catch (e: Exception) {
                     logger.warn("⚠️  Failed to download bundled plugin from $repo: ${e.message}")
+                }
+            }
+
+            // Every path out of the loop above is a warn-and-continue: a release
+            // whose GitHub call 403s, whose repo has no release yet, or whose
+            // asset regex matches nothing produces a log line and a green build.
+            // That is how a missing terminal-tab and a thin fluck-browser both
+            // shipped for months -- nothing ever asserted the directory was
+            // complete. So assert it here.
+            val landed = bundledPluginsDir.listFiles()?.map { it.name }.orEmpty()
+            val missing =
+                bundledPlugins
+                    .map { (_, artifactPrefix) -> artifactPrefix }
+                    .filter { artifactPrefix ->
+                        val versioned = Regex("""^${Regex.escape(artifactPrefix)}-\d.*\.jar$""")
+                        landed.none { versioned.matches(it) }
+                    }
+
+            if (missing.isEmpty()) {
+                logger.lifecycle("✅ All ${bundledPlugins.size} bundled plugins present")
+            } else {
+                val summary =
+                    "Bundled plugins missing after download: ${missing.joinToString(", ")} " +
+                        "(present: ${landed.sorted().joinToString(", ").ifEmpty { "none" }})"
+                // On CI this is a release about to go out without plugins it
+                // promises, which is worse than a failed build. Locally it stays
+                // a warning: a developer may legitimately have no network.
+                if (ciProvider.orNull == "true") {
+                    throw GradleException(summary)
+                } else {
+                    logger.warn("⚠️  $summary")
                 }
             }
         }
