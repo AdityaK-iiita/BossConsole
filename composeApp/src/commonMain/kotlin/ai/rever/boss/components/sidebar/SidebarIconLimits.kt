@@ -25,6 +25,16 @@ object SidebarIconRail {
     /** The three-dot customize button row (4dp padding + 32dp button). */
     val CustomizeButton = 40.dp
 
+    /**
+     * Height the tools launcher takes when a strip carries it.
+     *
+     * One [RowPitch], because it is one 32dp icon with the same 4dp above and below every other
+     * icon in the rail gets. Reserved rather than assumed: like [CustomizeButton], it is laid out
+     * outside the slots' weighted region, so a budget that did not know about it would let the
+     * slots fill the whole rail and push this off the bottom of the window.
+     */
+    val ToolLauncherButton = 40.dp
+
     /** `SDivider`: 1dp line + 8dp padding on either side. */
     val SectionDivider = 17.dp
 

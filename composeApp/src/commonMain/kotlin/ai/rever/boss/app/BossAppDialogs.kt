@@ -12,6 +12,7 @@ import ai.rever.boss.components.dialogs.ProjectSelectionDialog
 import ai.rever.boss.components.dialogs.ShortcutHelpDialog
 import ai.rever.boss.components.dialogs.TabType
 import ai.rever.boss.components.dialogs.TerminalLinkOpenDialog
+import ai.rever.boss.components.dialogs.ToolLauncherDialog
 import ai.rever.boss.components.dialogs.TopOfMindDialog
 import ai.rever.boss.components.events.FileEventBus
 import ai.rever.boss.components.events.PanelEventBus
@@ -440,7 +441,14 @@ internal fun BossAppDialogs(state: BossAppState) {
         )
     }
 
-    // Global search dialog (Issue #92)
+    // The tools launcher's dialog.
+    if (state.showToolLauncherDialog) {
+        // In the MAIN composition, not inside whichever chrome raised it - see BossAppState.
+        state.draggablePanelComponent.ToolLauncherDialog(
+            onDismiss = { state.showToolLauncherDialog = false },
+        )
+    }
+
     if (state.showGlobalSearchDialog) {
         GlobalSearchDialog(
             projectPath = selectedProject.path,

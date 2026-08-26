@@ -49,7 +49,10 @@ class CustomizeSidebarRevealTest {
     fun `is a no-op when the strip is already showing`() {
         // The effect compares before writing, so returning an equal object is what keeps
         // "Customize Sidebar..." from writing the settings file on every invocation.
-        val visible = WindowAppearanceSettings()
+        //
+        // Both strips named explicitly: this test is about the no-op, not about what the shipped
+        // defaults are, and they now start hidden - which is the case the test ABOVE covers.
+        val visible = WindowAppearanceSettings(showLeftStrip = true, showRightStrip = true)
 
         assertEquals(visible, withCustomizeTargetRevealed(visible, onLeft = true))
         assertEquals(visible, withCustomizeTargetRevealed(visible, onLeft = false))

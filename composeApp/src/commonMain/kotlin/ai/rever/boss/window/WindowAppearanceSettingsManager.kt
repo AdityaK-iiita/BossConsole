@@ -18,9 +18,10 @@ expect object WindowAppearanceSettingsManager {
     suspend fun updateSettings(settings: WindowAppearanceSettings)
 
     /**
-     * Get default settings for the current platform
-     * macOS: showTitleBar = true
-     * Linux/Windows: showTitleBar = false
+     * Get default settings for the current platform.
+     *
+     * No longer differs by platform: the title row is off everywhere. See
+     * `WindowAppearanceSettings.showTitleBar`.
      */
     fun getDefaultSettings(): WindowAppearanceSettings
 }

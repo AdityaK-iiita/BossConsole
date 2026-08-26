@@ -6,6 +6,7 @@ import ai.rever.boss.plugin.ui.BossTheme
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -81,7 +82,9 @@ private val GLYPH_HEIGHT = 12.dp
  * follows a divider as it is dragged because it is drawn from the panes' measured rectangles.
  *
  * Clicking the row activates the pane, so the header is also the fastest way to move between
- * panes without touching their content.
+ * panes without touching their content. Double-clicking it shows that pane alone, the same as
+ * double-clicking it in the split map - the header and the map are the two places a pane is a
+ * thing you can point at, and they should answer the same gestures.
  */
 @Composable
 internal fun TabBarGroupHeader(
@@ -139,13 +142,17 @@ private fun GroupHeaderRow(
                 .hoverable(hover)
                 .hoverable(press)
                 .background(if (hovered) colors.raised else Color.Transparent)
-                .clickable(onClick = group.activate)
-                .padding(horizontal = 10.dp),
+                // combinedClickable, so the row answers both gestures: single to go there, double
+                // to show it alone. The map's own panes are wired exactly this way.
+                .combinedClickable(
+                    onClick = group.activate,
+                    onDoubleClick = group.zoom,
+                ).padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         HoverTooltipBox(
-            text = "Go to this pane",
+            text = "Go to this pane - double-click for full screen",
             placement = TooltipPlacement.END,
             modifier = Modifier.size(width = GLYPH_WIDTH, height = GLYPH_HEIGHT),
         ) {

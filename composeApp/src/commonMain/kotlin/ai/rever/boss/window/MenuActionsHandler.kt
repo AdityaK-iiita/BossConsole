@@ -364,16 +364,18 @@ object MenuActionsHandler {
     }
 
     /**
-     * Trigger a "Reveal Plugin" action for the specified window and plugin.
+     * Trigger a "Reveal Plugin" action for the specified window and panel.
      *
      * @param windowId The ID of the window where the action was triggered
-     * @param pluginId The ID of the plugin to reveal
+     * @param panelId The PANEL id to reveal - `PanelId.panelId`, e.g. "bookmarks". Not the
+     *   plugin id: the handler resolves it through `BossDraggableComponent.activatePlugin`, which
+     *   matches panel ids and returns silently when nothing matches.
      */
     fun triggerRevealPlugin(
         windowId: String,
-        pluginId: String,
+        panelId: String,
     ) {
-        _revealPluginEvents.tryEmit(Pair(windowId, pluginId))
+        _revealPluginEvents.tryEmit(Pair(windowId, panelId))
     }
 
     /**

@@ -18,18 +18,22 @@ import kotlin.test.assertTrue
  */
 class BarContextMenuMappingTest {
     @Test
-    fun `every bar but the top one starts visible`() {
-        // The three strips default to shown, which is what makes those fields safe to add to an
-        // existing settings file: the manager decodes with ignoreUnknownKeys, so an absent key
-        // means "shown" and an upgrade cannot silently strip a user's chrome.
+    fun `only the status bar starts visible`() {
+        // A window opens as its content, the vertical tab bar, and the status line.
         //
-        // The TOP bar is the exception and deliberately so - see WindowAppearanceMigrations, which
-        // is what moves existing files rather than letting a decode default do it silently.
+        // The three that are hidden are only safe to hide because of where their contents went:
+        // the tab bar's foot carries Sign Out, Settings, Tools and Search, and the Tools launcher
+        // reaches every plugin panel the strips used to hold. Before those existed this default
+        // made plugins unreachable and took Sign Out off screen with the top bar, so if either is
+        // ever removed, these defaults have to move back with them.
+        //
+        // The status bar stays because nothing replaces it: the current URL, memory and transient
+        // status messages are reachable from no menu and no launcher.
         val defaults = WindowAppearanceSettings()
 
-        assertFalse(defaults.isBarVisible(ChromeBar.TOP), "the top bar now defaults to hidden")
-        ChromeBar.entries.filter { it != ChromeBar.TOP }.forEach { bar ->
-            assertTrue(defaults.isBarVisible(bar), "${bar.name} should default to visible")
+        assertTrue(defaults.isBarVisible(ChromeBar.BOTTOM), "the status bar should stay visible")
+        ChromeBar.entries.filter { it != ChromeBar.BOTTOM }.forEach { bar ->
+            assertFalse(defaults.isBarVisible(bar), "${bar.name} should default to hidden")
         }
     }
 
@@ -68,8 +72,11 @@ class BarContextMenuMappingTest {
         // showTitleBar is the pre-existing flag for a different strip (the 26dp OS-style title bar),
         // and it deliberately has no ChromeBar member - it is not right-clickable and its toggle
         // already lives in Settings. Hiding every bar here must not switch it off as a side effect.
+        // Switched ON explicitly: the flag now defaults to false like everything else, and this
+        // test is about withBarVisible leaving it alone rather than about what it defaults to.
+        val start = WindowAppearanceSettings(showTitleBar = true)
         val allHidden =
-            ChromeBar.entries.fold(WindowAppearanceSettings()) { acc, bar ->
+            ChromeBar.entries.fold(start) { acc, bar ->
                 acc.withBarVisible(bar, visible = false)
             }
 

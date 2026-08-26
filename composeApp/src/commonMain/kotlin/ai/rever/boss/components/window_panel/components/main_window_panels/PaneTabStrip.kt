@@ -103,6 +103,14 @@ internal fun PaneTabStrip(
     /** The drop, once the pointer is released. */
     onTabDropResult: (TabDropResult) -> Unit,
     /**
+     * Closes the tab at this index, from the cross a chip reveals while hovered.
+     *
+     * The strip is where a pane's tabs are while the bar has that pane collapsed, so without this
+     * closing one means opening that pane's group in the sidebar first - the trip the strip
+     * exists to save, for the action people take most often after switching.
+     */
+    onClose: (Int) -> Unit,
+    /**
      * The strip's own right-click menu, for the space between the chips and the end of the row.
      *
      * The same menu the vertical bar offers on its empty space, so the two surfaces cannot come
@@ -161,6 +169,7 @@ internal fun PaneTabStrip(
                     panelId = panelId,
                     tabIndex = index,
                     onDragEnd = { result -> result?.let(onTabDropResult) },
+                    onClose = { onClose(index) },
                 )
             }
         }
@@ -229,6 +238,8 @@ internal fun PaneIndicatedContent(
     onTabDropResult: (TabDropResult) -> Unit,
     /** The strip's own right-click menu. See [PaneTabStrip]. */
     menuItems: List<ContextMenuItem>,
+    /** Closes the tab at this index. See [PaneTabStrip]. */
+    onClose: (Int) -> Unit,
     content: @Composable (Modifier) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -244,6 +255,7 @@ internal fun PaneIndicatedContent(
                 panelId = panelId,
                 onTabDropResult = onTabDropResult,
                 menuItems = menuItems,
+                onClose = onClose,
             )
             Divider(color = BossTheme.colors.line)
         }

@@ -1283,6 +1283,9 @@ fun BossTabsComponent.BossMainPanel(
                 // included - so "New Tab" from a background pane's strip lands in THAT pane
                 // rather than in whichever one the bar happens to lead.
                 menuItems = rememberBarMenuItems(openNewTab = { paneNewTab?.invoke() }),
+                // removeTab, the same call the tab's own Close Tab menu entry makes, so a tab
+                // closed from the strip and one closed from the sidebar go the same way.
+                onClose = { index -> removeTab(index) },
                 tabDragComponent = tabDragComponent,
                 panelId = currentPanelId,
                 onTabDropResult = onTabDropResult,

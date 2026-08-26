@@ -196,6 +196,15 @@ fun WindowVerticalTabBar(
      * about. It measures panes and lists tabs; whoever composes the window knows about projects.
      */
     footer: @Composable () -> Unit = {},
+    /**
+     * Window chrome to sit BELOW the split map, at the very foot of the bar.
+     *
+     * Separate from [footer] because the two sit either side of the map and mean different things:
+     * the footer holds what belongs to this window's contents (the project and workspace pickers),
+     * this holds what belongs to the app - Settings, Search, Sign Out and the tools launcher,
+     * when there is no strip and no top bar left to hold them. See `focusQuickActionsPlacement`.
+     */
+    belowMap: @Composable () -> Unit = {},
 ) {
     // The pane the user is working in owns the bar's shared chrome: its bar menu, its Favorites
     // shelf, and where a favourite opens. Falling back to the first group keeps every one of
@@ -257,6 +266,7 @@ fun WindowVerticalTabBar(
                 onStripBounds = { stripBounds = it },
                 tabDragComponent = tabDragComponent.takeIf { registerBounds },
                 footer = footer,
+                belowMap = belowMap,
                 zoomed = zoomed,
                 onExitZoom = onExitZoom,
             )
@@ -297,6 +307,16 @@ fun BoxScope.WindowRevealedTabBarDrawer(
     reveal: TabBarRevealState,
     contentRegion: IntRect?,
     onPin: (() -> Unit)?,
+    /**
+     * The window chrome the pinned bar carries, so the revealed one carries it too.
+     *
+     * The drawer is a full bar, not a preview of one: while it is open it is the only bar on
+     * screen, since the in-flow one is down to its rail. Leaving these out meant the project and
+     * workspace pickers and the host's own actions - Sign Out, Settings, Tools, Search - were
+     * reachable from the pinned bar and from nowhere at all once it was collapsed.
+     */
+    footer: @Composable () -> Unit = {},
+    belowMap: @Composable () -> Unit = {},
 ) {
     // Built here rather than taken as a parameter: dismissing a drawer is the drawer's own
     // business, and the pointer state it needs is a composable read the caller had to make on the
@@ -348,6 +368,20 @@ fun BoxScope.WindowRevealedTabBarDrawer(
             onPin = onPin,
             tabDragComponent = null,
             registerBounds = false,
+            footer = footer,
+            belowMap = belowMap,
+            // The drawer is a second bar, and a bar with no idea a pane is zoomed draws its map
+            // as an ordinary arrangement: no signal border, no "Exit Full Screen" across it, and
+            // nothing clickable. On a COLLAPSED bar the drawer is the only map there is, so that
+            // left a zoomed pane with no way back from the tab bar at all.
+            zoomed = splitViewState.zoomedPanelId != null,
+            // Dismissed as well as exited, for the same reason picking a tab dismisses: the
+            // arrangement coming back is behind this drawer, and leaving it up covers the thing
+            // the click just asked to see.
+            onExitZoom = {
+                splitViewState.exitZoom()
+                onDismiss()
+            },
         )
     }
 }
@@ -406,6 +440,7 @@ private fun ExpandedGroups(
     onStripBounds: (Rect) -> Unit,
     tabDragComponent: TabDraggableComponent?,
     footer: @Composable () -> Unit,
+    belowMap: @Composable () -> Unit,
     zoomed: Boolean,
     onExitZoom: () -> Unit,
 ) {
@@ -465,6 +500,7 @@ private fun ExpandedGroups(
         // The one place that shows the whole arrangement at once, which is what makes a four-way
         // split legible rather than a run of headers to read in order.
         SplitMap(groups = groups, zoomed = zoomed, onExitZoom = onExitZoom)
+        belowMap()
     }
 }
 

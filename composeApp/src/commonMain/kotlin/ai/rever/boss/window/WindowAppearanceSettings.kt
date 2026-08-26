@@ -8,10 +8,16 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class WindowAppearanceSettings(
     /**
-     * Whether to show the Boss Console title bar
-     * Default: true on macOS, false on Linux/Windows
+     * Whether to show the Boss Console title bar.
+     *
+     * Off everywhere now, macOS included. On Windows and Linux it was always a plain bar above
+     * the content. On macOS it was something else: the window sets `apple.awt.fullWindowContent`,
+     * so the traffic lights are drawn OVER the content and this row existed to hold them - its own
+     * content is a centred title string. Reserving the window's full width to protect one 78dp
+     * corner is the wrong shape, so the clearance moved onto whichever column is leftmost. See
+     * `macTrafficLightInset`, which also names the one case that still wants the row.
      */
-    val showTitleBar: Boolean = true,
+    val showTitleBar: Boolean = false,
     /**
      * Whether the action bar at the top of the window is on screen. Its height comes from
      * `ChromeDimens.topBarHeight`, so quoting a dp figure here would go stale.
@@ -22,22 +28,37 @@ data class WindowAppearanceSettings(
      * The scaffold requires both to agree, so a bar shows when this is true and focus mode is not
      * currently clearing it.
      *
-     * The other three default to `true` on every platform, which is what made them safe to add to
-     * an existing settings file: the manager decodes with `ignoreUnknownKeys`, so an absent key
-     * reads back as "shown" and nobody's chrome disappeared on upgrade.
+     * **The top bar and both icon strips are off by default; the status bar stays on.** A window
+     * opens as its content, the vertical tab bar, and the status line along the bottom.
      *
-     * THIS one no longer does. The top bar is off by default now, so a file written before the
-     * key existed would decode as hidden and lose a bar its owner never asked to lose. That is
-     * what [settingsVersion] and [WindowAppearanceMigrations] are for: the migration decides
-     * deliberately, once, instead of a decode default deciding silently.
+     * Hiding the other three is only sane because there is now somewhere for what they carried to
+     * go: the tab bar's foot holds Sign Out, Settings, Tools and Search (see
+     * `focusQuickActionsPlacement`), and the Tools launcher reaches every plugin panel the strips
+     * used to hold (see `toolLauncherPlacement`). Before those existed, hiding both strips made
+     * plugins unreachable and hiding the top bar took Sign Out with it.
+     *
+     * The status bar is the exception because nothing replaces it. It is the only always-on
+     * readout of what the app is doing - the current URL, memory, transient status messages - and
+     * none of that is reachable from a menu or a launcher. It also costs one 30dp row, where a
+     * strip costs 41dp of width and the top bar a whole row of chrome.
+     *
+     * The **decode default is what moves an existing install**, and that works here because the
+     * settings file is written without defaults: a value equal to the default is never stored, so
+     * a file that does not mention a bar picks the new default up. [WindowAppearanceMigrations]
+     * exists for the case a decode default cannot express, not for this one.
+     *
+     * Known limit of that, stated because it is invisible: a user who deliberately turned a strip
+     * *on* while `true` was the default has nothing written for it either, so they are
+     * indistinguishable from someone who never touched it and their strip goes away too. No
+     * migration can tell those apart - the information was never recorded.
      */
     val showTopBar: Boolean = false,
     /** Whether the status bar at the bottom of the window is on screen. See [showTopBar]. */
     val showBottomBar: Boolean = true,
     /** Whether the left icon strip is on screen. See [showTopBar]. */
-    val showLeftStrip: Boolean = true,
+    val showLeftStrip: Boolean = false,
     /** Whether the right icon strip is on screen. See [showTopBar]. */
-    val showRightStrip: Boolean = true,
+    val showRightStrip: Boolean = false,
     /**
      * How tabs in the main (top) tab bar are sized.
      * Default: SHRINK_TO_FIT (Safari behaviour)
@@ -122,13 +143,17 @@ data class WindowAppearanceSettings(
      * bar is hidden by default now. A one-pane window could therefore reach a state with no tab
      * titles anywhere on screen, which is the state the strip exists to prevent.
      *
-     * So the pane count is a preference rather than a rule - but it stays ON by default, which
-     * makes this purely additive: every install keeps the behaviour it already had, and anyone
-     * who wants the strip in an unsplit window can switch this off. That is also why no
-     * [WindowAppearanceMigrations] step is needed for it. A file written before this field
-     * existed decodes to the default, and the default is what that build already did.
+     * So the pane count is a preference rather than a rule, and it is OFF by default: the strip
+     * shows in a one-pane window too, because that is the window most likely to have no tab titles
+     * anywhere else on screen. Anyone who wants the old split-only behaviour switches it on.
+     *
+     * This DOES change what an existing install does, and reaches one without a migration step: a
+     * file written before this field existed does not name it, so it decodes to whatever the
+     * default is now. That is the mechanism `WindowAppearanceEncodeDefaultsTest` pins - and its
+     * limit applies here too, since a file that omits the field cannot say whether that is a
+     * preference or simply an older build.
      */
-    val paneTabStripOnlyWhenSplit: Boolean = true,
+    val paneTabStripOnlyWhenSplit: Boolean = false,
     /**
      * Whether right-click menus are the operating system's own rather than BOSS-drawn.
      *
@@ -168,10 +193,20 @@ object WindowAppearanceMigrations {
      * purpose, and everything else is preserved. The step runs at most once, because the migrated
      * file records the new version.
      *
-     * Changing the DEFAULT alone would not have done this. The manager writes the whole object on
-     * every save, so an existing file names both values explicitly and would keep them for ever -
-     * the new defaults would reach new installs only, which is not what "by default" means to
-     * somebody who already has BOSS open.
+     * Changing the DEFAULT alone would not reliably have done this, which is why this step exists
+     * even though a later one relies on exactly that. The manager omits default-valued fields when
+     * it writes (`encodeDefaults` is false), so a changed default DOES reach a file that never
+     * mentioned the field - but this pair is not in that position: an install on the old shipped
+     * defaults had `showTopBar = true` and `tabBarPosition = TOP`, both differing from the class
+     * defaults of the day and therefore both written out explicitly. A default flip would have
+     * left those files untouched for ever.
+     *
+     * The flags flipped later - the title row and the two icon strips - are the other case: their
+     * old shipped values equalled the class defaults, so they were never written, and changing the
+     * default is enough. That rests entirely on `encodeDefaults` staying false, which
+     * `WindowAppearanceEncodeDefaultsTest` pins. It also inherits the same blindness: someone who
+     * deliberately chose the value that used to be the default is indistinguishable from someone
+     * who never touched it, and moves with everyone else.
      *
      * One thing this reasons over that it cannot actually see: it tests decoded VALUES, not what
      * the file said. A key that is absent decodes to the field's default, so a file written

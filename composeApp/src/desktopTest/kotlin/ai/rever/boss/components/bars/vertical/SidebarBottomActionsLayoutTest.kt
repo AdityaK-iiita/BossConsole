@@ -216,6 +216,10 @@ class SidebarBottomActionsLayoutTest {
         // Order carries intent: the destructive action is deliberately not the one in the very
         // corner of the window, where it is easiest to hit by accident. In a bottom-anchored column
         // that means topmost, which is the opposite end from the row the top bar lays out.
+        //
+        // The rest of the order is Settings then Search, matching focusQuickActionButtons - which
+        // is one list precisely so the rail, the floating cluster, the tab bar's footer and the
+        // top bar cannot disagree about it.
         mountRail(quickActions())
 
         val signOut = iconBounds("Sign Out")
@@ -223,8 +227,8 @@ class SidebarBottomActionsLayoutTest {
         val settings = iconBounds("Settings")
 
         assertTrue(
-            signOut.top < search.top && search.top < settings.top,
-            "expected Sign Out above Search above Settings, got ${signOut.top}, ${search.top}, ${settings.top}",
+            signOut.top < settings.top && settings.top < search.top,
+            "expected Sign Out above Settings above Search, got ${signOut.top}, ${settings.top}, ${search.top}",
         )
     }
 

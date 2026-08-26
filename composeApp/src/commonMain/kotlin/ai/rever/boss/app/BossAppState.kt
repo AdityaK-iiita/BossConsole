@@ -82,6 +82,16 @@ internal class BossAppState(
     var newTabDialogInitialType by mutableStateOf<TabType?>(null)
     var showTopOfMindDialog by mutableStateOf(false)
     var showGlobalSearchDialog by mutableStateOf(false)
+
+    /**
+     * The tools launcher's dialog.
+     *
+     * Owned by the window rather than by the button that opens it, because one of the buttons
+     * lives in the floating quick-actions cluster - a heavyweight overlay window that is torn
+     * down the moment the main window loses focus, which opening a dialog does. See
+     * `ToolLauncherButton`.
+     */
+    var showToolLauncherDialog by mutableStateOf(false)
     var showProjectDialog by mutableStateOf(false)
 
     /**

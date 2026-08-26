@@ -40,6 +40,12 @@ class ChromeMetricsTest {
         WindowAppearanceSettings(
             showTitleBar = true,
             showTopBar = true,
+            // Spelled out rather than left to the defaults. "Classic" means every bar on, and the
+            // shipped defaults now have all four off - a fixture that leans on them is measuring
+            // whatever the defaults happen to be rather than the chrome it names.
+            showBottomBar = true,
+            showLeftStrip = true,
+            showRightStrip = true,
             tabBarPosition = TabBarPosition.TOP,
         )
 
@@ -87,17 +93,18 @@ class ChromeMetricsTest {
     }
 
     @Test
-    fun `the shipped defaults spend less height and more width than the classic chrome`() {
-        // What a fresh install actually gets: no top bar, tabs down the left. The trade is the
-        // point - the row the tab bar occupied and the top bar above it both leave the vertical
-        // axis, and a 200dp column arrives on the horizontal one.
+    fun `the title row plus the shipped defaults still spend less height than classic chrome`() {
+        // The shipped defaults PLUS the title row, which is no longer part of them - on macOS the
+        // traffic lights are handled by insetting the leftmost column instead (see
+        // `macTrafficLightInset`), and a fresh install has no title row at all. Named explicitly
+        // here because this case is about what the row costs when someone turns it back on.
         val shippedMac = WindowAppearanceSettings(showTitleBar = true)
         val shipped = ChromeMetrics.mainPanelBudget(shippedMac, focusOff, comfortable)
 
         // 27 title (26+1) + 31 bottom (30+1) + 4 ring. No top bar, and no tab row.
         assertEquals(62.dp, shipped.vertical)
-        // 41 per strip (40+1) + 4 ring + 200 bar + 1 divider.
-        assertEquals(287.dp, shipped.horizontal)
+        // 4 ring + 200 bar + 1 divider. Neither strip is drawn.
+        assertEquals(205.dp, shipped.horizontal)
 
         val classic = ChromeMetrics.mainPanelBudget(classicMac, focusOff, comfortable)
         assertTrue(shipped.vertical < classic.vertical, "the shipped chrome must cost less height")

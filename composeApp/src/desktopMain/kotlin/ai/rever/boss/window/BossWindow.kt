@@ -257,6 +257,11 @@ fun ApplicationScope.BossWindow(
             window.rootPane.putClientProperty("apple.awt.windowTitleVisible", false)
         }
 
+        // The traffic lights' colours come from the window's NSAppearance, which is decided
+        // before AWT starts - see `applyMacAppearanceFromTheme` in main.kt. Nothing per-window
+        // works: `apple.awt.windowAppearance` was tried here and is not a property this JDK
+        // reads, so it looked like a fix and changed nothing.
+
         // Publish Compose's authoritative placement. Native macOS fullscreen does not
         // reliably report full-display AWT bounds, so browser-video fullscreen uses this
         // state to decide whether to overlay the existing fullscreen Space.
@@ -792,7 +797,7 @@ fun ApplicationScope.BossWindow(
                         onClick = {
                             MenuActionsHandler.triggerRevealPlugin(
                                 windowId = windowState.id,
-                                pluginId = panelInfo.id.panelId,
+                                panelId = panelInfo.id.panelId,
                             )
                         },
                     )

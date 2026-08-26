@@ -375,10 +375,14 @@ internal fun BossAppMenuActionEffects(
     // Handle Plugin menu events
     LaunchedEffect(windowId) {
         MenuActionsHandler.revealPluginEvents
-            .onEach { (eventWindowId, pluginId) ->
+            .onEach { (eventWindowId, panelId) ->
                 if (eventWindowId == windowId) {
-                    // Activate the plugin (same as clicking its sidebar icon)
-                    state.draggablePanelComponent.activatePlugin(pluginId)
+                    // Activate the plugin (same as clicking its sidebar icon).
+                    //
+                    // A PANEL id, whatever the event's shape suggests: activatePlugin matches on
+                    // `pluginContentId.panelId`, and passing a plugin id here is the exact miss
+                    // its KDoc documents - it finds nothing and the menu item does nothing.
+                    state.draggablePanelComponent.activatePlugin(panelId)
                 }
             }.launchIn(this)
     }

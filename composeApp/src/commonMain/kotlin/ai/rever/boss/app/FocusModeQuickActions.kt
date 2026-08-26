@@ -40,14 +40,28 @@ import androidx.compose.ui.unit.dp
  * Hard upper bound on the quick-actions overlay: its size before measurement, and the ceiling every
  * later measurement is taken against.
  *
- * A bound, not an estimate - content that would exceed it is CLIPPED. The real content is ~94x30dp:
- * three `BossActionButton`s at 28.dp square in `imageVector` mode, plus `space.xs` on each end of
- * the row and the 1.dp border. Kept close to that rather than round, because until measurement
- * lands this is also the region the overlay swallows clicks in - the same reason
- * `TOAST_OVERLAY_INITIAL_SIZE` gives for keeping itself no larger than it needs to be. The margin
- * is deliberately NOT in here; it rides in the inset (see [QUICK_ACTIONS_MARGIN]).
+ * A bound, not an estimate - content that would exceed it is CLIPPED. Three `BossActionButton`s at
+ * 28.dp square in `imageVector` mode come to ~94x30dp with `space.xs` on each end of the row and
+ * the 1.dp border. Kept close to that rather than round, because until measurement lands this is
+ * also the region the overlay swallows clicks in - the same reason `TOAST_OVERLAY_INITIAL_SIZE`
+ * gives for keeping itself no larger than it needs to be.
+ *
+ * Three actions is the common case, which is why it is this constant that carries the plain name:
+ * the fourth button's width is asked for only when there IS a fourth button
+ * ([QUICK_ACTIONS_OVERLAY_SIZE_WITH_LAUNCHER]), rather than reserved always, which would spend a
+ * frame swallowing clicks 32dp wider than the cluster draws.
+ *
+ * The margin is deliberately NOT in here; it rides in the inset (see [QUICK_ACTIONS_MARGIN]).
  */
 internal val QUICK_ACTIONS_OVERLAY_SIZE = DpSize(100.dp, 34.dp)
+
+/**
+ * The same bound with the tools launcher in the row, when both icon strips are gone.
+ *
+ * See `toolLauncherPlacement` for when that happens, and [QUICK_ACTIONS_OVERLAY_SIZE] for why the
+ * two are separate rather than one number wide enough for both.
+ */
+internal val QUICK_ACTIONS_OVERLAY_SIZE_WITH_LAUNCHER = DpSize(132.dp, 34.dp)
 
 /**
  * Gap between the cluster and the corner it sits in.
@@ -109,6 +123,15 @@ internal enum class FocusQuickActionsPlacement {
     /** The bottom of the right icon rail, as ordinary sidebar chrome. */
     RIGHT_RAIL,
 
+    /**
+     * A row at the foot of the vertical tab bar, under the split map.
+     *
+     * Preferred over [FLOATING] whenever that bar is on screen, for the reason the rail is: the
+     * floating cluster is an always-on-top native window with no click-through, and the tab bar
+     * already ends in host chrome with room under it.
+     */
+    TAB_BAR_FOOTER,
+
     /** A floating cluster in the content area's bottom-right corner. */
     FLOATING,
 }
@@ -148,11 +171,30 @@ internal fun focusQuickActionsPlacement(
     topBarHidden: Boolean,
     rightStripHidden: Boolean,
     showTopBar: Boolean,
+    /**
+     * Whether the window's tab bar runs down the left edge AND is expanded, which is what gives
+     * these actions a home under its split map.
+     *
+     * The expanded half is not a detail: a collapsed bar draws its rail and nothing else, so its
+     * foot does not exist and these four would render nowhere at all. Read from
+     * `WindowAppearanceSettings`, which is a standing choice, so it needs none of the care the
+     * reveal flags do - with the same known gap the traffic-light rule has, that a bar which
+     * rails itself on a narrow window is decided during layout rather than in settings.
+     */
+    verticalTabBar: Boolean = false,
 ): FocusQuickActionsPlacement =
     when {
         !focusQuickActionsVisible(settings, topBarHidden, showTopBar) -> FocusQuickActionsPlacement.NONE
-        !railExists(settings, rightStripHidden) -> FocusQuickActionsPlacement.FLOATING
-        else -> FocusQuickActionsPlacement.RIGHT_RAIL
+
+        // Rail first, unchanged: where there is a right rail these have always gone in it, and it
+        // is the least intrusive of the three.
+        railExists(settings, rightStripHidden) -> FocusQuickActionsPlacement.RIGHT_RAIL
+
+        // Then the tab bar's foot, which displaces only the floating cluster - it is chrome the app
+        // already draws, where the cluster is a native always-on-top window with no click-through.
+        verticalTabBar -> FocusQuickActionsPlacement.TAB_BAR_FOOTER
+
+        else -> FocusQuickActionsPlacement.FLOATING
     }
 
 /** Test tag of the cluster - see `FocusModeQuickActionsTest`. */
@@ -192,7 +234,7 @@ internal fun focusQuickActionsRail(
     }
 
 /** One rail icon, matching what `DraggableSidebarSection` gives the plugin icons above it. */
-private val SIDEBAR_ICON_SIZE = 32.dp
+internal val SIDEBAR_ICON_SIZE = 32.dp
 
 /**
  * How many rail rows to keep reserved for the quick actions, whether or not they are on screen at
@@ -254,24 +296,40 @@ internal const val FOCUS_QUICK_ACTION_COUNT = 3
 /**
  * Settings, Search and Sign Out as three separate composables, in the order both hosts want them.
  *
- * One definition, two layouts. The **order carries the same intent on both axes**: Sign Out first,
- * so the destructive action is the one furthest from the window corner - leftmost in the floating
- * row, topmost in the bottom-anchored rail column - rather than the one sitting in it. That is also
- * the order `BossTopRightBar` uses, which is where these three live when the top bar is up.
+ * One definition, three layouts, in the order Sign Out, Settings, Tools, Search.
+ *
+ * The **order carries the same intent on every axis**: Sign Out first, so the destructive action
+ * is the one furthest from the window corner - leftmost in the floating row and in the tab bar's
+ * footer, topmost in the bottom-anchored rail column - rather than the one sitting in it. Settings
+ * and Tools sit together after it because both are "go and configure or open something", and
+ * Search ends the row as the one that opens a field rather than a place. `BossTopRightBar` uses
+ * the same order, which is where these live when the top bar is up.
  *
  * A list rather than a composable that lays them out, because the two hosts disagree about more
  * than the axis: the rail has to reserve its own height from the *count* before it renders anything
  * (see `SidebarIconRail.bottomSectionHeight`), and a list is the only shape where the count and the
  * content cannot drift apart.
  */
-private fun focusQuickActionButtons(
+@Suppress("LongParameterList")
+internal fun focusQuickActionButtons(
     hintDirection: Panel,
     modifier: Modifier = Modifier,
     onShowSettings: () -> Unit,
     onShowSearch: () -> Unit,
     onSignOut: () -> Unit,
+    /**
+     * The tools launcher, when both icon strips are switched off and there is no strip to put it
+     * in - see `toolLauncherPlacement`. Rendered between Settings and Search, so the two things
+     * that open a place sit together and Sign Out stays furthest from the corner.
+     *
+     * It can never be non-null in the [FocusQuickActionsPlacement.RIGHT_RAIL] flavour: that
+     * placement needs a right strip, and the launcher only reaches this group when BOTH strips are
+     * gone. `FocusQuickActionsPlacementTest` pins that, because it is what keeps
+     * [FOCUS_QUICK_ACTION_COUNT] - and so the rail's reserve - correct at three.
+     */
+    toolLauncher: (@Composable (hintDirection: Panel, modifier: Modifier) -> Unit)? = null,
 ): List<@Composable () -> Unit> =
-    listOf(
+    listOfNotNull(
         {
             // The only one of the three that reads auth state, and it reads it here rather than in
             // either host so that neither recomposes when the signed-in address changes.
@@ -287,22 +345,27 @@ private fun focusQuickActionButtons(
         },
         {
             BossActionButton(
-                imageVector = Icons.Outlined.Search,
-                text = "Search",
-                modifier = modifier,
-                hintText = QuickActionHints.SEARCH,
-                hintDirection = hintDirection,
-                onClick = onShowSearch,
-            )
-        },
-        {
-            BossActionButton(
                 imageVector = Icons.Outlined.Settings,
                 text = "Settings",
                 modifier = modifier,
                 hintText = QuickActionHints.SETTINGS,
                 hintDirection = hintDirection,
                 onClick = onShowSettings,
+            )
+        },
+        // Wrapped rather than passed straight through: the launcher takes this group's hint
+        // direction and modifier like every other button in it. Handed a ready-made composable,
+        // it kept whatever the scaffold had baked in - which pointed its hint off the bottom of
+        // the window in both of the groups that hint upwards.
+        toolLauncher?.let { launcher -> { launcher(hintDirection, modifier) } },
+        {
+            BossActionButton(
+                imageVector = Icons.Outlined.Search,
+                text = "Search",
+                modifier = modifier,
+                hintText = QuickActionHints.SEARCH,
+                hintDirection = hintDirection,
+                onClick = onShowSearch,
             )
         },
     )
@@ -378,12 +441,14 @@ internal fun BoxScope.FocusModeQuickActions(
     onShowSettings: () -> Unit,
     onShowSearch: () -> Unit,
     onSignOut: () -> Unit,
+    /** The tools launcher, when both strips are gone - see `toolLauncherPlacement`. */
+    toolLauncher: (@Composable (hintDirection: Panel, modifier: Modifier) -> Unit)? = null,
 ) {
     if (!visible) return
 
     if (!LocalWindowInfo.current.isWindowFocused) {
         Box(modifier = Modifier.align(Alignment.BottomEnd)) {
-            QuickActions(QUICK_ACTIONS_MARGIN, onShowSettings, onShowSearch, onSignOut)
+            QuickActions(QUICK_ACTIONS_MARGIN, onShowSettings, onShowSearch, onSignOut, toolLauncher)
         }
         return
     }
@@ -395,7 +460,8 @@ internal fun BoxScope.FocusModeQuickActions(
     val heavyweight = overlayCornerIsHeavyweight()
     OverlayCorner(
         alignment = Alignment.BottomEnd,
-        initialSize = QUICK_ACTIONS_OVERLAY_SIZE,
+        initialSize =
+            if (toolLauncher == null) QUICK_ACTIONS_OVERLAY_SIZE else QUICK_ACTIONS_OVERLAY_SIZE_WITH_LAUNCHER,
         // inset() is invoked INSIDE the branch, not above it. Read unconditionally, the lightweight
         // path subscribes to a value it then ignores and recomposes on every frame of a 250ms
         // sidebar animation - the exact cost the lambda parameter exists to avoid.
@@ -414,6 +480,7 @@ internal fun BoxScope.FocusModeQuickActions(
             onShowSettings,
             onShowSearch,
             onSignOut,
+            toolLauncher,
         )
     }
 }
@@ -464,6 +531,7 @@ private fun QuickActions(
     onShowSettings: () -> Unit,
     onShowSearch: () -> Unit,
     onSignOut: () -> Unit,
+    toolLauncher: (@Composable (hintDirection: Panel, modifier: Modifier) -> Unit)?,
 ) {
     Surface(
         modifier =
@@ -478,7 +546,12 @@ private fun QuickActions(
         // showing on the lightweight one - the two paths have to look the same. The hairline
         // border is what separates the cluster from the content underneath.
     ) {
-        Row(modifier = Modifier.padding(horizontal = BossTheme.space.xs)) {
+        // Centred, not top-aligned. A child even slightly taller than the rest used to hang its
+        // glyph below theirs rather than sitting level with them.
+        Row(
+            modifier = Modifier.padding(horizontal = BossTheme.space.xs),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             // hintDirection = top throughout: the cluster sits on the bottom edge of the content
             // area, so a hint below it would be off the window on the lightweight path. (On the
             // heavyweight path BossActionButton routes hints to SwingTooltip, which places itself,
@@ -488,6 +561,7 @@ private fun QuickActions(
                 onShowSettings = onShowSettings,
                 onShowSearch = onShowSearch,
                 onSignOut = onSignOut,
+                toolLauncher = toolLauncher,
             ).forEach { action -> action() }
         }
     }

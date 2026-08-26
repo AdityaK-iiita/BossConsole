@@ -8,9 +8,12 @@ import ai.rever.boss.components.overlays.ContextMenuItem
 import ai.rever.boss.components.overlays.HoverTooltipBox
 import ai.rever.boss.components.overlays.TooltipPlacement
 import ai.rever.boss.components.overlays.contextMenu
+import ai.rever.boss.components.plugin.PanelIds
 import ai.rever.boss.plugin.api.TabIcon
 import ai.rever.boss.plugin.bookmark.Bookmark
 import ai.rever.boss.plugin.ui.BossTheme
+import ai.rever.boss.window.LocalWindowId
+import ai.rever.boss.window.MenuActionsHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -115,22 +118,43 @@ private const val FAVORITES_PER_ROW = 4
  *
  * @param trailing the collapse chevron or the pin, on the SAME line as the label. It lived on a
  *   row of its own first, which spent a whole line of a narrow bar on one 16dp glyph.
+ * @param onOpen opens the Bookmarks panel, or null when there is no panel to open. The shelf
+ *   shows four favourites; the label is the way to the rest of them, which is what a section
+ *   header pointing at a plugin should do. Null leaves the label inert rather than clickable and
+ *   silent - see [TabBarFavorites] for when.
  */
 @Composable
-private fun FavoritesHeader(trailing: @Composable () -> Unit) {
+private fun FavoritesHeader(
+    trailing: @Composable () -> Unit,
+    onOpen: (() -> Unit)?,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = "FAVORITES",
-            color = BossTheme.colors.textSecondary,
+            // Brightens under the pointer, so a label that does something looks different from
+            // the section headings that do not.
+            color = if (hovered && onOpen != null) BossTheme.colors.textPrimary else BossTheme.colors.textSecondary,
             fontSize = 10.sp,
             fontWeight = FontWeight.SemiBold,
             letterSpacing = 0.8.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f).padding(start = 4.dp),
+            modifier =
+                Modifier
+                    .weight(1f)
+                    .then(
+                        if (onOpen == null) {
+                            Modifier
+                        } else {
+                            Modifier.hoverable(interactionSource).clickable(onClick = onOpen)
+                        },
+                    ).padding(start = 4.dp),
         )
         trailing()
     }
@@ -157,6 +181,13 @@ fun TabBarFavorites(
     // Dropping a tab here bookmarks it, leaving it open where it is. The shelf is the only drop
     // in the bar that does not move the tab, which is why it reads as a shelf rather than as
     // another place tabs live.
+    // Reveal goes through MenuActionsHandler rather than the sidebar model, because the bar has
+    // no route to that model - it is four layers up in the scaffold - and this is the same event
+    // the View menu's own Reveal Plugin raises. The handler ends in
+    // `draggablePanelComponent.activatePlugin`, i.e. exactly what clicking the plugin's sidebar
+    // icon does.
+    val windowId = LocalWindowId.current
+
     val isDropTarget = tabDragComponent?.dropTarget is TabDropTarget.Favorites
     val borderColor = if (isDropTarget) BossTheme.colors.signal else Color.Transparent
 
@@ -173,7 +204,21 @@ fun TabBarFavorites(
                 }.border(1.dp, borderColor, RoundedCornerShape(4.dp))
                 .padding(horizontal = 6.dp, vertical = 6.dp),
     ) {
-        FavoritesHeader(trailing = trailing)
+        FavoritesHeader(
+            trailing = trailing,
+            // Only where there is something to open. Not installed, or installed and not serving
+            // its API, and the panel would not appear - a header that swallowed the click and did
+            // nothing is the silent no-op the two states below exist to avoid. Those states carry
+            // their own Install button and their own explanation.
+            onOpen =
+                windowId?.takeIf { pluginInstalled == true && apiReachable }?.let { id ->
+                    // PanelIds.BOOKMARKS, not BOOKMARKS_PLUGIN_ID. The reveal event resolves a
+                    // PANEL id, and the two ids for this plugin look enough alike that passing the
+                    // plugin one matched nothing and did nothing - which is exactly how this
+                    // shipped inert the first time.
+                    { MenuActionsHandler.triggerRevealPlugin(id, PanelIds.BOOKMARKS.panelId) }
+                },
+        )
 
         when {
             pluginInstalled == false -> {

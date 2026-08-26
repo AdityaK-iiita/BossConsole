@@ -989,7 +989,10 @@ compose.desktop {
                     // Used by FullscreenBrowserWindow/WindowFocusManager; tested on Java 17+.
                     // Falls back to a display-sized borderless overlay if unavailable.
                     add("--add-opens=java.desktop/com.apple.eawt=ALL-UNNAMED")
-                    add("-Dapple.awt.application.appearance=system")
+                    // NOT -Dapple.awt.application.appearance here any more. The window's
+                    // appearance follows the BOSS theme, not the OS's, and applyMacAppearanceFromTheme
+                    // sets the property from the theme before AWT starts - which overrode whatever
+                    // was set here, leaving this line describing a value that never took effect.
                 }
 
                 // Linux-specific: X11 WM_CLASS access for desktop integration

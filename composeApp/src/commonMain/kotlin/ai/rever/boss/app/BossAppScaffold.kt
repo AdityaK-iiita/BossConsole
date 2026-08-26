@@ -6,6 +6,7 @@ import ai.rever.boss.components.bars.horizontal.BossTopBar
 import ai.rever.boss.components.bars.isBarVisible
 import ai.rever.boss.components.bars.vertical.BossLeftSideBar
 import ai.rever.boss.components.bars.vertical.BossRightSideBar
+import ai.rever.boss.components.buttons.ToolLauncherButton
 import ai.rever.boss.components.home.LocalPanelRegistry
 import ai.rever.boss.components.home.LocalPluginStates
 import ai.rever.boss.components.home.LocalRegistryAccess
@@ -31,23 +32,36 @@ import ai.rever.boss.focusmode.FocusModeSettings
 import ai.rever.boss.handleTabDropResult
 import ai.rever.boss.layout.BossChrome
 import ai.rever.boss.layout.ChromeBudgetReadout
+import ai.rever.boss.layout.TrafficLightInset
+import ai.rever.boss.layout.asDrawn
+import ai.rever.boss.layout.bannerStartInset
+import ai.rever.boss.layout.barStartInset
+import ai.rever.boss.layout.columnInset
+import ai.rever.boss.layout.macTrafficLightInset
+import ai.rever.boss.layout.needsTitleRow
 import ai.rever.boss.plugin.api.LocalBookmarkDataProvider
 import ai.rever.boss.plugin.api.LocalProjectPath
 import ai.rever.boss.plugin.api.LocalSplitViewOperations
 import ai.rever.boss.plugin.api.LocalWindowIdProvider
 import ai.rever.boss.plugin.api.LocalWindowProjectStateProvider
 import ai.rever.boss.plugin.api.LocalWorkspaceDataProvider
+import ai.rever.boss.plugin.api.Panel
+import ai.rever.boss.plugin.api.Panel.Companion.bottom
 import ai.rever.boss.plugin.sandbox.notification.PluginToastHost
 import ai.rever.boss.plugin.sandbox.notification.PluginToastState
+import ai.rever.boss.plugin.ui.BossTheme
 import ai.rever.boss.services.bookmarks.BookmarkAPIAccess
 import ai.rever.boss.updater.UpdateAvailableDialog
 import ai.rever.boss.updater.UpdateBanner
 import ai.rever.boss.updater.UpdateState
+import ai.rever.boss.updater.drawsBanner
 import ai.rever.boss.updater.rememberUpdateDialogOwnership
+import ai.rever.boss.utils.SystemUtils
 import ai.rever.boss.window.LocalWindowGitState
 import ai.rever.boss.window.LocalWindowId
 import ai.rever.boss.window.LocalWindowProjectState
 import ai.rever.boss.window.LocalWindowRunnerState
+import ai.rever.boss.window.TabBarPosition
 import ai.rever.boss.window.WindowAppearanceSettings
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -55,6 +69,7 @@ import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.layout.Box
@@ -62,6 +77,7 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -78,6 +94,8 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -250,6 +268,22 @@ internal fun BossAppScaffold(
     var contentInset by remember { mutableStateOf(DpSize.Zero) }
     val density = LocalDensity.current.density
 
+    // What is actually drawn, which is what these two rules are about - a bar focus mode is
+    // clearing is not on screen however the preference reads. See asDrawn.
+    val drawn = appearance.asDrawn(focusModeSettings)
+
+    // Whether the hover-revealed bar is up, reported by SplitViewPanel. It decides where the
+    // host's actions render while the bar is collapsed - see the placement below.
+    var drawerVisible by remember { mutableStateOf(false) }
+
+    // Whether the bar in the layout is the RAIL, reported by SplitViewPanel once it has measured.
+    //
+    // Seeded from the preference so the first frame has an answer, then corrected within a frame
+    // by the thing that actually draws the bar. Asking the preference and stopping there is what
+    // sent the host's actions to a foot that was not being drawn: a bar also rails itself when the
+    // window is too narrow for a full one, and nothing in the settings says so.
+    var barRailed by remember { mutableStateOf(appearance.tabBarCollapsed) }
+
     // Where Settings / Search / Sign Out go while focus mode holds the top bar that owns them.
     // One decision, two mutually exclusive renderings: the bottom of the right rail when that rail
     // is on screen, a floating corner cluster when it is not. Read once here so the two call sites
@@ -260,7 +294,80 @@ internal fun BossAppScaffold(
             topBarHidden = !appearance.showTopBar,
             rightStripHidden = !appearance.showRightStrip,
             showTopBar = reveal.showTopBar,
+            // Not merely "the bar is on the left". A COLLAPSED bar draws its rail and nothing
+            // else, so its foot does not exist and these four would render nowhere - they float
+            // instead. Hovering the rail opens the drawer, which IS a foot, so they go back into
+            // it for as long as it is up.
+            //
+            // The cost, stated because the neighbouring KDoc warns against exactly this: the
+            // floating overlay is a native always-on-top window, so it is torn down and rebuilt on
+            // each hover reveal rather than sitting there. Accepted deliberately - the alternative
+            // is a cluster in the corner while a bar with room for it is open on the left.
+            verticalTabBar =
+                verticalBarHasFoot(
+                    tabBarOnLeft = appearance.tabBarPosition == TabBarPosition.LEFT,
+                    barCollapsed = barRailed,
+                    drawerVisible = drawerVisible,
+                ),
         )
+
+    // Where the way into the plugins goes, when a strip that would normally hold their icons is
+    // switched off. Decided here for the same reason the line above is: three call sites read it,
+    // and two of them showing a launcher at once is worse than neither.
+    val launcherPlacement =
+        toolLauncherPlacement(
+            leftStripHidden = !drawn.showLeftStrip,
+            rightStripHidden = !drawn.showRightStrip,
+        )
+
+    // Non-null only in the HOST_ACTIONS case, so it can be handed to all three hosts of the
+    // Settings / Search / Sign Out group unconditionally and render in whichever one is drawing.
+    // Which column keeps clear of the macOS traffic lights, now that the title row no longer
+    // exists to hold them. Decided once, read by the three places that could carry the inset.
+    // Read above the decision below rather than beside the banner, because whether a banner is up
+    // is an INPUT to that decision: while one is drawn it is the topmost chrome, so it takes the
+    // clearance and nothing beneath it does.
+    //
+    // The BIT, not the state. UpdateState.Downloading carries a progress float that emits
+    // continuously, and collecting the state itself here would invalidate this scaffold - parent
+    // of the bars, the strips and the content - on every tick of a download, to answer a question
+    // whose answer does not change. UpdateBanner still collects the full state for itself, inside
+    // the Column, where a progress tick recomposes the banner and nothing else.
+    val updateHandle = state.updateHandle
+    val bannerVisible by remember(updateHandle) {
+        updateHandle.updateState.map { it.drawsBanner() }.distinctUntilChanged()
+    }.collectAsState(initial = false)
+
+    val trafficLights =
+        macTrafficLightInset(
+            appearance = drawn,
+            isMacOs = SystemUtils.isMacOS,
+            barCollapsed = barRailed,
+            bannerVisible = bannerVisible,
+            // The density's width, not the 36dp floor: Comfortable draws 40dp rails, and
+            // measuring the corner with the floor gave away a case that fits.
+            stripWidth = BossChrome.dimens.stripWidth,
+        )
+
+    val openTools = { state.showToolLauncherDialog = true }
+
+    // Takes its hint direction and size from whichever host draws it, rather than baking in one
+    // set here: the top bar hints downwards, and the bar's foot and the floating cluster both sit
+    // on a bottom edge and hint up. One baked-in `bottom` put the hint off the window in two of
+    // the three, and a baked-in size made it the odd button out in the third.
+    val hostToolLauncher: (@Composable (Panel, Modifier) -> Unit)? =
+        if (launcherPlacement == ToolLauncherPlacement.HOST_ACTIONS) {
+            { hintDirection, modifier ->
+                ToolLauncherButton(
+                    onClick = openTools,
+                    hintDirection = hintDirection,
+                    isSelected = state.showToolLauncherDialog,
+                    modifier = modifier,
+                )
+            }
+        } else {
+            null
+        }
 
     // Remembered, not rebuilt each pass, for the allocations and for a stable reserve - NOT to buy
     // a skip. `kotlin.collections.List` is unstable to Compose's stability inference, so taking one
@@ -305,14 +412,17 @@ internal fun BossAppScaffold(
             Column(modifier = Modifier.fillMaxSize()) {
                 // Title bar - conditionally shown based on settings
                 // Default: hidden on Linux/Windows, shown on macOS
-                if (appearance.showTitleBar) {
+                // Also drawn when the traffic lights have nowhere else to go: with no left strip
+                // and the tab bar across the top, the only thing under them is the content, and a
+                // full-width reserve costs no more than padding the content would. See
+                // TrafficLightInset.CONTENT.
+                if (trafficLights.needsTitleRow(appearance.showTitleBar)) {
                     BossTitleBar(
                         onToggleMaximize = onToggleMaximize,
                     )
                 }
 
                 // Update banner - always visible (even in focus mode)
-                val updateHandle = state.updateHandle
                 val updateState by updateHandle.updateState.collectAsState()
                 // Every action runs on the manager's scope, never this window's
                 // rememberCoroutineScope(): that scope dies with the composition, so
@@ -320,6 +430,9 @@ internal fun BossAppScaffold(
                 // UpdateState on Installing) and could drop a persisted dismissal.
                 UpdateBanner(
                     updateState = updateState,
+                    // Non-zero only when this banner is the chrome holding the lights, in which
+                    // case the bars below it have already given up their own clearance.
+                    startInset = trafficLights.bannerStartInset(),
                     onCheckForUpdates = {
                         // Manual retry: bypass per-version dismissal
                         updateHandle.checkForUpdatesInBackground(force = true)
@@ -412,6 +525,13 @@ internal fun BossAppScaffold(
                             onShowSettings = {
                                 state.settingsWindow.open()
                             },
+                            // Only non-null when neither icon strip is on screen, so the top bar
+                            // grows a tools button exactly in the configuration where nothing
+                            // else can hold one.
+                            toolLauncher = hostToolLauncher,
+                            // Clearance for the macOS traffic lights, which are drawn over this
+                            // bar's start when there is no title row above it.
+                            startInset = trafficLights.barStartInset(),
                             onShowSearch = {
                                 state.showGlobalSearchDialog = true
                             },
@@ -446,9 +566,21 @@ internal fun BossAppScaffold(
                             ),
                     ) {
                         Box(
-                            modifier = Modifier.hoverable(interactionSource = reveal.leftSidebarInteractionSource),
+                            modifier =
+                                Modifier
+                                    .hoverable(interactionSource = reveal.leftSidebarInteractionSource)
+                                    // Painted before padded - see WindowBarRow for what an
+                                    // unpainted inset shows through to.
+                                    .background(BossTheme.colors.raised)
+                                    .padding(top = trafficLights.columnInset()),
                         ) {
-                            BossLeftSideBar()
+                            BossLeftSideBar(
+                                toolsOpen = state.showToolLauncherDialog,
+                                onOpenTools =
+                                    openTools.takeIf {
+                                        launcherPlacement == ToolLauncherPlacement.LEFT_STRIP
+                                    },
+                            )
                         }
                     }
 
@@ -472,9 +604,32 @@ internal fun BossAppScaffold(
                             // workspace manager and the window's project dialog already are, and
                             // a tab bar has no business knowing about either. It reaches the bar
                             // as a slot. See VerticalBarWindowControls.
+                            // Settings / Search / Sign Out (and the launcher, when it joins them)
+                            // at the very foot of the bar, under the split map - the placement
+                            // that displaces the floating cluster wherever this bar is on screen.
+                            // The tab bar is the leftmost column when no strip is on, so its top
+                            // is what the lights would land on.
+                            verticalBarTopInset = trafficLights.columnInset(),
+                            onDrawerVisibleChange = { visible -> drawerVisible = visible },
+                            onBarRailedChange = { railed -> barRailed = railed },
+                            verticalBarBelowMap = {
+                                VerticalBarHostActions(
+                                    actions =
+                                        focusQuickActionsFooter(
+                                            placement = quickActionsPlacement,
+                                            onShowSettings = { state.settingsWindow.open() },
+                                            onShowSearch = { state.showGlobalSearchDialog = true },
+                                            onSignOut = { state.showLogoutDialog = true },
+                                            toolLauncher = hostToolLauncher,
+                                        ),
+                                )
+                            },
                             verticalBarFooter = {
                                 VerticalBarWindowControls(
-                                    topBarHidden = !appearance.showTopBar,
+                                    // `drawn`, not the preference: a top bar focus mode has
+                                    // cleared is not on screen, and the project and workspace
+                                    // pickers live nowhere else.
+                                    topBarHidden = !drawn.showTopBar,
                                     project = selectedProject,
                                     onOpenProject = { state.showProjectDialog = true },
                                     workspaceManager = workspaceManager,
@@ -519,6 +674,7 @@ internal fun BossAppScaffold(
                             onShowSettings = { state.settingsWindow.open() },
                             onShowSearch = { state.showGlobalSearchDialog = true },
                             onSignOut = { state.showLogoutDialog = true },
+                            toolLauncher = hostToolLauncher,
                         )
                     }
 
@@ -549,6 +705,11 @@ internal fun BossAppScaffold(
                             // takes the three icons away without also handing their rows back to
                             // the plugin slots and reshuffling them. See focusQuickActionsRailRows.
                             BossRightSideBar(
+                                toolsOpen = state.showToolLauncherDialog,
+                                onOpenTools =
+                                    openTools.takeIf {
+                                        launcherPlacement == ToolLauncherPlacement.RIGHT_STRIP
+                                    },
                                 bottomActions = quickActionsRail,
                                 bottomActionRows =
                                     focusQuickActionsRailRows(

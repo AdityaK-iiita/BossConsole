@@ -23,7 +23,18 @@ import java.io.File
 actual object WindowAppearanceSettingsManager {
     private val logger = BossLogger.forComponent("WindowAppearanceSettingsManager")
     private val settingsFile = BossDirectories.resolve("window-appearance-settings.json")
-    private val json =
+
+    /**
+     * Internal, not private, so a test can encode with the REAL instance.
+     *
+     * `encodeDefaults` is left at its default of false, and three chrome flags now depend on that:
+     * a field equal to its default is not written, so a file that never mentions a bar picks up a
+     * changed default instead of being pinned to the old one for ever. Someone switching
+     * `encodeDefaults` on for an unrelated reason would strand every existing install on the old
+     * chrome, silently and only on the next release. `WindowAppearanceEncodeDefaultsTest` fails
+     * if that happens.
+     */
+    internal val json =
         Json {
             prettyPrint = true
             ignoreUnknownKeys = true
@@ -107,13 +118,13 @@ actual object WindowAppearanceSettingsManager {
     }
 
     actual fun getDefaultSettings(): WindowAppearanceSettings {
-        val os = System.getProperty("os.name").lowercase()
-        val isMacOS = os.contains("mac")
-        // Show title bar on macOS, hide on Linux/Windows
+        // No platform branch any more: the title row is off everywhere, macOS included, and the
+        // traffic lights are handled by insetting the leftmost column instead. See
+        // `macTrafficLightInset`.
+        //
         // Stamped current: a fresh file is already on this build's defaults and must not be
         // migrated on the next launch as though it were an older one.
         return WindowAppearanceSettings(
-            showTitleBar = isMacOS,
             settingsVersion = WindowAppearanceSettings.CURRENT_SETTINGS_VERSION,
         )
     }

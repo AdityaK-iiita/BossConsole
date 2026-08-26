@@ -553,50 +553,73 @@ class BossDraggableComponent(
     }
 
     /**
-     * Programmatically activate a plugin by its ID.
-     * Replicates the behavior of clicking a plugin icon in the sidebar.
+     * Open the panel whose id is [panelId], as though its sidebar icon had been clicked.
      *
-     * @param pluginId The panel ID of the plugin to activate (e.g., "codebase", "terminal")
+     * **[panelId] is a PANEL id, not a plugin id**, and the difference is not cosmetic: the two
+     * look alike ("bookmarks" against "ai.rever.boss.plugin.dynamic.bookmarks") and passing the
+     * wrong one matches nothing and returns silently. That has already cost one bug - the
+     * Favorites header, which looked inert. The parameter was called `pluginId` at the time -
+     * its own KDoc said "The panel ID" while its name said otherwise, which is what made the
+     * wrong call the natural one to write.
+     *
+     * @param panelId a `PanelId.panelId`, e.g. "codebase" or "bookmarks".
      */
-    fun activatePlugin(pluginId: String) {
-        // Find the SidebarItem with matching pluginContentId
+    fun activatePlugin(panelId: String) {
         val slotEntry =
             itemsBySlot.entries.find { (_, items) ->
-                items.any { it.pluginContentId.panelId == pluginId }
+                items.any { it.pluginContentId.panelId == panelId }
             }
 
-        slotEntry?.let { (slot, items) ->
-            val sidebarItem = items.find { it.pluginContentId.panelId == pluginId }
-
-            sidebarItem?.let { item ->
-                // Determine target panel based on the slot (same logic as onClick)
-                val targetPanel =
-                    when (slot) {
-                        left.bottom -> bottom
-                        left.top.top -> left.top
-                        right.top.top -> right.top
-                        left.top.bottom -> left.bottom
-                        right.top.bottom -> right.bottom
-                        else -> null
-                    }
-
-                targetPanel?.let { panel ->
-                    // Apply the same logic as toggleVisibility
-                    if (panelsData[panel]?.sidebarItem?.id == item.id) {
-                        // Same plugin - toggle visibility
-                        setPanelVisible(panel, panelsData[panel]?.visibility != true)
-                    } else {
-                        // Different plugin - show panel
-                        setPanelVisible(panel, true)
-                    }
-                    // Update active plugin for this panel
-                    panelsData[panel]?.let {
-                        panelsData[panel] = it.copy(sidebarItem = item)
-                    }
-                }
-            }
+        if (slotEntry == null) {
+            // Logged rather than ignored: every way in here is a user action - a menu item, a
+            // header, a keyboard shortcut - so nothing matching means a click did nothing at all,
+            // and nothing else would say so.
+            logger.warn(
+                LogCategory.UI,
+                "No sidebar panel to activate",
+                mapOf("panelId" to panelId),
+            )
+            return
         }
+
+        val (slot, items) = slotEntry
+        // The find cannot miss - slotEntry was chosen by the same predicate - and the panel
+        // mapping covers every slot a rail actually renders. Both are folded into one guard
+        // rather than two early returns, which keeps the whole miss story in one place.
+        val item = items.find { it.pluginContentId.panelId == panelId }
+        val panel = displayPanelFor(slot)
+        if (item == null || panel == null) {
+            // Logged for the same reason the miss above is: this path is reached from a click
+            // too, and returning quietly here leaves exactly the dead affordance the warning
+            // above exists to explain. "Cannot miss" is the argument for it being a single
+            // guard, not for it being silent.
+            logger.warn(
+                LogCategory.UI,
+                "Sidebar panel matched a slot but could not be resolved",
+                mapOf("panelId" to panelId, "slot" to slot.toString()),
+            )
+            return
+        }
+
+        // Same plugin toggles, a different one takes the panel over - what toggleVisibility does.
+        if (panelsData[panel]?.sidebarItem?.id == item.id) {
+            setPanelVisible(panel, panelsData[panel]?.visibility != true)
+        } else {
+            setPanelVisible(panel, true)
+        }
+        panelsData[panel]?.let { panelsData[panel] = it.copy(sidebarItem = item) }
     }
+
+    /** Which display area a sidebar slot's panel opens in. Same mapping as the icon's own click. */
+    private fun displayPanelFor(slot: Panel): Panel? =
+        when (slot) {
+            left.bottom -> bottom
+            left.top.top -> left.top
+            right.top.top -> right.top
+            left.top.bottom -> left.bottom
+            right.top.bottom -> right.bottom
+            else -> null
+        }
 
     fun isSelected(item: SidebarItem): Boolean = panelsData.values.any { (it.sidebarItem?.id == item.id) && it.visibility }
 

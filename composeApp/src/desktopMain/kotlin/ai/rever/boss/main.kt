@@ -26,6 +26,7 @@ import ai.rever.boss.services.passkey.PasskeyPlatformInit
 import ai.rever.boss.utils.DeepLinkHandler
 import ai.rever.boss.utils.DeepLinkOrigin
 import ai.rever.boss.utils.SingleInstanceManager
+import ai.rever.boss.utils.SystemUtils
 import ai.rever.boss.utils.WindowsProtocolHandler
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
@@ -176,6 +177,57 @@ private fun containRenderFault(
  */
 private val startupScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
+/**
+ * Point macOS's own chrome at the BOSS theme, before AWT starts.
+ *
+ * macOS draws the traffic lights itself, from the window's NSAppearance, and nothing the app
+ * paints changes them. The INACTIVE ones - what an unfocused window shows - are pale in a
+ * dark-appearance window, so a light BOSS theme in a dark-appearance window loses them against
+ * its own light chrome. The active ones are always red/amber/green, which is why the bug is only
+ * visible when the window is not focused.
+ *
+ * `apple.awt.application.appearance` is the property that decides it. The build passes
+ * `=system`, which ties the window to the macOS setting rather than to the theme - fine while the
+ * two agree and wrong the moment they do not.
+ *
+ * **Timing is the whole thing.** It is read once, when AWT creates the NSApplication, so this has
+ * to run before anything touches AWT. `AWTKeyboardInterceptor.install()` does, a few hundred
+ * lines below, and so does every window. Logging above it does not, which is why this sits
+ * directly under it. Per-window client properties were tried first and do nothing:
+ * `apple.awt.windowAppearance` is not among the properties this JDK reads.
+ *
+ * **Known limit, stated because somebody will hit it**: switching themes at runtime does not move
+ * the lights. The property has already been read by then, and there is no supported way to change
+ * an NSAppearance from Java afterwards. It takes a restart.
+ */
+private fun applyMacAppearanceFromTheme() {
+    if (!SystemUtils.isMacOS) return
+
+    // Reads a small JSON file and touches no UI toolkit, which is what makes it safe this early.
+    ai.rever.boss.theme.AppThemeSettingsManager
+        .ensureInitialized()
+
+    val theme = BossThemeController.current
+    val appearance =
+        if (theme.isLight) {
+            "NSAppearanceNameAqua"
+        } else {
+            "NSAppearanceNameDarkAqua"
+        }
+    System.setProperty("apple.awt.application.appearance", appearance)
+
+    // Logged because the failure is invisible from inside the app: the lights are drawn by macOS,
+    // and the only way to tell "the theme was read too early" from "macOS ignored us" is to see
+    // which theme this ran with. Costs one line at startup.
+    BossLogger
+        .forComponent("MacAppearance")
+        .info(
+            LogCategory.SYSTEM,
+            "Window appearance set from theme",
+            mapOf("themeId" to theme.id, "isLight" to theme.isLight.toString(), "appearance" to appearance),
+        )
+}
+
 fun main(args: Array<String>) {
     // Codex invokes this headless credential helper. Handle it before AWT,
     // plugins, logging, or the single-instance lock so stdout stays token-only.
@@ -203,6 +255,8 @@ fun main(args: Array<String>) {
     // logging is opt-in through configure() with an explicit path.
     BossLogger.configureFromEnvironment()
     BossLogger.initialize() // Register shutdown hook for log flushing
+
+    applyMacAppearanceFromTheme()
 
     // Serve credential brokers to plugins. Registered from here rather than from
     // BossAppStartupEffects because the implementation exchanges a Supabase session over
@@ -748,6 +802,10 @@ fun main(args: Array<String>) {
 
     // Apply the persisted app theme before any UI composes, so the app opens
     // in the user's chosen look rather than flashing the default first.
+    //
+    // Not necessarily the FIRST such call any more: on macOS applyMacAppearanceFromTheme needs the
+    // theme before AWT starts, so it initialises there and this one is a no-op. Kept because it is
+    // the call every other platform relies on, and idempotent either way.
     ai.rever.boss.theme.AppThemeSettingsManager
         .ensureInitialized()
 

@@ -917,7 +917,6 @@
     <ID>MaxLineLength:WorkspaceApplier.kt$val firstBottomTabInfo = getFirstTab(node.bottom)?.let { createTabFromWorkspaceConfig(it, projectPath, splitViewState) }</ID>
     <ID>MaxLineLength:WorkspaceApplier.kt$val firstRightTabInfo = getFirstTab(node.right)?.let { createTabFromWorkspaceConfig(it, projectPath, splitViewState) }</ID>
     <ID>MaxLineLength:main.kt$logger.debug(LogCategory.SYSTEM, "API key availability", apiKeyStatus.mapValues { if (it.value) "set" else "not set" })</ID>
-    <ID>NestedBlockDepth:BossDraggableComponent.kt$BossDraggableComponent$fun activatePlugin(pluginId: String)</ID>
     <ID>NestedBlockDepth:BossDraggableComponent.kt$BossDraggableComponent$fun stopDragging()</ID>
     <ID>NestedBlockDepth:BossDraggableComponent.kt$BossDraggableComponent$private fun updateHoverTarget()</ID>
     <ID>NestedBlockDepth:BrowserServiceImpl.kt$BrowserServiceImpl$override suspend fun disposeBrowser(handle: BrowserHandle)</ID>

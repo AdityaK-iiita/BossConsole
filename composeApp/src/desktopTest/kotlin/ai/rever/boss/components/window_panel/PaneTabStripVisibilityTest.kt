@@ -23,13 +23,24 @@ class PaneTabStripVisibilityTest {
     private val defaults = WindowAppearanceSettings()
 
     @Test
-    fun `by default the strip needs a split`() {
-        // Purely additive: this is what every build before the setting existed did, so an
-        // upgrade changes nothing on its own.
-        assertTrue(defaults.paneTabStripOnlyWhenSplit, "the default must stay split-only")
-        assertFalse(defaults.stripShownFor(1))
+    fun `by default the strip does not need a split`() {
+        // The one-pane window is the case the strip is most needed in: with the top bar hidden by
+        // default and the sidebar able to collapse to its rail, it is the window that can end up
+        // with no tab titles anywhere on screen.
+        assertFalse(defaults.paneTabStripOnlyWhenSplit, "the default must not be split-only")
+        assertTrue(defaults.stripShownFor(1))
         assertTrue(defaults.stripShownFor(2))
         assertTrue(defaults.stripShownFor(4))
+    }
+
+    @Test
+    fun `switching it on restores the split-only rule`() {
+        // What every build before the setting existed did, kept reachable for anyone who wants it.
+        val splitOnly = defaults.copy(paneTabStripOnlyWhenSplit = true)
+
+        assertFalse(splitOnly.stripShownFor(1))
+        assertTrue(splitOnly.stripShownFor(2))
+        assertTrue(splitOnly.stripShownFor(4))
     }
 
     @Test
@@ -55,7 +66,12 @@ class PaneTabStripVisibilityTest {
     fun `an unmeasured window counts as one pane`() {
         // splitViewState is nullable at the call site, and null there means there is no split
         // view at all - which is one pane, not zero and not "unknown".
-        assertFalse(defaults.stripShownFor(null))
-        assertTrue(defaults.copy(paneTabStripOnlyWhenSplit = false).stripShownFor(null))
+        //
+        // Asked of the split-only setting explicitly rather than of the default. It used to read
+        // `assertFalse(defaults.stripShownFor(null))`, which was true only because the default was
+        // split-only - so flipping that default failed this test, which is about something else
+        // entirely.
+        assertFalse(defaults.copy(paneTabStripOnlyWhenSplit = true).stripShownFor(null), "null is one pane")
+        assertTrue(defaults.stripShownFor(null), "and one pane is enough by default")
     }
 }

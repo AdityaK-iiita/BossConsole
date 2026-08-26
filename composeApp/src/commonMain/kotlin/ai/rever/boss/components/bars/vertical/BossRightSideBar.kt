@@ -2,6 +2,7 @@ package ai.rever.boss.components.bars.vertical
 
 import ai.rever.boss.components.bars.ChromeBar
 import ai.rever.boss.components.bars.rememberBarContextMenuItems
+import ai.rever.boss.components.buttons.ToolLauncherButton
 import ai.rever.boss.components.dividers.SDivider
 import ai.rever.boss.components.dividers.VDivider
 import ai.rever.boss.components.misc.DraggableSidebarSection
@@ -13,11 +14,13 @@ import ai.rever.boss.components.sidebar.SidebarVisibilitySettingsManager
 import ai.rever.boss.components.sidebar.computeSlotIconLimits
 import ai.rever.boss.layout.BossChrome
 import ai.rever.boss.plugin.api.Panel.Companion.bottom
+import ai.rever.boss.plugin.api.Panel.Companion.left
 import ai.rever.boss.plugin.api.Panel.Companion.right
 import ai.rever.boss.plugin.api.Panel.Companion.top
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -43,6 +46,16 @@ import androidx.compose.ui.unit.dp
 fun BossDraggableComponent.BossRightSideBar(
     bottomActions: List<@Composable () -> Unit> = emptyList(),
     bottomActionRows: Int = bottomActions.size,
+    /**
+     * Opens the tools dialog, when this bar is the one carrying the launcher - i.e. when the
+     * LEFT strip is switched off. Null means it is not, and no button is drawn.
+     *
+     * A callback rather than a flag, because the dialog is owned by the window: see
+     * `ToolLauncherButton` for the overlay that made that necessary.
+     */
+    onOpenTools: (() -> Unit)? = null,
+    /** Whether the tools dialog is open, so its launcher reads as selected while it is. */
+    toolsOpen: Boolean = false,
 ) {
     val visibility by SidebarVisibilitySettingsManager.currentSettings.collectAsState()
     val customizeSlotId = visibility.customizeButtonSlotId
@@ -71,6 +84,7 @@ fun BossDraggableComponent.BossRightSideBar(
                     reservedHeight =
                         SidebarIconRail.SectionDivider +
                             (if (customizeOnThisBar) SidebarIconRail.CustomizeButton else 0.dp) +
+                            (if (onOpenTools != null) SidebarIconRail.ToolLauncherButton else 0.dp) +
                             SidebarIconRail.bottomSectionHeight(bottomActionRows),
                 )
             Column(
@@ -121,6 +135,10 @@ fun BossDraggableComponent.BossRightSideBar(
                             },
                     )
                 }
+                // Outside the clipped region for the same reason the customize button is, and
+                // above the bottom actions: the launcher is about the slots it sits under, while
+                // Settings / Search / Sign Out are about the app.
+                onOpenTools?.let { open -> RailToolLauncher(open, left, toolsOpen) }
                 SidebarBottomActions(bottomActions)
             }
         }

@@ -24,6 +24,8 @@ import ai.rever.boss.git.GitService
 import ai.rever.boss.git.GitStashInfo
 import ai.rever.boss.layout.BossChrome
 import ai.rever.boss.platform.rememberDirectoryPicker
+import ai.rever.boss.plugin.api.Panel
+import ai.rever.boss.plugin.api.Panel.Companion.bottom
 import ai.rever.boss.plugin.ui.BossAlertDialog
 import ai.rever.boss.plugin.ui.BossTheme
 import ai.rever.boss.project.removeProjectAndReport
@@ -52,6 +54,7 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import compose.icons.FeatherIcons
@@ -60,6 +63,9 @@ import kotlinx.coroutines.launch
 import java.io.File
 import ai.rever.boss.plugin.git.GitOperationResult.Error as GitError
 import ai.rever.boss.plugin.git.GitOperationResult.Success as GitSuccess
+
+/** The bar's own long-standing start indent, before any traffic-light clearance. */
+private val TOP_BAR_START_INDENT = 36.dp
 
 @Composable
 fun BossDraggableComponent.BossTopBar(
@@ -74,19 +80,40 @@ fun BossDraggableComponent.BossTopBar(
     // renders, hovers, shows its hint and does nothing if the argument is dropped. A required
     // parameter makes that a compile error at the single call site instead.
     onSignOut: () -> Unit,
+    /** The tools launcher, when neither icon strip is on screen. See [BossTopRightBar]. */
+    toolLauncher: (@Composable (hintDirection: Panel, modifier: Modifier) -> Unit)? = null,
     onNewProject: (() -> Unit)? = null,
     onCloneProject: (() -> Unit)? = null,
+    /**
+     * Extra indent at the start of the row, for the macOS traffic lights.
+     *
+     * The bar spans the window's full width at y=0, so with no title row above it, it is what the
+     * lights are drawn over - see `macTrafficLightInset`. A horizontal indent rather than a
+     * vertical one, because this is a row and the lights sit at its start.
+     *
+     * Applied INSIDE the bar's own painted area. Padding the bar from outside would leave the
+     * indent drawn by nothing, and nothing is not the background - the raw native window surface
+     * shows through, which is white.
+     */
+    startInset: Dp = 0.dp,
 ) {
     val items = rememberBarContextMenuItems(ChromeBar.TOP)
 
     HorizontalBar(modifier = Modifier.contextMenu(items = items), height = BossChrome.dimens.topBarHeight) {
-        HorizontalBarRow(modifier = Modifier.fillMaxHeight().padding(start = 36.dp)) {
+        // The 36dp is the bar's own long-standing indent; the lights need more than that, so this
+        // takes whichever is larger rather than adding them and pushing the content twice as far.
+        HorizontalBarRow(modifier = Modifier.fillMaxHeight().padding(start = maxOf(TOP_BAR_START_INDENT, startInset))) {
             BossTopLeftBar(workspaceManager, onApplyWorkspace, getCurrentWorkspace, onShowTopOfMind, onNewProject, onCloneProject)
             Spacer(modifier = Modifier.weight(1f))
             // Run/debug controls (Issue #91 / #321)
             BossTopRunBar()
             Spacer(modifier = Modifier.weight(0.1f))
-            BossTopRightBar(onShowSettings = onShowSettings, onShowSearch = onShowSearch, onSignOut = onSignOut)
+            BossTopRightBar(
+                onShowSettings = onShowSettings,
+                onShowSearch = onShowSearch,
+                onSignOut = onSignOut,
+                toolLauncher = toolLauncher,
+            )
         }
     }
     Divider(color = BossTheme.colors.line, thickness = BossChrome.dimens.dividerThickness)
@@ -811,6 +838,13 @@ fun BossTopRightBar(
     onShowSearch: (() -> Unit)? = null,
     // Required - see BossTopBar's onSignOut.
     onSignOut: () -> Unit,
+    /**
+     * The tools launcher, when both icon strips are switched off so there is no strip to hold it
+     * - see `toolLauncherPlacement`. Rendered between Settings and Search, the same position it
+     * takes in the floating cluster and the tab bar's footer, so the group reads the same wherever
+     * it is drawn.
+     */
+    toolLauncher: (@Composable (hintDirection: Panel, modifier: Modifier) -> Unit)? = null,
 ) {
     val currentUser by AuthService.currentUser.collectAsState()
 
@@ -836,19 +870,23 @@ fun BossTopRightBar(
 
     // Global search button (Issue #92)
     BossActionButton(
-        imageVector = Icons.Outlined.Search,
-        text = "Search",
-        hintText = QuickActionHints.SEARCH,
-    ) {
-        onShowSearch?.invoke()
-    }
-
-    BossActionButton(
         imageVector = Icons.Outlined.Settings,
         text = "Settings",
         hintText = QuickActionHints.SETTINGS,
     ) {
         onShowSettings?.invoke()
+    }
+
+    // The default direction here, unlike the two groups that hint upwards: this bar is at the top
+    // of the window, so below it is where there is room.
+    toolLauncher?.invoke(bottom, Modifier)
+
+    BossActionButton(
+        imageVector = Icons.Outlined.Search,
+        text = "Search",
+        hintText = QuickActionHints.SEARCH,
+    ) {
+        onShowSearch?.invoke()
     }
 
     // The confirmation itself is raised by BossAppScaffold, which owns the flag: the focus-mode

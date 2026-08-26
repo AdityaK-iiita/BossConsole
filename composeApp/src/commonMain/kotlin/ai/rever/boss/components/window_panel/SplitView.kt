@@ -91,6 +91,7 @@ import androidx.compose.ui.unit.sp
 import com.arkivanov.decompose.extensions.compose.subscribeAsState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import kotlin.random.Random
 
 // Sealed class representing the split tree structure
@@ -1800,6 +1801,39 @@ fun SplitViewPanel(
     onTabDropResult: (TabDropResult) -> Unit = {},
     /** Window chrome for the foot of the vertical bar. Ignored in TOP position, which has none. */
     verticalBarFooter: @Composable () -> Unit = {},
+    /**
+     * Window chrome for BELOW the split map, at the very foot of the vertical bar - Settings,
+     * Search, Sign Out and the tools launcher when nothing else is left to hold them. Ignored in
+     * TOP position, where those go back to the top bar or a floating cluster.
+     */
+    verticalBarBelowMap: @Composable () -> Unit = {},
+    /**
+     * Clearance above the vertical bar.
+     *
+     * macOS draws its traffic lights over the top-left of the content when the window sets
+     * `fullWindowContent`, and with no title row and no left icon strip this bar is what is
+     * under them. Only this column is inset - the rest of the window starts at the top, which
+     * is the whole point of not reserving a full-width row. See `macTrafficLightInset`.
+     */
+    verticalBarTopInset: Dp = 0.dp,
+    /**
+     * Reports whether the hover-revealed bar is on screen.
+     *
+     * The window needs it because the host's actions live under the bar's split map, and a
+     * COLLAPSED bar has no foot to put them in - so they float instead, until the drawer opens and
+     * gives them one again. Only this composable knows: the reveal state machine lives here.
+     */
+    onDrawerVisibleChange: (Boolean) -> Unit = {},
+    /**
+     * Reports whether the bar in the layout is the slim rail.
+     *
+     * Not the same question as the `tabBarCollapsed` preference, which is what the window used to
+     * ask: a bar also rails itself when there is no room for a full one, and only this composable
+     * has measured the width. The window needs the MEASURED answer, because a rail has no foot to
+     * put the host's actions in - and while it believed the preference, a narrow window sent them
+     * to a foot that was not being drawn and they rendered nowhere at all.
+     */
+    onBarRailedChange: (Boolean) -> Unit = {},
 ) {
     val density = LocalDensity.current
 
@@ -1824,6 +1858,17 @@ fun SplitViewPanel(
     // heavyweight overlay window. Null until measured, and the drawer draws nothing while it is.
     var contentRegion by remember { mutableStateOf<IntRect?>(null) }
 
+    // In an effect, not during composition: the window turns this into a placement decision that
+    // feeds back into what this composable is given, and writing it inline would be a state write
+    // during composition of the thing that reads it.
+    val drawerOpen = bar.vertical && bar.railShown && reveal.drawerVisible
+    LaunchedEffect(drawerOpen) { onDrawerVisibleChange(drawerOpen) }
+
+    // Same reasoning, same shape: reported in an effect because the window turns it into a
+    // placement decision that feeds back into what this composable is handed.
+    val barRailed = bar.vertical && bar.railShown
+    LaunchedEffect(barRailed) { onBarRailedChange(barRailed) }
+
     Box(
         modifier =
             modifier
@@ -1840,17 +1885,7 @@ fun SplitViewPanel(
                     paths.forEach { splitViewState.openFileInActivePanel(it, it.extractFileName()) }
                 },
     ) {
-        val splitTree: @Composable (Modifier) -> Unit = { treeModifier ->
-            Box(modifier = treeModifier) {
-                SplitOrZoomedPane(
-                    splitViewState = splitViewState,
-                    tabDragComponent = tabDragComponent,
-                    onTabDropResult = onTabDropResult,
-                    // A panel draws its own bar only when this one is not drawing it for them.
-                    showPanelTabBar = !bar.vertical,
-                )
-            }
-        }
+        val splitTree = rememberSplitTree(splitViewState, tabDragComponent, onTabDropResult, bar.vertical)
 
         if (bar.vertical) {
             WindowBarRow(
@@ -1860,6 +1895,8 @@ fun SplitViewPanel(
                 tabDragComponent = tabDragComponent,
                 onTabDropResult = onTabDropResult,
                 footer = verticalBarFooter,
+                belowMap = verticalBarBelowMap,
+                topInset = verticalBarTopInset,
                 splitTree = splitTree,
             )
         } else {
@@ -1867,12 +1904,14 @@ fun SplitViewPanel(
         }
 
         if (bar.vertical && bar.railShown) {
-            WindowRevealedTabBarDrawer(
+            RevealedBar(
                 splitViewState = splitViewState,
                 bar = bar,
                 reveal = reveal,
                 contentRegion = contentRegion,
-                onPin = rememberPinDrawerAction(reveal, bar),
+                topInset = verticalBarTopInset,
+                footer = verticalBarFooter,
+                belowMap = verticalBarBelowMap,
             )
         }
     }
@@ -1928,6 +1967,9 @@ private fun WindowBarRow(
     tabDragComponent: TabDraggableComponent?,
     onTabDropResult: (TabDropResult) -> Unit,
     footer: @Composable () -> Unit,
+    belowMap: @Composable () -> Unit,
+    /** Clearance above the bar, for the macOS traffic lights. See [SplitViewPanel]. */
+    topInset: Dp,
     splitTree: @Composable (Modifier) -> Unit,
 ) {
     val listState = rememberLazyListState()
@@ -1949,7 +1991,21 @@ private fun WindowBarRow(
     val barWidth = draggedWidth?.dp ?: bar.width
 
     Row(modifier = Modifier.fillMaxSize()) {
-        Box(modifier = Modifier.hoverable(reveal.railHover, enabled = bar.hoverExpand && bar.railShown)) {
+        // The bar and its resize band share one Box: the band is an OVERLAY on the bar's trailing
+        // edge rather than a strip beside it, so it costs no layout width. A strip cost 6dp where
+        // the divider had cost 1, which read as a margin down the bar's right edge.
+        Box(
+            modifier =
+                Modifier
+                    // PAINTED before it is padded. Padding alone leaves the inset area drawn by
+                    // nothing, and nothing is not the background: the raw native window surface
+                    // shows through, which is white. Same trap as the bar's resize strip.
+                    // `raised` is what VerticalBar fills itself with, so the clearance reads as
+                    // the top of the bar rather than as a band above it.
+                    .background(BossTheme.colors.raised)
+                    .padding(top = topInset)
+                    .hoverable(reveal.railHover, enabled = bar.hoverExpand && bar.railShown),
+        ) {
             WindowVerticalTabBar(
                 groups = groups,
                 listState = listState,
@@ -1959,28 +2015,103 @@ private fun WindowBarRow(
                 onToggleCollapse = rememberToggleCollapseAction(bar, reveal),
                 tabDragComponent = tabDragComponent,
                 footer = footer,
+                belowMap = belowMap,
                 zoomed = splitViewState.zoomedPanelId != null,
                 onExitZoom = splitViewState::exitZoom,
             )
+            VerticalTabBarResizeHandle(
+                // Not while the bar is a rail: the rail's width is a different number, and a drag
+                // that appeared to work would be moving one nothing on screen was showing.
+                enabled = !bar.railShown,
+                currentWidth = barWidth.value,
+                onPreview = { width -> draggedWidth = width },
+                onCommit = { width ->
+                    draggedWidth = null
+                    barWidthScope.launch {
+                        WindowAppearanceSettingsManager.updateSettings(
+                            WindowAppearanceSettingsManager.currentSettings.value
+                                .copy(tabBarVerticalWidth = width),
+                        )
+                    }
+                },
+            )
         }
-        VerticalTabBarResizeHandle(
-            // Not while the bar is a rail: the rail's width is a different number, and a drag
-            // that appeared to work would be moving one nothing on screen was showing.
-            enabled = !bar.railShown,
-            currentWidth = barWidth.value,
-            onPreview = { width -> draggedWidth = width },
-            onCommit = { width ->
-                draggedWidth = null
-                barWidthScope.launch {
-                    WindowAppearanceSettingsManager.updateSettings(
-                        WindowAppearanceSettingsManager.currentSettings.value
-                            .copy(tabBarVerticalWidth = width),
-                    )
-                }
-            },
-        )
+        VDivider()
         splitTree(Modifier.weight(1f).fillMaxHeight())
     }
+}
+
+/**
+ * The split tree as a slot, so the two layouts below can each place it where they want it.
+ *
+ * A `remember`, not a fresh lambda each pass: the vertical layout hands it to `WindowBarRow`,
+ * which is not skippable, and a new lambda identity every recomposition would recompose the whole
+ * bar alongside the tree it wraps.
+ */
+@Composable
+private fun rememberSplitTree(
+    splitViewState: SplitViewState,
+    tabDragComponent: TabDraggableComponent?,
+    onTabDropResult: (TabDropResult) -> Unit,
+    barIsVertical: Boolean,
+): @Composable (Modifier) -> Unit =
+    remember(splitViewState, tabDragComponent, onTabDropResult, barIsVertical) {
+        { treeModifier ->
+            Box(modifier = treeModifier) {
+                SplitOrZoomedPane(
+                    splitViewState = splitViewState,
+                    tabDragComponent = tabDragComponent,
+                    onTabDropResult = onTabDropResult,
+                    // A panel draws its own bar only when this one is not drawing it for them.
+                    showPanelTabBar = !barIsVertical,
+                )
+            }
+        }
+    }
+
+/**
+ * The hover-revealed bar, with everything the pinned one carries.
+ *
+ * Split out of [SplitViewPanel], which is at detekt's length ceiling. Both slots are passed
+ * because while this is open it is the only bar on screen - the in-flow one is down to its rail -
+ * so anything missing here is missing outright, not merely missing from a preview.
+ */
+@Composable
+@Suppress("LongParameterList")
+private fun BoxScope.RevealedBar(
+    splitViewState: SplitViewState,
+    bar: TabBarLayout,
+    reveal: TabBarRevealState,
+    contentRegion: IntRect?,
+    topInset: Dp,
+    footer: @Composable () -> Unit,
+    belowMap: @Composable () -> Unit,
+) {
+    WindowRevealedTabBarDrawer(
+        splitViewState = splitViewState,
+        bar = bar,
+        reveal = reveal,
+        // Started BELOW the traffic-light clearance rather than padded inside it. The drawer is
+        // its own always-on-top window, so the lights are behind it whatever it pads - the only
+        // way to leave them visible is to not cover them. The region is already in dp.
+        contentRegion = contentRegion.below(topInset),
+        footer = footer,
+        belowMap = belowMap,
+        onPin = rememberPinDrawerAction(reveal, bar),
+    )
+}
+
+/**
+ * The region with its top moved down by [inset].
+ *
+ * Used to start the hover drawer BELOW the macOS traffic lights. The drawer is its own
+ * always-on-top window, so the lights are behind it whatever it pads - the only way to leave them
+ * visible is to not cover them. The region is already in dp, which is what [inset] is.
+ */
+private fun IntRect?.below(inset: Dp): IntRect? {
+    val region = this ?: return null
+    val dp = inset.value.roundToInt()
+    return if (dp <= 0) region else region.copy(top = region.top + dp)
 }
 
 @Composable
