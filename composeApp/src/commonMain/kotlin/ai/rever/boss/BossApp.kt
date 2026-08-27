@@ -10,6 +10,7 @@ import ai.rever.boss.app.BossAppStartupEffects
 import ai.rever.boss.app.rememberBossAppState
 import ai.rever.boss.app.rememberFocusModeReveal
 import ai.rever.boss.components.registery.PanelRegistry
+import ai.rever.boss.filetypes.DefaultAppsOfferHost
 import ai.rever.boss.focusmode.FocusModeSettingsManager
 import ai.rever.boss.window.WindowAppearanceSettingsManager
 import androidx.compose.runtime.Composable
@@ -75,6 +76,14 @@ fun ComponentContext.BossApp(
             )
 
             BossAppDialogs(state)
+
+            // The one-time offer to make BOSS the default for links and code
+            // files. Composed here rather than inside BossAppDialogs because
+            // everything it touches - Launch Services, the Windows registry,
+            // xdg-mime - is desktopMain, so it is an expect/actual composable
+            // like AuthBrandSite. It raises nothing on the windows that are not
+            // the first, and nothing at all once the offer has been made.
+            DefaultAppsOfferHost(isFirstWindow = state.isFirstWindow)
         }
     }
 }

@@ -23,6 +23,7 @@ import java.awt.Desktop
 import java.io.File
 import java.net.URI
 import java.net.URLDecoder
+import java.net.URLEncoder
 
 private const val BOSS_SCHEME = "boss://"
 
@@ -81,6 +82,31 @@ private val deepLinkHostsByName: Map<String, DeepLinkHost> = DeepLinkHost.entrie
 internal fun routedDeepLinkHost(uri: String): DeepLinkHost? = deepLinkHostOf(uri)?.let { deepLinkHostsByName[it] }
 
 /**
+ * The `boss://file` link that opens [path].
+ *
+ * Every way the OS can ask BOSS to open a file - the macOS open-file
+ * AppleEvent, a path in `argv` on Windows and Linux, a path forwarded to an
+ * already-running instance - is turned into this one link, so all of them share
+ * the single validated, window-resolving, cold-start-queueing path that
+ * `boss://file` already had. The alternative was three more callers of
+ * `FileEventBus` each having to remember the `FileHandlerService` counter that
+ * stops the New Tab dialog destroying the tab being created.
+ *
+ * `URLEncoder` encodes a space as `+` and [DeepLinkHandler]'s decode side uses
+ * `URLDecoder`, which turns `+` back into a space, so the round trip is exact.
+ */
+internal fun fileDeepLinkFor(path: String): String = BOSS_SCHEME + "file?path=" + URLEncoder.encode(path, "UTF-8")
+
+/**
+ * The `boss://folder` link that opens [path] in the codebase panel.
+ *
+ * The counterpart of [fileDeepLinkFor] for a directory. Dropping a project folder
+ * on the app, or double-clicking one with BOSS as its handler, previously produced
+ * no link at all because the argv scan recognised only regular files.
+ */
+internal fun folderDeepLinkFor(path: String): String = BOSS_SCHEME + "folder?path=" + URLEncoder.encode(path, "UTF-8")
+
+/**
  * The window a [host]'s handler should act on: resolved through
  * [resolveWindowId] for hosts that resolve at dispatch, null for hosts that
  * resolve downstream when their queued command runs.
@@ -109,6 +135,54 @@ actual object DeepLinkHandler {
             isMacOS -> setupMacOSHandler()
             isWindows -> setupWindowsHandler()
             else -> setupDefaultHandler()
+        }
+        setupOpenFileHandler()
+    }
+
+    /**
+     * Registers the OS "open these files with BOSS" handler.
+     *
+     * Nothing registered one before, so BOSS declared `CFBundleDocumentTypes` in
+     * its Info.plist, appeared in Finder's Open With menu, launched when a file
+     * was double-clicked - and then did nothing at all with the file. macOS
+     * delivers a file open as an AppleEvent that reaches the JDK's
+     * `_AppEventHandler` and, with no handler set, is discarded once the queue
+     * is drained.
+     *
+     * Registered for macOS and the default branch, not Windows: Windows never
+     * sends this event and passes paths in `argv` instead, which `main.kt`
+     * handles. Calling it there is harmless but would claim support BOSS does
+     * not get.
+     */
+    private fun setupOpenFileHandler() {
+        if (isWindows || !Desktop.isDesktopSupported()) return
+        try {
+            Desktop.getDesktop().setOpenFileHandler { event ->
+                val files = event.files ?: emptyList()
+                logger.info(
+                    LogCategory.FILE,
+                    "Received open-file request from the OS",
+                    mapOf("count" to files.size),
+                )
+                // One deep link per file, because that is what the rest of the
+                // pipeline speaks: `boss://file` opens exactly one path, and
+                // selecting several files in Finder and hitting Enter is a
+                // single event carrying all of them.
+                files.forEach { file ->
+                    processDeepLink(fileDeepLinkFor(file.absolutePath), DeepLinkOrigin.EXTERNAL)
+                }
+            }
+            logger.info(LogCategory.SYSTEM, "OS open-file handler registered successfully")
+        } catch (e: UnsupportedOperationException) {
+            // Documented outcome on a platform whose Desktop has no APP_OPEN_FILE
+            // action. Not an error: it means files arrive some other way (argv).
+            logger.debug(
+                LogCategory.SYSTEM,
+                "Desktop.setOpenFileHandler not supported on this platform",
+                mapOf("reason" to (e.message ?: "unsupported")),
+            )
+        } catch (e: Exception) {
+            logger.error(LogCategory.SYSTEM, "Failed to set up OS open-file handler", error = e)
         }
     }
 
@@ -207,17 +281,37 @@ actual object DeepLinkHandler {
     }
 
     /**
-     * Process command line arguments for deep links (needed for Windows)
+     * Processes links and file paths the OS asked BOSS to open through `argv`.
+     *
+     * **No longer Windows-only, and that gate was a real gap.** It ran under
+     * `if (isWindows)` because Windows delivers a protocol URL in `argv`. So does
+     * Linux: the generated `boss.desktop` uses `Exec=<app> %u`, and the JDK's X11
+     * Desktop peer supports no `APP_OPEN_URI` action, so `setOpenURIHandler` is
+     * never called there. Between the two, a Linux user who set BOSS as their
+     * default browser had every cold-start link silently dropped - argv held it,
+     * nothing read argv, and the URI handler that would have read it does not
+     * exist on that platform.
+     *
+     * macOS is unaffected either way: it delivers URLs and files as AppleEvents,
+     * so in practice these args hold neither, and running this costs one scan of
+     * an argv with nothing in it to find.
+     *
+     * Subsumes `WindowsProtocolHandler.extractDeepLinkFromArgs`, which was
+     * `args.firstOrNull { it.startsWith("boss://") }` - the same answer
+     * [OsOpenArguments] gives for that case, plus http/https and file paths, and
+     * all of them rather than the first.
      */
     fun processCommandLineArgs(args: Array<String>) {
-        if (isWindows) {
-            WindowsProtocolHandler.extractDeepLinkFromArgs(args)?.let { url ->
-                logger.info(LogCategory.SYSTEM, "Received deep link from command line", mapOf("uri" to LogSanitizer.maskUriParams(url)))
-                // A `boss://` argument on Windows is how the registered protocol
-                // handler delivers a URL somebody asked the OS to open, so it is
-                // external regardless of who launched the process.
-                processDeepLink(url, DeepLinkOrigin.EXTERNAL)
-            }
+        OsOpenArguments.deepLinksFrom(args).forEach { link ->
+            logger.info(
+                LogCategory.SYSTEM,
+                "Received deep link from command line",
+                mapOf("uri" to LogSanitizer.maskUriParams(link)),
+            )
+            // A link in this process's argv is how a registered protocol handler
+            // or a file association delivers something somebody asked the OS to
+            // open, so it is external regardless of who launched the process.
+            processDeepLink(link, DeepLinkOrigin.EXTERNAL)
         }
     }
 

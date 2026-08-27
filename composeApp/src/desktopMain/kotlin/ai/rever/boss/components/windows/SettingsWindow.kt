@@ -636,6 +636,10 @@ private fun SettingsContentArea(
                     BrowserEngineSettings()
                 }
 
+                SettingsSection.DEFAULT_APPS -> {
+                    DefaultAppsSettings()
+                }
+
                 SettingsSection.RUNNER -> {
                     RunnerSettings()
                 }

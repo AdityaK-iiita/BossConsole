@@ -33,6 +33,11 @@ object ChromiumAutoDownloader {
     private val JXBROWSER_VERSION = VersionConstants.JXBROWSER_VERSION
     private const val VERSION_FILE = "version.txt"
 
+    /**
+     * Info.plist keys an engine bundle must not declare. See [declaresBrowserTypes].
+     */
+    private val BROWSER_TYPE_KEYS = listOf("CFBundleURLTypes", "CFBundleDocumentTypes")
+
     // Commit marker for staged installs: written strictly last by downloadChromium
     // (staged=true), required by promotePendingInstall. Guards against promoting a
     // staging dir whose executable.name/version.txt happen to exist (e.g. extracted
@@ -220,10 +225,105 @@ object ChromiumAutoDownloader {
                 logger.info(LogCategory.BROWSER, "Chromium executable missing execute permission, will re-download")
                 return false
             }
+
+            if (declaresBrowserTypes(dir.resolve("$executableName.app/Contents/Info.plist").toFile())) {
+                // Bounded to one attempt per version. Without this, an engine that
+                // still declares the keys after the re-download - the rebuild never
+                // published, or published unrepaired - would invalidate the
+                // directory on EVERY launch and re-fetch ~160 MB forever, silently.
+                // The marker lives outside the engine directory because a
+                // re-download replaces that whole directory.
+                if (repairAlreadyAttempted()) {
+                    logger.warn(
+                        LogCategory.BROWSER,
+                        "Chromium still registers itself as a browser after a re-download; keeping it",
+                        mapOf("version" to effectiveVersion),
+                    )
+                } else {
+                    recordRepairAttempt()
+                    logger.info(
+                        LogCategory.BROWSER,
+                        "Cached Chromium still registers itself as a browser, will re-download",
+                        mapOf("version" to effectiveVersion),
+                    )
+                    return false
+                }
+            }
         }
 
         return true
     }
+
+    /**
+     * Whether an extracted engine bundle still claims URL schemes or document
+     * types from the OS.
+     *
+     * **Why this is a content check and not a version check.** Engines built
+     * before `build-chromium-branding.yml` learned to strip these keys declare
+     * http, https, `file` and 17 document types (`public.html`, `public.text`,
+     * `com.adobe.pdf`, the image and video types, ...) under the id
+     * `ai.rever.boss.browser` and the name "BOSS". Launch Services then offers
+     * two indistinguishable "BOSS" entries for the default browser and puts the
+     * engine in Finder's Open With for a dozen file kinds, where choosing it
+     * launches a rendering engine with no window. See AGENTS.md.
+     *
+     * The version number cannot detect that. The fix ships inside a *rebuild* of
+     * an already-published engine, so `version.txt` reads the same before and
+     * after and [isValidChromiumDir]'s equality test short-circuits. Asking the
+     * bundle what it actually declares is the only thing that tells a repaired
+     * engine from the one it replaced, and it is self-limiting: once the clean
+     * engine is in place this answers false forever, on every version.
+     *
+     * Deliberately a substring test rather than a plist parse. The engine's
+     * `Info.plist` is XML (verified against a shipped 9.5.0 bundle), so
+     * `<key>NAME</key>` is exact and unambiguous, and the JDK has no binary-plist
+     * reader to fall back on. **Fails closed**: an unreadable or absent plist
+     * answers false, because forcing a ~160 MB download on a file we could not
+     * read would be the worse mistake - and a genuinely broken bundle is already
+     * caught by the executable checks above.
+     */
+
+    /** Marker recording that a browser-types re-download was already tried for a version. */
+    private fun repairMarker(): File = BossDirectories.resolve("boss-chromium.types-repair")
+
+    private fun repairAlreadyAttempted(): Boolean =
+        try {
+            repairMarker().takeIf { it.isFile }?.readText()?.trim() == effectiveVersion
+        } catch (e: Exception) {
+            logger.debug(
+                LogCategory.BROWSER,
+                "Could not read the repair marker",
+                mapOf("reason" to (e.message ?: "unknown")),
+            )
+            false
+        }
+
+    private fun recordRepairAttempt() {
+        try {
+            repairMarker().writeText(effectiveVersion)
+        } catch (e: Exception) {
+            // Logged, not fatal. The consequence of failing to write it is one
+            // extra download attempt on the next launch, not a broken engine.
+            logger.warn(LogCategory.BROWSER, "Could not record the repair marker", error = e)
+        }
+    }
+
+    internal fun declaresBrowserTypes(plist: File): Boolean =
+        try {
+            if (!plist.isFile) {
+                false
+            } else {
+                val text = plist.readText()
+                BROWSER_TYPE_KEYS.any { key -> text.contains("<key>$key</key>") }
+            }
+        } catch (e: Exception) {
+            logger.debug(
+                LogCategory.BROWSER,
+                "Could not read the engine Info.plist; assuming it is fine",
+                mapOf("reason" to (e.message ?: "unknown")),
+            )
+            false
+        }
 
     /**
      * Detect the current platform for download URL.

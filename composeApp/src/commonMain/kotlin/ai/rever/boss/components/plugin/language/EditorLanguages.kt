@@ -50,6 +50,22 @@ object EditorLanguages {
     }
 
     /**
+     * The extension-to-language table, for whoever has to stay in step with it.
+     *
+     * Exposed for exactly one reason: `boss-file-types.json` declares which file
+     * types BOSS asks the OS to make it the default for, and it must claim
+     * neither more nor less than what this table can highlight. Claiming more
+     * means BOSS agreeing to open a file it renders as plain text; claiming less
+     * means a language it *can* highlight that the OS never sends it.
+     * `FileTypeCategoriesTest` compares the two, which is the enforcement this
+     * class's own KDoc says nothing has.
+     *
+     * Read-only by construction: `EXTENSIONS` is an immutable `Map`, so this
+     * hands out no way to change it.
+     */
+    fun extensions(): Map<String, String> = EXTENSIONS
+
+    /**
      * Languages identified by file name rather than extension.
      *
      * Checked before extensions so that `Dockerfile.dev` is a Dockerfile rather than

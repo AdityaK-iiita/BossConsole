@@ -304,6 +304,38 @@ jobs:
             /usr/libexec/PlistBuddy -c "Set :NSBluetoothPeripheralUsageDescription $BT_USAGE" "$MAIN_PLIST"
           echo "Added Bluetooth usage descriptions to Info.plist"
 
+          # The engine must not be a Launch Services candidate.
+          #
+          # This bundle is Chromium, so it inherits Chromium's CFBundleURLTypes
+          # (http, https, file) and CFBundleDocumentTypes (public.html, images,
+          # ...). Branded, it is also called "BOSS" with the id
+          # ai.rever.boss.browser - so macOS offered TWO indistinguishable
+          # entries named "BOSS" under "Default web browser", and picking the
+          # wrong one handed every link to a bare rendering engine that has no
+          # BOSS window, no tabs and no session. Measured on a real machine
+          # before this fix: http, https and public.html all resolved to
+          # ai.rever.boss.browser while the app itself (ai.rever.boss) sat
+          # there reporting "not the default browser".
+          #
+          # BOSS.app declares those types itself; the engine has no business
+          # doing so. Deleted here rather than in params.json because the
+          # branding tool copies Chromium's plist through and has no switch for
+          # it, and here for the same reason as the Bluetooth keys above: BEFORE
+          # the re-sign, or the edit breaks the seal.
+          /usr/libexec/PlistBuddy -c "Delete :CFBundleURLTypes" "$MAIN_PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Delete :CFBundleDocumentTypes" "$MAIN_PLIST" 2>/dev/null || true
+          # Assert the end state. Both deletes end in `|| true` (absent is fine,
+          # and a future engine may ship neither key), so without this a
+          # PlistBuddy that silently failed would republish the collision - the
+          # exact bug this step exists to remove.
+          for KEY in CFBundleURLTypes CFBundleDocumentTypes; do
+            if /usr/libexec/PlistBuddy -c "Print :$KEY" "$MAIN_PLIST" >/dev/null 2>&1; then
+              echo "::error::$KEY still present in the engine Info.plist; it would register as a browser"
+              exit 1
+            fi
+          done
+          echo "Removed CFBundleURLTypes and CFBundleDocumentTypes from the engine Info.plist"
+
           # Re-sign after modifications, PRESERVING identity + entitlements. A
           # bare ad-hoc `codesign --force --sign -` here used to strip the
           # Developer ID identity and every entitlement (JIT,
@@ -591,6 +623,38 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :NSBluetoothPeripheralUsageDescription string $BT_USAGE" "$MAIN_PLIST" 2>/dev/null || \
             /usr/libexec/PlistBuddy -c "Set :NSBluetoothPeripheralUsageDescription $BT_USAGE" "$MAIN_PLIST"
           echo "Added Bluetooth usage descriptions to Info.plist"
+
+          # The engine must not be a Launch Services candidate.
+          #
+          # This bundle is Chromium, so it inherits Chromium's CFBundleURLTypes
+          # (http, https, file) and CFBundleDocumentTypes (public.html, images,
+          # ...). Branded, it is also called "BOSS" with the id
+          # ai.rever.boss.browser - so macOS offered TWO indistinguishable
+          # entries named "BOSS" under "Default web browser", and picking the
+          # wrong one handed every link to a bare rendering engine that has no
+          # BOSS window, no tabs and no session. Measured on a real machine
+          # before this fix: http, https and public.html all resolved to
+          # ai.rever.boss.browser while the app itself (ai.rever.boss) sat
+          # there reporting "not the default browser".
+          #
+          # BOSS.app declares those types itself; the engine has no business
+          # doing so. Deleted here rather than in params.json because the
+          # branding tool copies Chromium's plist through and has no switch for
+          # it, and here for the same reason as the Bluetooth keys above: BEFORE
+          # the re-sign, or the edit breaks the seal.
+          /usr/libexec/PlistBuddy -c "Delete :CFBundleURLTypes" "$MAIN_PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Delete :CFBundleDocumentTypes" "$MAIN_PLIST" 2>/dev/null || true
+          # Assert the end state. Both deletes end in `|| true` (absent is fine,
+          # and a future engine may ship neither key), so without this a
+          # PlistBuddy that silently failed would republish the collision - the
+          # exact bug this step exists to remove.
+          for KEY in CFBundleURLTypes CFBundleDocumentTypes; do
+            if /usr/libexec/PlistBuddy -c "Print :$KEY" "$MAIN_PLIST" >/dev/null 2>&1; then
+              echo "::error::$KEY still present in the engine Info.plist; it would register as a browser"
+              exit 1
+            fi
+          done
+          echo "Removed CFBundleURLTypes and CFBundleDocumentTypes from the engine Info.plist"
 
           # Re-sign after modifications, PRESERVING identity + entitlements. A
           # bare ad-hoc `codesign --force --sign -` here used to strip the

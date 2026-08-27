@@ -15,6 +15,7 @@ import ai.rever.boss.components.events.TerminalLinkEventBus
 import ai.rever.boss.components.events.URLEventBus
 import ai.rever.boss.components.events.WorkspaceEventBus
 import ai.rever.boss.components.plugin.DependentRestartEventBus
+import ai.rever.boss.components.plugin.MissingHandlerPluginEventBus
 import ai.rever.boss.components.plugin.PanelIds
 import ai.rever.boss.components.plugin.PluginDependencyEventBus
 import ai.rever.boss.components.plugin.resolveRegisteredPanelId
@@ -242,6 +243,55 @@ internal fun BossAppEventBusEffects(state: BossAppState) {
                 // window closing) leaves whatever is still in the channel for another window -
                 // though a prompt already received here and not yet shown does go with it.
                 snapshotFlow { state.pendingMissingPluginDependency }.first { it == null }
+            }
+    }
+
+    // BOSS was asked to open something - a link the OS handed over, a file
+    // double-clicked in Finder, a path dropped on a panel - and the plugin that
+    // renders it is not running. Without this the tab was silently dropped
+    // ("Dropped tab - no factory registered for its type") and the user saw
+    // nothing happen at all.
+    LaunchedEffect(windowId) {
+        MissingHandlerPluginEventBus.missingHandlers
+            .collect { prompt ->
+                // Declined since it was raised: two files can each raise a prompt
+                // for the same plugin before either is shown, and the second must
+                // not re-ask a question already answered. The bus filters at
+                // report time too; this covers the gap between the two.
+                if (MissingHandlerPluginEventBus.wasDeclined(prompt.missing.pluginId)) {
+                    return@collect
+                }
+                // Resolved on its own since it was raised: the plugin may have been
+                // installed from the Toolbox, or registration may simply have run
+                // past the first bounded wait. TabTypeAvailability's second wait
+                // then completes and the deferred open succeeds - and without this
+                // the queued dialog still appeared, offering to install a plugin
+                // that is now running. The dependency-bus collector guards the
+                // analogous case by re-checking isInstalled.
+                //
+                // Compared on the type STRING, not by looking up a TabTypeId:
+                // TabTypeId is a data class whose equality includes pluginId and
+                // defaultOrder, so a constructed one misses a type that is plainly
+                // registered - the trap panelid-defaultorder-silent-miss records.
+                val alreadyRegistered =
+                    state.tabRegistry.getAllTabTypes().any { candidate ->
+                        candidate.typeId.typeId == prompt.missing.tabTypeId
+                    }
+                if (alreadyRegistered) {
+                    logger.debug(
+                        LogCategory.UI,
+                        "Not asking about a tab-type plugin that has since registered",
+                        mapOf("plugin" to prompt.missing.pluginId, "tabType" to prompt.missing.tabTypeId),
+                    )
+                    return@collect
+                }
+                state.resolvingMissingHandlerPlugin = false
+                state.missingHandlerPluginError = null
+                state.pendingMissingHandlerPlugin = prompt
+                // Back-pressure rather than a queue, exactly as above: a second
+                // missing plugin waits in the channel instead of replacing a
+                // dialog someone is reading.
+                snapshotFlow { state.pendingMissingHandlerPlugin }.first { it == null }
             }
     }
 

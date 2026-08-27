@@ -355,8 +355,12 @@ class CLICommandHandler private constructor() {
             return
         }
 
-        // Security validation
-        if (!CLISecurityValidator.isValidPath(file.absolutePath)) {
+        // Security validation. isValidOpenTargetPath, not isValidPath: this file
+        // is going to be read into an editor, never typed into a shell, and
+        // isValidPath's shell-metacharacter rules rejected legal filenames
+        // ("Q&A notes.md", anything under a directory with a `$` in it) so the
+        // open was dropped with nothing shown. See its KDoc.
+        if (!CLISecurityValidator.isValidOpenTargetPath(file.absolutePath)) {
             logger.warn(LogCategory.SYSTEM, "Invalid file path (security check failed)", mapOf("path" to file.absolutePath))
             return
         }

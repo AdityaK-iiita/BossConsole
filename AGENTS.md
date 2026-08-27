@@ -686,9 +686,190 @@ Linux) or a loopback port (Windows). Every request must present the token,
 "another instance is running" means something answered on the channel rather than
 a pid existing, and a descriptor nobody answers on is reclaimed.
 
+## Every OS open request becomes a `boss://` link
+
+Links and files arrive through four different doors and all four normalise to one
+deep link before anything else happens, via `fileDeepLinkFor` and
+`OsOpenArguments`:
+
+| Door | Platform | Handler |
+|---|---|---|
+| open-URI AppleEvent | macOS | `Desktop.setOpenURIHandler` |
+| open-file AppleEvent | macOS | `Desktop.setOpenFileHandler` |
+| a path or URL in `argv` | Windows, Linux | `DeepLinkHandler.processCommandLineArgs` |
+| a forward over the single-instance channel | all | `main.kt`, when the lock is held |
+
+The point of funnelling them is that `boss://file` and `boss://url` already carry
+the parts each new door would otherwise have to re-implement: path validation, the
+window resolve through `WindowFocusManager.resolveActionableWindowId`, and the
+`FileHandlerService` / `URLHandlerService` counters that stop the New Tab dialog
+destroying the tab being created during a cold start.
+
+Four things that were broken before this and are easy to break again:
+
+- **Nothing registered an open-file handler at all.** BOSS declared
+  `CFBundleDocumentTypes`, appeared in Finder's Open With menu, launched when a
+  file was double-clicked, and then did nothing with it. macOS discards the
+  AppleEvent once the queue drains with no handler set.
+- **`processCommandLineArgs` was gated on Windows.** Linux delivers a protocol URL
+  in `argv` too (`Exec=<app> %U`) and the JDK's X11 peer supports no
+  `APP_OPEN_URI` action, so a Linux user with BOSS as their default browser had
+  every cold-start link silently dropped.
+- **A CLI invocation must not be extracted as an open request.** `OsOpenArguments`
+  returns nothing when any argument names a `createBossCLI` subcommand, or
+  `boss file /tmp/x.md` opens the file twice. `OsOpenArgumentsTest` pins the
+  subcommand list against `BossCommand.kt`.
+- **A `file://` URL is not a path.** `Exec=%U` hands file managers' URLs over, and
+  `File(URI)` rejects any authority component, so `file://localhost/tmp/x` needs
+  the redundant host stripped before it resolves.
+
+`CLISecurityValidator` now has two path checks, and using the wrong one is a
+visible bug either way. `isValidOpenTargetPath` is for a file about to be **read**
+into the editor: NUL rejected, canonicalised, nothing else. `isValidPath` is for a
+path that may reach a **shell** and rejects `..`, `$`, `&`, `;`, `|` and a
+backtick - which are ordinary filename characters, so applying it to a file open
+meant `Q&A notes.md` could not be opened at all.
+
+## Default applications, and the engine bundle that stole them
+
+`boss-file-types.json` (in `composeApp/src/desktopMain/resources`) is the single
+source of truth for what BOSS can be made the default handler for: five
+categories over 83 extensions, which is exactly what `EditorLanguages.EXTENSIONS`
+can highlight. Three consumers read it and one test pins it:
+
+- `buildSrc/BossFileTypes` generates the `CFBundleURLTypes`,
+  `CFBundleDocumentTypes` and `UTExportedTypeDeclarations` blocks at build time.
+- `FileTypeCategories` serves the Settings screen and the registration calls.
+- `WindowsFileTypeHandler` and `LinuxFileTypeHandler` derive ProgIDs and MIME
+  associations from it.
+- `FileTypeCategoriesTest` asserts its extension set and its extension-to-language
+  map equal `EditorLanguages.EXTENSIONS`, so what BOSS offers to open cannot drift
+  from what it can render. (`buildSrc/BossFileTypesTest` checks the same thing by
+  regex, because `buildSrc` compiles first and cannot see the real object.)
+
+**Launch Services can only make an app the default for a *type*, never for an
+extension.** 42 of the 83 extensions resolve to a system UTI, which BOSS claims
+as-is - 31 distinct UTIs, since several extensions share one (`.cpp`, `.cc` and
+`.cxx` are all `public.c-plus-plus-source`). The other 41 have no system UTI
+(`UTType(filenameExtension:)` answers with a `dyn.*` placeholder, which cannot be
+set as a default), so BOSS exports its own type for them, grouped by language into
+24 declarations. The per-extension answers in the resource are
+**measured, not derived**, and three of them are the reason: `.ts` resolves to
+`public.mpeg-2-transport-stream` (a video container), `.as` to
+`com.apple.applesingle-archive` (a binary archive) and `.edn` to `com.adobe.edn`.
+Claiming any of those would make BOSS the default application for a format it
+cannot open, so they are recorded as `rejectedSystemType` and get an exported type
+instead.
+
+**Windows registration is one `reg import`, not hundreds of `reg add`s.**
+`WindowsRegistryScript` generates a `.reg` script and `WindowsFileTypeHandler`
+imports it in a single process; the status is one `reg query <FileExts> /s` parsed
+once. The per-`reg add` version ran on the order of 415 processes for a
+five-category "Set all" plus 83 more to read the status, each with its own
+timeout, from a Settings screen and from the first-run offer at startup.
+
+It also removes a quoting hazard rather than trying to get it right: the
+`shell\open\command` value is `"C:\path\BOSS.exe" "%1"`, a string that both
+begins and ends with a double quote, and Java's Windows `ProcessImpl` treats an
+argument in that shape as already quoted and passes it through unescaped - so
+`reg` would have stored only the exe path and treated `"%1"` as a stray token,
+killing the one write that makes a double-clicked file reach BOSS. That premise
+could not be verified on a mac (the JDK ships only the Unix `ProcessImpl`), which
+is itself a reason to prefer the form where the question cannot arise. In a `.reg`
+file the value is escaped by `regEscape` and never passes through a command line.
+
+**The three platform handlers share one fold.** `DefaultHandlerState.reduce` is
+the single definition of "BOSS only when every type in the category is BOSS, and
+`OurEngine` outranks `Other`". Each handler had its own copy; they agreed, which
+is the only reason nothing was broken, and a fourth copy would not have.
+
+**The engine bundle used to be a second app called "BOSS".**
+`~/.boss/boss-chromium/BOSS.app` is the branded JxBrowser engine, and being
+Chromium it inherited `CFBundleURLTypes` (http, https) and
+`CFBundleDocumentTypes` (`public.html`). Branded, its `CFBundleName` is also
+"BOSS" and its id is `ai.rever.boss.browser` - so System Settings offered two
+indistinguishable "BOSS" entries under Default web browser, and picking the wrong
+one handed every link to a bare rendering engine with no window, no tabs and no
+session. Measured on a real machine: http, https and `public.html` all resolved to
+`ai.rever.boss.browser` while the app itself reported "not the default browser".
+
+Both halves of the fix matter. `build-chromium-branding.yml` now deletes both keys
+from the engine's `Info.plist` before the re-sign (`EngineBundlePlistStripTest`
+pins that, including the ordering: after the re-sign the edit breaks the seal), so
+future engines are clean. And `DefaultHandlerState` is a three-way answer -
+`Ours` / `OurEngine` / `Other` - so an install already in the broken state is told
+what actually happened and offered a Repair rather than "BOSS is not your default
+browser", which is the wrong story to tell somebody who did set it.
+
+**An existing install cannot be fixed by a version number.** The engine fix ships
+inside a *rebuild* of an already-published engine, so `version.txt` reads the same
+before and after and `ChromiumAutoDownloader.isChromiumInstalled`'s equality test
+short-circuits. So that function also asks the extracted bundle what it actually
+declares (`declaresBrowserTypes`): on macOS, an `Info.plist` still carrying
+`CFBundleURLTypes` or `CFBundleDocumentTypes` invalidates the directory and the
+existing download path replaces it. Three things about that check:
+
+- It sits beside the execute-bit check in the same function, which exists for the
+  same reason: catching a cached engine that is the right *version* and the wrong
+  *content*.
+- It is **bounded to one attempt per version** by a marker outside the engine
+  directory (`~/.boss/boss-chromium.types-repair`; a re-download replaces the
+  directory itself). Without it, an engine that still declares the keys after the
+  re-download - the rebuild never published, or published unrepaired - would
+  re-fetch ~160 MB on every launch, silently.
+- It **fails closed**: an unreadable or absent plist answers false, because
+  forcing a large download over a file we could not read is the worse mistake.
+  It matches `<key>NAME</key>` rather than the bare key name, so a comment or a
+  string value naming the key is not a declaration.
+
+`lsregister -u` on the engine bundle was tried first and does nothing: it returns
+0 and the bundle is still a candidate for `https` and `public.html` afterwards, so
+there is no download-free way to take it out of Launch Services.
+
+Launch Services is reached through `utils/mac/LaunchServices.kt`, bound with JNA.
+It replaced a `swift <tempfile>` shell-out per call, which needed Xcode installed
+and so could not work at all on most machines; the Swift scripts remain only as a
+fallback for URL schemes if `Native.load` fails.
+
+## A missing plugin no longer fails silently
+
+Browser, editor and terminal tabs are plugin-provided. `addTab` logged "Dropped
+tab - no factory registered for its type", returned -1, and every caller ignored
+it: with the browser plugin absent the OS could hand BOSS a link and nothing at
+all appeared, which is what "BOSS is my default browser and clicking a link does
+nothing" was.
+
+`SplitViewState.requireTabTypeThen` now gates every open on
+`TabTypeAvailability.require`, which:
+
+1. returns immediately when the type is registered (the normal case, so the fast
+   path does not suspend);
+2. otherwise **waits** through `awaitRegistryCondition` - at a cold start the
+   plugins have not registered yet, and prompting there would be a false alarm on
+   every launch, the same reason `WorkspaceApplier.awaitTabTypes` exists;
+3. only then raises a `MissingHandlerPluginPrompt` on `MissingHandlerPluginEventBus`,
+   whose delivery copies `PluginDependencyBus` deliberately: a `Channel` so exactly
+   one window asks, buffered so reporting never suspends the open, `trySend` so an
+   overflow is refused and logged rather than silently dropped;
+4. waits again, up to five minutes, for the plugin to register. **The dialog has no
+   success callback**: installing or enabling registers the tab type, which fires
+   the registry listeners, which completes this wait and performs the deferred
+   open. The file the user double-clicked appears by itself.
+
+It offers **Enable**, not Install, when the plugin is on disk and `DISABLED`.
+Installing something already installed cannot fix it, and both halves share
+`PluginDependencyResolution.installedAndOnDisk` so they cannot disagree about
+"installed" - the trap this repo's own AGENTS.md records as having broken the
+dependency prompt once already.
+
+`TabTypePlugins` maps a tab type to the plugin that provides it. It has to be a
+literal table: the mapping lives in each plugin's `plugin.json` and when the
+plugin is absent there is no manifest to read. It keys on the **type string**, not
+the whole `TabTypeId`, whose equality includes `pluginId` and `defaultOrder`.
+
 ## Documentation
 
-- [Core Subsystems](docs/SUBSYSTEMS.md) - Auth, UI, keyboard shortcuts, threading, default browser, runner, BossTerm
+- [Core Subsystems](docs/SUBSYSTEMS.md) - Auth, UI, keyboard shortcuts, threading, default applications, runner, BossTerm
 - [BossEditor](docs/BOSSEDITOR.md) - External editor dependency, LSP, PSI, editor features
 - [Application Features](docs/FEATURES.md) - Performance monitoring, dashboard, downloads, Chromium branding
 - [Keyboard Shortcuts](docs/KEYBOARD_SHORTCUTS.md) - Detailed shortcuts reference

@@ -156,33 +156,57 @@ CoroutineScope(Dispatchers.IO).launch {
 - All platforms use same version from single source
 - Use `./gradlew showVersion` to see current version
 
-## Default Browser Support
+## Default Applications
 
-**Overview**: BOSS can be set as the default system browser to handle http:// and https:// URLs.
+**Overview**: BOSS can be made the default handler for http/https links and for
+the file types it opens: markdown, shell scripts, web pages and every language its
+editor can highlight.
 
 **Key Files**:
-- `DefaultBrowserManager.kt` (common/desktop) - Cross-platform interface
-- `MacOSDefaultBrowserHandler.kt` - macOS implementation
-- `WindowsDefaultBrowserHandler.kt` - Windows implementation
-- `LinuxDefaultBrowserHandler.kt` - Linux implementation
-- `URLHandlerService.kt` - Handles incoming http/https URLs
-- `DefaultBrowserSection.kt` - Settings UI
+- `boss-file-types.json` (`composeApp/src/desktopMain/resources`) - the single
+  source of truth: five categories, 83 extensions, the macOS UTIs each claims and
+  the Linux MIME types each maps to
+- `buildSrc/BossFileTypes.kt` - generates the `Info.plist` declarations from it
+- `FileTypeCategories.kt` - the runtime reader
+- `DefaultAppsManager.kt` - reads and sets defaults per category
+- `MacOSFileTypeHandler.kt` / `WindowsFileTypeHandler.kt` / `LinuxFileTypeHandler.kt`
+- `utils/mac/LaunchServices.kt` - the JNA binding to Launch Services
+- `DefaultHandlerState.kt` - `Ours` / `OurEngine` / `Other`
+- `DefaultAppsSettings.kt` - Settings > Default Apps
+- `DefaultAppsOffer.desktop.kt` - the one-time first-run offer
+- `DefaultBrowserManager.kt` + `DefaultBrowserSection.kt` - the browser-only
+  facade, still used by Settings > Browser
 
 **Platform Behavior**:
-- macOS: Automatic registration via Info.plist, Swift scripts
-- Windows: Registry keys, user must manually select in Settings
-- Linux: .desktop file with xdg-settings/xdg-mime
+- macOS: `LSSetDefaultRoleHandlerForContentType` / `LSSetDefaultHandlerForURLScheme`
+  through JNA, against types the bundle declares in `CFBundleDocumentTypes` and
+  `UTExportedTypeDeclarations`
+- Windows: per-extension ProgIDs under `HKCU\Software\Classes` plus
+  `Capabilities\FileAssociations`; the default itself can only be chosen by the
+  user in `ms-settings:defaultapps`, which BOSS opens
+- Linux: a `boss.desktop` entry declaring every MIME type, then `xdg-mime default`
+  per type
 
-**URL Handling Flow**:
-1. OS passes URL to BOSS via protocol handler
-2. `DeepLinkHandler` checks protocol
-3. If http/https: forwards to `URLHandlerService`
-4. If boss://: processes as authentication deep link
-5. Creates new browser tab in active window
+**Open Handling Flow**: every door the OS can use is normalised to a `boss://`
+link. See "Every OS open request becomes a `boss://` link" in `AGENTS.md` for the
+four doors and the four bugs that section records.
+
+1. OS passes a URL or a file to BOSS (AppleEvent on macOS, `argv` elsewhere)
+2. `DeepLinkHandler` / `OsOpenArguments` turn it into `boss://url` or `boss://file`
+3. `URLHandlerService` or `CLICommandHandler` validates and resolves a window
+4. `URLEventBus` / `FileEventBus` reach the window, which opens the tab
+5. If the plugin that renders that tab type is missing, `TabTypeAvailability`
+   offers to install or enable it rather than dropping the tab
 
 Anything arriving this way is tagged `DeepLinkOrigin.EXTERNAL`, since the OS
 accepts a URL from any program; only links BOSS's own CLI parsed out of `argv`
 are tagged `OPERATOR_CLI`. See the Deep Links section of `AGENTS.md`.
+
+**The collision worth knowing about**: the branded Chromium engine in
+`~/.boss/boss-chromium/BOSS.app` used to declare http, https and `public.html`
+itself, under the id `ai.rever.boss.browser` and the name "BOSS". Any install
+predating that fix is likely to have the engine as its default browser, which is
+why the status is three-way and the button says Repair. See AGENTS.md.
 
 ## Runner Terminal System
 

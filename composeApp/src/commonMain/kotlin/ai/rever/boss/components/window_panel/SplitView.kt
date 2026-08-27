@@ -6,6 +6,7 @@ import ai.rever.boss.components.model.TabDraggableComponent
 import ai.rever.boss.components.model.TabDropResult
 import ai.rever.boss.components.model.TabDropTarget
 import ai.rever.boss.components.overlays.OverlayCorner
+import ai.rever.boss.components.plugin.TabTypeAvailability
 import ai.rever.boss.components.plugin.disposePluginBrowsers
 import ai.rever.boss.components.plugin.tab_types.PanelHostTabInfo
 import ai.rever.boss.components.plugin.tab_types.fluck.FluckTabInfo
@@ -32,9 +33,12 @@ import ai.rever.boss.plugin.api.TabIcon
 import ai.rever.boss.plugin.api.TabInfo
 import ai.rever.boss.plugin.api.TabRegistry
 import ai.rever.boss.plugin.api.TabTypeId
+import ai.rever.boss.plugin.tab.codeeditor.CodeEditorTabType
 import ai.rever.boss.plugin.tab.codeeditor.EditorTabInfo
+import ai.rever.boss.plugin.tab.fluck.FluckTabType
 import ai.rever.boss.plugin.tab.jupyter.JupyterTabInfo
 import ai.rever.boss.plugin.tab.terminal.TerminalTabInfo
+import ai.rever.boss.plugin.tab.terminal.TerminalTabType
 import ai.rever.boss.plugin.ui.BossTheme
 import ai.rever.boss.project.DefaultWorkingDirectory
 import ai.rever.boss.topofmind.ActiveTab
@@ -89,6 +93,10 @@ import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arkivanov.decompose.extensions.compose.subscribeAsState
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -197,6 +205,77 @@ class SplitViewState(
     private val windowId: String,
     initialTabsComponent: BossTabsComponent? = null,
 ) {
+    /**
+     * Scope for the deferred opens in [requireTabTypeThen].
+     *
+     * Window-lived and cancelled by [dispose], which `BossAppStartupEffects`
+     * calls from a `DisposableEffect` keyed on this state alone. What it holds is
+     * a wait of up to five minutes on a person answering a dialog, so closing the
+     * window has to abandon that rather than leave a coroutine holding a
+     * reference to a disposed window's panels.
+     *
+     * `Dispatchers.Main`: every continuation ends in an `addTab`, which touches
+     * Compose state.
+     */
+    private val openScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
+    /**
+     * Cancels the deferred opens. Called when this state leaves the composition.
+     *
+     * Deliberately NOT called from `SplitViewStateRegistry.unregister`, which was
+     * the first attempt: that runs from a `DisposableEffect` keyed on seven
+     * values, only one of which is this state, so a change to any of the other
+     * six would cancel a live window's scope and leave every later deferred open
+     * silently doing nothing.
+     */
+    internal fun dispose() {
+        openScope.cancel()
+    }
+
+    /**
+     * Runs [open] once [typeId]'s plugin is available, asking the user to install
+     * or enable it if it is not.
+     *
+     * Every open below goes through this, because the alternative is what shipped:
+     * `addTab` logs "Dropped tab - no factory registered for its type", returns
+     * -1, and every caller ignores it - so with the browser plugin absent the OS
+     * could hand BOSS a link and nothing whatsoever appeared.
+     *
+     * The fast path is synchronous in effect: [TabTypeAvailability.require]
+     * returns immediately when the type is registered, which is the normal case,
+     * and `launch` on `Dispatchers.Main` from the UI thread runs the continuation
+     * without yielding to another frame. The suspension only happens when there
+     * is genuinely something to wait for.
+     *
+     * @param purpose what the user was trying to do, for the dialog's copy.
+     */
+    private fun requireTabTypeThen(
+        typeId: TabTypeId,
+        purpose: String,
+        open: () -> Unit,
+    ) {
+        if (tabRegistry.isRegistered(typeId)) {
+            open()
+            return
+        }
+        openScope.launch {
+            if (!TabTypeAvailability.require(tabRegistry, typeId, purpose)) return@launch
+            // The wait can be five minutes long, because what it waits for is a
+            // person answering a dialog. Cancelling the scope is the primary
+            // guard; this is the one that survives a window teardown that did not
+            // reach it, rather than adding a tab to a panel tree nothing renders.
+            if (SplitViewStateRegistry.getState(windowId) !== this@SplitViewState) {
+                splitViewLogger.debug(
+                    LogCategory.UI,
+                    "Dropping a deferred open; its window is gone",
+                    mapOf("typeId" to typeId.typeId),
+                )
+                return@launch
+            }
+            open()
+        }
+    }
+
     // Root node of the split tree
     private var _rootNode =
         mutableStateOf<SplitNode>(
@@ -535,6 +614,15 @@ class SplitViewState(
         filePath: String,
         fileName: String,
     ) {
+        requireTabTypeThen(CodeEditorTabType.typeId, "Opening $fileName") {
+            openFileInEditorTabNow(filePath, fileName)
+        }
+    }
+
+    private fun openFileInEditorTabNow(
+        filePath: String,
+        fileName: String,
+    ) {
         val activeComponent = getActiveTabsComponent() ?: return
 
         // Check if file is already open in an editor tab in any panel
@@ -578,6 +666,16 @@ class SplitViewState(
         url: String,
         title: String,
         forceNewTab: Boolean = false,
+    ) {
+        requireTabTypeThen(FluckTabType.typeId, "Opening $title") {
+            openUrlInActivePanelNow(url, title, forceNewTab)
+        }
+    }
+
+    private fun openUrlInActivePanelNow(
+        url: String,
+        title: String,
+        forceNewTab: Boolean,
     ) {
         val activeComponent = getActiveTabsComponent()
 
@@ -654,23 +752,41 @@ class SplitViewState(
         command: String? = null,
         workingDirectory: String? = null,
     ) {
-        val activeComponent = getActiveTabsComponent()
+        requireTabTypeThen(TerminalTabType.typeId, "Opening a terminal") {
+            openTerminalInActivePanelNow(command, workingDirectory)
+        }
+    }
 
-        // Use provided working directory, or fall back to project path
+    /**
+     * Where a terminal opened in this window should start.
+     *
+     * Extracted from [openTerminalInActivePanelNow] to keep that function under
+     * the length limit once the availability gate split it in two; the rule it
+     * encodes is worth reading on its own anyway.
+     *
+     * `selectedOrNull` on the override too, not just `?:`. A run configuration
+     * with an unset working directory reaches here as "", which is not null, so
+     * it would pass straight through to the terminal service and land in the home
+     * directory - the thing this is meant to stop. Blank counts as absent, the
+     * same rule DefaultWorkingDirectory applies to a project path.
+     */
+    private fun terminalWorkingDirectory(workingDirectory: String?): String {
         val projectPath =
             WindowProjectStateRegistry
                 .get(windowId)
                 ?.selectedProject
                 ?.value
                 ?.path ?: ""
-        // selectedOrNull on the override too, not just `?:`. A run configuration with an unset
-        // working directory reaches here as "", which is not null, so it would pass straight
-        // through to the terminal service and land in the home directory - the thing this is
-        // meant to stop. Blank counts as absent, the same rule DefaultWorkingDirectory applies
-        // to a project path.
-        val terminalWorkingDir =
-            DefaultWorkingDirectory.selectedOrNull(workingDirectory)
-                ?: DefaultWorkingDirectory.resolve(projectPath)
+        return DefaultWorkingDirectory.selectedOrNull(workingDirectory)
+            ?: DefaultWorkingDirectory.resolve(projectPath)
+    }
+
+    private fun openTerminalInActivePanelNow(
+        command: String?,
+        workingDirectory: String?,
+    ) {
+        val activeComponent = getActiveTabsComponent()
+        val terminalWorkingDir = terminalWorkingDirectory(workingDirectory)
 
         // If no active component, this is likely the first terminal on app startup
         // Find any available panel to add the tab to

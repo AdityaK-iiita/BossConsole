@@ -48,6 +48,11 @@ enum class SettingsSection(
         description = "Chromium engine version, downloads, and reinstall",
         icon = Icons.Outlined.Memory,
     ),
+    DEFAULT_APPS(
+        displayName = "Default Apps",
+        description = "Links, markdown, shell scripts and code files BOSS opens",
+        icon = Icons.Outlined.AppRegistration,
+    ),
     BOSS_EDITOR(
         displayName = "BossEditor",
         description = "Scroll behavior, code folding, and bracket matching",

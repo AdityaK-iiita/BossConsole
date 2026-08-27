@@ -255,6 +255,7 @@
     <ID>LongMethod:CrashReportService.kt$CrashReportService$private suspend fun submitViaProxy(report: CrashReport): ProxyResult</ID>
     <ID>LongMethod:CrossDeviceAuthenticationDialog.kt$@Composable fun CrossDeviceAuthenticationDialog( qrCodeUrl: String?, challenge: String?, sessionId: String? = null, onDismiss: () -&gt; Unit, onSuccess: () -&gt; Unit, onCreateFluckTab: ((FluckTabInfo) -&gt; Unit)? = null, )</ID>
     <ID>LongMethod:Dashboard.kt$@Composable fun Dashboard( onOpenFile: (String) -&gt; Unit, onOpenUrl: (String) -&gt; Unit, onOpenProject: (Project) -&gt; Unit, selectedProject: Project = Project("No Project", "", 0L), onNewTab: () -&gt; Unit, onNewTerminal: () -&gt; Unit, onNewWindow: () -&gt; Unit, onOpenProjectDialog: () -&gt; Unit, onOpenFileDialog: () -&gt; Unit, onNewProject: () -&gt; Unit, onApplySplitTemplate: (SplitTemplate) -&gt; Unit, onActivatePlugin: (String) -&gt; Unit, onShowSettings: (() -&gt; Unit)? = null, modifier: Modifier = Modifier, )</ID>
+    <ID>LongMethod:DefaultAppsSettings.kt$@Composable fun DefaultAppsSettings()</ID>
     <ID>LongMethod:DefaultBrowserSection.kt$@Composable fun DefaultBrowserSection()</ID>
     <ID>LongMethod:DefaultPlugin.kt$DefaultPlugin$private fun loadExternalPlugins()</ID>
     <ID>LongMethod:DefaultPlugin.kt$DefaultPlugin$private fun registerKernelPluginServices()</ID>
@@ -1054,6 +1055,7 @@
     <ID>ReturnCount:CLICommandHandler.kt$CLICommandHandler$private suspend fun handleOpenFolder(folderPath: String)</ID>
     <ID>ReturnCount:CLIInstaller.kt$CLIInstaller$private fun installHomebrewStyle(): CLIInstallResult</ID>
     <ID>ReturnCount:CLIInstaller.kt$CLIInstaller$private fun updateShellConfig(): ShellConfigResult</ID>
+    <ID>ReturnCount:CLISecurityValidator.kt$CLISecurityValidator$fun isValidOpenTargetPath(path: String): Boolean</ID>
     <ID>ReturnCount:CLISecurityValidator.kt$CLISecurityValidator$fun isValidPath(path: String): Boolean</ID>
     <ID>ReturnCount:CLISecurityValidator.kt$CLISecurityValidator$fun normalizeAndValidateUrl(url: String): String?</ID>
     <ID>ReturnCount:ChromiumAutoDownloader.kt$ChromiumAutoDownloader$fun isChromiumInstalled(): Boolean</ID>
@@ -1103,11 +1105,12 @@
     <ID>ReturnCount:KeymapMatcher.kt$KeymapMatcher$fun match( event: KeyEvent, context: ShortcutContext, ): KeyBinding?</ID>
     <ID>ReturnCount:KeymapMatcher.kt$KeymapMatcher$private fun matchesBinding( event: KeyEvent, binding: KeyBinding, ): Boolean</ID>
     <ID>ReturnCount:LLMSettings.kt$LLMSettings$fun getApiKey(provider: LLMProvider): String?</ID>
-    <ID>ReturnCount:MacOSDefaultBrowserHandler.kt$MacOSDefaultBrowserHandler$private fun getDefaultHandlers(): Map&lt;String, String&gt;</ID>
-    <ID>ReturnCount:MacOSDefaultBrowserHandler.kt$MacOSDefaultBrowserHandler$private fun setDefaultHandlerForScheme(scheme: String): Boolean</ID>
+    <ID>ReturnCount:MacOSDefaultBrowserHandler.kt$MacOSDefaultBrowserHandler$private fun getDefaultHandlersViaSwift(): Map&lt;String, String&gt;</ID>
+    <ID>ReturnCount:MacOSDefaultBrowserHandler.kt$MacOSDefaultBrowserHandler$private fun setDefaultHandlerForSchemeViaSwift(scheme: String): Boolean</ID>
     <ID>ReturnCount:McpToolRegistryImpl.kt$McpToolRegistryCore$private fun permitted(def: McpToolDefinition): Boolean</ID>
     <ID>ReturnCount:MenuShortcutBridge.kt$MenuShortcutBridge$fun getKeyShortcut(actionId: String): androidx.compose.ui.input.key.KeyShortcut?</ID>
     <ID>ReturnCount:NewTabDialog.kt$private fun validateFilePath( path: String, basePath: String? = null, ): String?</ID>
+    <ID>ReturnCount:OsOpenArguments.kt$OsOpenArguments$fun deepLinksFrom( args: Array&lt;String&gt;, kindOf: (String) -&gt; OpenTargetKind = ::openTargetKindOf, ): List&lt;String&gt;</ID>
     <ID>ReturnCount:PanelComponentStore.kt$PanelComponentStore$fun getOrCreateComponent(panelId: PanelId): PanelComponentWithUI?</ID>
     <ID>ReturnCount:PanelComponentStore.kt$PanelComponentStore$fun resetComponent(panelId: PanelId): Boolean</ID>
     <ID>ReturnCount:PasskeyAuthService.kt$PasskeyAuthService$suspend fun authenticateWithPasskey( email: String? = null, credentialId: String? = null, ): Result&lt;Unit&gt;</ID>
@@ -1135,16 +1138,17 @@
     <ID>ReturnCount:SessionManager.kt$SessionManager$suspend fun loadSession(): Result&lt;UserInfo?&gt;</ID>
     <ID>ReturnCount:ShortcutTestRunner.kt$ShortcutTestRunner$private fun validateKeyName(keyName: String): Pair&lt;Boolean, String&gt;</ID>
     <ID>ReturnCount:ShortcutTestRunner.kt$ShortcutTestRunner$suspend fun testShortcut(binding: KeyBinding): ShortcutTestResult</ID>
-    <ID>ReturnCount:SplitView.kt$SplitViewState$fun openUrlInActivePanel( url: String, title: String, forceNewTab: Boolean = false, )</ID>
     <ID>ReturnCount:SplitView.kt$SplitViewState$fun setActivePanel(panelId: String)</ID>
+    <ID>ReturnCount:SplitView.kt$SplitViewState$private fun openUrlInActivePanelNow( url: String, title: String, forceNewTab: Boolean, )</ID>
     <ID>ReturnCount:StoreVersionInstaller.kt$StoreVersionInstaller$private suspend fun activate( request: StoreVersionRequest, target: File, unload: suspend (String) -&gt; Result&lt;Unit&gt;, load: suspend (String) -&gt; Result&lt;Boolean&gt;, ): Result&lt;String&gt;</ID>
     <ID>ReturnCount:StoreVersionInstaller.kt$StoreVersionInstaller$suspend fun install( store: PluginRepository, request: StoreVersionRequest, unload: suspend (String) -&gt; Result&lt;Unit&gt;, load: suspend (String) -&gt; Result&lt;Boolean&gt;, onProgress: ((Float) -&gt; Unit)? = null, onInstalling: (() -&gt; Unit)? = null, ): Result&lt;String&gt;</ID>
     <ID>ReturnCount:SupabasePasskeyService.kt$SupabasePasskeyService$suspend fun getUserPasskeys(userId: String): Result&lt;List&lt;PasskeyCredential&gt;&gt;</ID>
     <ID>ReturnCount:SupabasePasskeyService.kt$SupabasePasskeyService$suspend fun requestRegistrationChallenge( userId: String, displayName: String, authenticatorSelection: AuthenticatorSelectionCriteria?, ): Result&lt;PasskeyChallenge&gt;</ID>
     <ID>ReturnCount:TabDraggableComponent.kt$TabDraggableComponent$private fun checkEdgeScroll()</ID>
     <ID>ReturnCount:TabDraggableComponent.kt$TabDraggableComponent$private fun updateDropTarget()</ID>
+    <ID>ReturnCount:TabTypeAvailability.kt$TabTypeAvailability$private fun promptFor( typeId: TabTypeId, pluginId: String, purpose: String, ): MissingHandlerPluginPrompt?</ID>
+    <ID>ReturnCount:TabTypeAvailability.kt$TabTypeAvailability$suspend fun require( registry: TabRegistry, typeId: TabTypeId, purpose: String, bus: MissingHandlerPluginBus = MissingHandlerPluginEventBus, ): Boolean</ID>
     <ID>ReturnCount:TabUpdateRegistry.kt$TabUpdateRegistry$private fun resolveProvider( tabId: String, typeId: TabTypeId, ): TabUpdateProvider?</ID>
-    <ID>ReturnCount:URLHandlerService.kt$URLHandlerService$private fun isValidURL(url: String): Boolean</ID>
     <ID>ReturnCount:UpdateInstaller.kt$UpdateInstaller$fun getCurrentApplicationPath(): String?</ID>
     <ID>ReturnCount:UpdateInstaller.kt$UpdateInstaller$private fun detectLinuxDistroType(): String</ID>
     <ID>ReturnCount:UpdateInstaller.kt$UpdateInstaller$private fun findInstalledAppViaSpotlight(): String?</ID>
@@ -1153,8 +1157,12 @@
     <ID>ReturnCount:UpdateInstaller.kt$UpdateInstaller$suspend fun installUpdate(downloadPath: String): InstallResult</ID>
     <ID>ReturnCount:UpdateInstaller.kt$internal fun realAppPathFor( path: String, appExists: (String) -&gt; Boolean, installedAppLookup: () -&gt; String?, ): String</ID>
     <ID>ReturnCount:UpdateManager.kt$UpdateManager$private suspend fun checkForUpdatesInternal(force: Boolean = false): UpdateResult</ID>
+    <ID>ReturnCount:UrlOpenValidation.kt$UrlOpenValidation$fun isOpenable(url: String): Boolean</ID>
+    <ID>ReturnCount:UrlOpenValidation.kt$UrlOpenValidation$private fun hostOf(authority: String): String?</ID>
     <ID>ReturnCount:WebsiteMatchingUtil.kt$WebsiteMatchingUtil$fun extractMainDomain(url: String): String?</ID>
     <ID>ReturnCount:WindowsDefaultBrowserHandler.kt$WindowsDefaultBrowserHandler$private fun registerAsBrowserCandidate(): Boolean</ID>
+    <ID>ReturnCount:WindowsFileTypeHandler.kt$WindowsFileTypeHandler$fun register(category: FileTypeCategory): Boolean</ID>
+    <ID>ReturnCount:WindowsRegistryScript.kt$WindowsRegistryScript$private fun userChoiceExtensionOf(keyLine: String): String?</ID>
     <ID>ReturnCount:WorkspacePlaceholders.kt$WorkspacePlaceholders$private fun getGitRemoteUrl(projectPath: String): String</ID>
     <ID>SpreadOperator:CrashHandler.kt$CrashHandler$(javaBin, *getRestartArgs())</ID>
     <ID>SpreadOperator:DesktopGitService.kt$GitService$(projectPath, *args.toTypedArray())</ID>
@@ -1211,6 +1219,8 @@
     <ID>TooGenericExceptionCaught:DashboardStatsManager.kt$DashboardStatsManager$e: Exception</ID>
     <ID>TooGenericExceptionCaught:DeepLinkActionRegistryImpl.kt$DeepLinkActionRegistryImpl$t: Throwable</ID>
     <ID>TooGenericExceptionCaught:DeepLinkHandler.kt$DeepLinkHandler$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:DefaultAppsManager.kt$DefaultAppsManager$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:DefaultAppsSettingsManager.kt$DefaultAppsSettingsManager$e: Exception</ID>
     <ID>TooGenericExceptionCaught:DefaultPlugin.kt$ApiActiveTabsProviderAdapter$e: Exception</ID>
     <ID>TooGenericExceptionCaught:DefaultPlugin.kt$DefaultBackgroundTaskProvider$e: Exception</ID>
     <ID>TooGenericExceptionCaught:DefaultPlugin.kt$DefaultCacheProvider$e: Exception</ID>
@@ -1257,6 +1267,7 @@
     <ID>TooGenericExceptionCaught:FilePickerProviderFactory.kt$DesktopFilePickerProvider$e: Exception</ID>
     <ID>TooGenericExceptionCaught:FileSystemDataProviderImpl.kt$FileSystemDataProviderImpl$e: Exception</ID>
     <ID>TooGenericExceptionCaught:FileSystemUtils.kt$FileSystemUtils$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:FileTypeCategories.kt$FileTypeCategories$e: Exception</ID>
     <ID>TooGenericExceptionCaught:Fluck.kt$FluckTabComponent$e: Exception</ID>
     <ID>TooGenericExceptionCaught:FluckEngine.kt$FluckEngine$e2: Exception</ID>
     <ID>TooGenericExceptionCaught:FluckEngine.kt$FluckEngine$e: Exception</ID>
@@ -1279,7 +1290,9 @@
     <ID>TooGenericExceptionCaught:LLMProvidersSettings.kt$e: Exception</ID>
     <ID>TooGenericExceptionCaught:LLMSettings.kt$LLMSettings$e: Exception</ID>
     <ID>TooGenericExceptionCaught:LastSessionCoordinator.kt$LastSessionCoordinator$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:LaunchServices.kt$LaunchServices$e: Throwable</ID>
     <ID>TooGenericExceptionCaught:LinuxDefaultBrowserHandler.kt$LinuxDefaultBrowserHandler$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:LinuxFileTypeHandler.kt$LinuxFileTypeHandler$e: Exception</ID>
     <ID>TooGenericExceptionCaught:LockedBrowser.kt$LockedBrowser$e: Exception</ID>
     <ID>TooGenericExceptionCaught:MacOSCamera.kt$MacOSCamera$e: Exception</ID>
     <ID>TooGenericExceptionCaught:MacOSDefaultBrowserHandler.kt$MacOSDefaultBrowserHandler$e: Exception</ID>
@@ -1357,6 +1370,7 @@
     <ID>TooGenericExceptionCaught:WebsiteMatchingUtil.kt$WebsiteMatchingUtil$e: Exception</ID>
     <ID>TooGenericExceptionCaught:WindowAppearanceSettingsManager.kt$WindowAppearanceSettingsManager$e: Exception</ID>
     <ID>TooGenericExceptionCaught:WindowsDefaultBrowserHandler.kt$WindowsDefaultBrowserHandler$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:WindowsFileTypeHandler.kt$WindowsFileTypeHandler$e: Exception</ID>
     <ID>TooGenericExceptionCaught:WindowsHelloAuth.kt$WindowsHelloAuth$e: Exception</ID>
     <ID>TooGenericExceptionCaught:WindowsProtocolHandler.kt$WindowsProtocolHandler$e: Exception</ID>
     <ID>TooGenericExceptionCaught:WorkspaceButton.desktop.kt$e: Exception</ID>
@@ -1407,7 +1421,9 @@
     <ID>TooManyFunctions:GlobalSearchDialog.kt$ai.rever.boss.components.dialogs.GlobalSearchDialog.kt</ID>
     <ID>TooManyFunctions:GlobalSearchService.kt$GlobalSearchService</ID>
     <ID>TooManyFunctions:LLMModelFetcher.kt$LLMModelFetcher</ID>
+    <ID>TooManyFunctions:LinuxDefaultBrowserHandler.kt$LinuxDefaultBrowserHandler</ID>
     <ID>TooManyFunctions:LogSanitizer.kt$LogSanitizer</ID>
+    <ID>TooManyFunctions:MacOSDefaultBrowserHandler.kt$MacOSDefaultBrowserHandler</ID>
     <ID>TooManyFunctions:McpToolRegistryImpl.kt$McpToolRegistryCore</ID>
     <ID>TooManyFunctions:MenuActionsHandler.kt$MenuActionsHandler</ID>
     <ID>TooManyFunctions:PasskeyDataMapper.kt$PasskeyDataMapper</ID>

@@ -250,6 +250,39 @@ private fun browserEntries() =
         group("Browser Profiles")
     }
 
+/**
+ * Default Apps has exactly one indexable label: its own section header.
+ *
+ * Everything inside it - the per-category rows and their Set buttons - is
+ * generated at runtime from `boss-file-types.json`, so no label appears as a
+ * literal in the source. `SettingsSearchIndexDriftTest` scans the sources, so
+ * indexing those rows made it (correctly) report seven entries naming settings
+ * that "no longer exist": a search result for them would navigate and highlight
+ * nothing, which reads as the search being broken.
+ *
+ * The keywords therefore carry the weight. They are the words somebody actually
+ * types when their links open in the wrong app - including the file extensions,
+ * since "how do I open .md in BOSS" is the question this page answers.
+ */
+private fun defaultAppsEntries() =
+    section(SettingsSection.DEFAULT_APPS) {
+        group(
+            "Default Apps",
+            "default browser",
+            "file association",
+            "open with",
+            "handler",
+            "markdown",
+            "md",
+            "shell script",
+            "sh",
+            "source code",
+            "http",
+            "https",
+            "html",
+        )
+    }
+
 private fun browserEngineEntries() =
     section(SettingsSection.BROWSER_ENGINE) {
         group("Current Engine")
@@ -480,6 +513,7 @@ private fun keymapEntries() =
 internal val builtInEntries: List<SettingsSearchEntry> by lazy {
     browserEntries() +
         browserEngineEntries() +
+        defaultAppsEntries() +
         runnerEntries() +
         workspaceEntries() +
         securityEntries() +

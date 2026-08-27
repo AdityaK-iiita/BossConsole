@@ -20,6 +20,8 @@ import ai.rever.boss.components.plugin.DependentRestartDeclinedException
 import ai.rever.boss.components.plugin.DependentRestartDialog
 import ai.rever.boss.components.plugin.DynamicPluginManager
 import ai.rever.boss.components.plugin.MissingDependencyDialog
+import ai.rever.boss.components.plugin.MissingHandlerPluginDialog
+import ai.rever.boss.components.plugin.MissingHandlerPluginEventBus
 import ai.rever.boss.components.plugin.PluginDependencyEventBus
 import ai.rever.boss.components.plugin.PluginLoadGateHost
 import ai.rever.boss.components.plugin.PluginLoadRemedyAccess
@@ -812,6 +814,65 @@ internal fun BossAppDialogs(state: BossAppState) {
         manager = state.currentDefaultPlugin?.dynamicPluginManager,
         remedyResolver = PluginLoadRemedyAccess.current(),
     )
+
+    // BOSS was asked to open something and the plugin that renders it is not
+    // running. Offer to install or enable it, rather than dropping the tab with
+    // only a log line - which is what "BOSS is my default browser and clicking a
+    // link does nothing" actually was.
+    state.pendingMissingHandlerPlugin?.let { prompt ->
+        MissingHandlerPluginDialog(
+            prompt = prompt,
+            working = state.resolvingMissingHandlerPlugin,
+            error = state.missingHandlerPluginError,
+            onDismiss = {
+                // An answer for the session, keyed by plugin: twelve files
+                // selected in Finder with no editor plugin is one question, and
+                // asking again for each would be the same question twelve times.
+                MissingHandlerPluginEventBus.decline(prompt.missing.pluginId)
+                state.pendingMissingHandlerPlugin = null
+                state.missingHandlerPluginError = null
+            },
+            onResolve = {
+                state.resolvingMissingHandlerPlugin = true
+                state.missingHandlerPluginError = null
+                coroutineScope.launch {
+                    try {
+                        // runCatching rather than a catch block, as the dependency
+                        // dialog does: a throw instead of a failed Result would
+                        // leave the dialog open with no message and a live button,
+                        // looking like the click did nothing. Cancellation is
+                        // rethrown - the work is detached and continues, so
+                        // nothing went wrong and there is nowhere to report it.
+                        runCatching { prompt.resolve() }
+                            .getOrElse { error ->
+                                if (error is CancellationException) throw error
+                                Result.failure(error)
+                            }.onSuccess {
+                                // Nothing else to do here: registering the tab
+                                // type fires the registry's change listeners,
+                                // which completes the wait in
+                                // TabTypeAvailability, which performs the open
+                                // that was deferred. The file the user
+                                // double-clicked appears by itself.
+                                state.pendingMissingHandlerPlugin = null
+                                state.missingHandlerPluginError = null
+                            }.onFailure { error ->
+                                // Keep the dialog up with the reason and a Retry:
+                                // dismissing on failure would look like it worked.
+                                state.missingHandlerPluginError =
+                                    error.message ?: "Could not start the plugin."
+                            }
+                    } finally {
+                        // Always, because `working` disables every button and
+                        // blocks dismissal: a throw here rather than a failed
+                        // Result would leave a modal that can only be escaped by
+                        // closing the window.
+                        state.resolvingMissingHandlerPlugin = false
+                    }
+                }
+            },
+        )
+    }
 
     // Directory picker for project selection (must be outside conditional for Compose)
     val directoryPicker =

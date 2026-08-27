@@ -131,6 +131,21 @@ val macPrereleaseShortVersionKey: String =
 println("📦 Building BOSS Version: $appVersion")
 println("🔢 macOS CFBundleVersion (build id): $macBundleBuildVersion")
 
+// The file types BOSS can be made the default handler for, read from the same
+// resource the running app reads (see BossFileTypes and FileTypeCategories).
+// Feeds the generated CFBundleURLTypes / CFBundleDocumentTypes /
+// UTExportedTypeDeclarations blocks in nativeDistributions.macOS.infoPlist.
+//
+// Read through providers.fileContents, not File.readText(): a plain read at
+// configuration time is not a tracked configuration-cache input, so editing the
+// table would leave a cached configuration that still holds the old plist and an
+// app that claims types the resource no longer lists.
+val bossFileTypesJson =
+    providers
+        .fileContents(layout.projectDirectory.file("src/desktopMain/resources/boss-file-types.json"))
+        .asText
+val bossFileTypes: BossFileTypes.Table = BossFileTypes.parse(bossFileTypesJson.get())
+
 // Path to libs.versions.toml for reading JxBrowser version (single source of truth)
 val libsVersionsFile = layout.projectDirectory.file("../gradle/libs.versions.toml")
 
@@ -1439,7 +1454,26 @@ compose.desktop {
                 // again produced a plist with duplicate keys that only worked because the
                 // last declaration wins — the single-source DSL settings replace that.
                 infoPlist {
-                    extraKeysRawXml =
+                    // The URL schemes, document types and exported UTIs are
+                    // GENERATED from src/desktopMain/resources/boss-file-types.json
+                    // by buildSrc/BossFileTypes, not written here.
+                    //
+                    // What used to be here was one document type - public.html and
+                    // public.url, role Viewer - so BOSS could not be made the
+                    // default for a .md, a .sh or any of the 83 extensions its
+                    // editor has a lexer for. Launch Services can only make an app
+                    // the default for a *type*, and 41 of those extensions have no
+                    // system UTI at all, so the app has to export its own. That is
+                    // 28 document types and 24 exported types: generated, because
+                    // hand-writing it guarantees it drifts from EditorLanguages,
+                    // and a drift means BOSS agreeing to open a file it cannot
+                    // highlight or refusing one it can.
+                    //
+                    // Concatenated rather than interpolated into a trimIndent
+                    // block: trimIndent runs after interpolation and would
+                    // re-indent the generated XML by its own first line, which is
+                    // how a generated plist ends up with a mangled prolog.
+                    val staticKeys =
                         """
                         $macPrereleaseShortVersionKey
                         <key>NSCameraUsageDescription</key>
@@ -1450,34 +1484,15 @@ compose.desktop {
                         <string>BOSS uses Bluetooth to let you sign in with a passkey stored on your phone or tablet.</string>
                         <key>NSBluetoothPeripheralUsageDescription</key>
                         <string>BOSS uses Bluetooth to let you sign in with a passkey stored on your phone or tablet.</string>
-                        <key>CFBundleURLTypes</key>
-                        <array>
-                            <dict>
-                                <key>CFBundleURLName</key>
-                                <string>ai.rever.boss</string>
-                                <key>CFBundleURLSchemes</key>
-                                <array>
-                                    <string>boss</string>
-                                    <string>http</string>
-                                    <string>https</string>
-                                </array>
-                            </dict>
-                        </array>
-                        <key>CFBundleDocumentTypes</key>
-                        <array>
-                            <dict>
-                                <key>CFBundleTypeName</key>
-                                <string>HTML Document</string>
-                                <key>CFBundleTypeRole</key>
-                                <string>Viewer</string>
-                                <key>LSItemContentTypes</key>
-                                <array>
-                                    <string>public.html</string>
-                                    <string>public.url</string>
-                                </array>
-                            </dict>
-                        </array>
                         """.trimIndent()
+
+                    extraKeysRawXml =
+                        listOf(
+                            staticKeys,
+                            BossFileTypes.urlTypesXml(bossFileTypes, ownScheme = "boss", urlName = "ai.rever.boss"),
+                            BossFileTypes.documentTypesXml(bossFileTypes),
+                            BossFileTypes.exportedTypesXml(bossFileTypes),
+                        ).filter { it.isNotBlank() }.joinToString("\n")
                 }
             }
         }

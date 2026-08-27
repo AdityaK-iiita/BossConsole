@@ -7,6 +7,7 @@ import ai.rever.boss.components.plugin.AvailablePluginUpdate
 import ai.rever.boss.components.plugin.DefaultPlugin
 import ai.rever.boss.components.plugin.DependentRestartPrompt
 import ai.rever.boss.components.plugin.MissingDependencyPrompt
+import ai.rever.boss.components.plugin.MissingHandlerPluginPrompt
 import ai.rever.boss.components.plugin.PluginUninstallPrompt
 import ai.rever.boss.components.plugin.StoreVersionPrompt
 import ai.rever.boss.components.plugin.providers.SplitViewOperationsImpl
@@ -146,6 +147,21 @@ internal class BossAppState(
         mutableStateOf<MissingDependencyPrompt?>(null)
     var installingMissingDependency by mutableStateOf(false)
     var missingDependencyError by mutableStateOf<String?>(null)
+
+    /**
+     * The plugin that would have rendered something BOSS was just asked to open,
+     * and is not running.
+     *
+     * Held separately from [pendingMissingPluginDependency] rather than sharing
+     * its three fields: the two prompts can be raised at once (installing a
+     * plugin whose dependency is absent, while a file the OS handed over waits on
+     * the editor plugin), and one set of fields would let the second overwrite
+     * the first's dialog mid-answer. Back-pressured the same way, per bus.
+     */
+    var pendingMissingHandlerPlugin by
+        mutableStateOf<MissingHandlerPluginPrompt?>(null)
+    var resolvingMissingHandlerPlugin by mutableStateOf(false)
+    var missingHandlerPluginError by mutableStateOf<String?>(null)
 
     /**
      * Plugins that would be restarted by an unload the user has not answered yet.

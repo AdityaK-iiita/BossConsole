@@ -92,6 +92,24 @@ object LinuxDefaultBrowserHandler {
         }
 
     /**
+     * Writes (or rewrites) `~/.local/share/applications/boss.desktop` and
+     * refreshes the desktop database.
+     *
+     * Exposed for the Default Apps screen, which claims a file-type category with
+     * `xdg-mime default`. That only associates a MIME type the desktop entry
+     * already declares in its `MimeType=` line, so a claim made without this
+     * having run records an association no file can ever match - it looks like it
+     * worked and does nothing.
+     *
+     * @return true when the entry is in place.
+     */
+    fun ensureDesktopEntry(): Boolean {
+        val created = createDesktopFile()
+        if (created) updateDesktopDatabase()
+        return created
+    }
+
+    /**
      * Get the current default web browser
      */
     private fun getDefaultWebBrowser(): String? =
@@ -131,6 +149,28 @@ object LinuxDefaultBrowserHandler {
 
             val iconPath = getIconPath()
 
+            // Every MIME type any file-type category claims, plus the three
+            // scheme handlers. Declared here because `xdg-mime default` will only
+            // associate a type the desktop entry already lists - see
+            // ensureDesktopEntry.
+            //
+            // Read from the shared table rather than hardcoded, so a category
+            // added to boss-file-types.json reaches Linux without a second edit.
+            // Falls back to the browser-only list if the table failed to load, so
+            // a resource problem cannot cost the user their default browser.
+            val mimeTypes =
+                buildList {
+                    add("x-scheme-handler/http")
+                    add("x-scheme-handler/https")
+                    add("x-scheme-handler/boss")
+                    addAll(
+                        ai.rever.boss.filetypes.LinuxFileTypeHandler
+                            .allMimeTypes(),
+                    )
+                    add("text/html")
+                    add("application/xhtml+xml")
+                }.distinct().joinToString(";", postfix = ";")
+
             val desktopContent =
                 """
                 [Desktop Entry]
@@ -138,11 +178,11 @@ object LinuxDefaultBrowserHandler {
                 Type=Application
                 Name=BOSS Console
                 Comment=Business Operating System + Simulation - Intelligent service automation platform
-                Exec=$appPath %u
+                Exec=$appPath %U
                 Icon=$iconPath
                 Terminal=false
-                Categories=Network;WebBrowser;
-                MimeType=x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/boss;text/html;application/xhtml+xml;
+                Categories=Network;WebBrowser;Development;TextEditor;
+                MimeType=$mimeTypes
                 StartupNotify=true
                 StartupWMClass=BOSS
                 """.trimIndent()

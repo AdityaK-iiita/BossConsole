@@ -2,6 +2,7 @@ package ai.rever.boss.utils
 
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
+import ai.rever.boss.utils.mac.LaunchServices
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
@@ -15,41 +16,53 @@ private val logger = BossLogger.forComponent("MacOSDefaultBrowserHandler")
 /**
  * macOS-specific handler for default browser functionality
  *
- * Uses macOS APIs and system commands to:
- * - Check if BOSS is the default browser
+ * Uses Launch Services to:
+ * - Check who currently handles http/https
  * - Set BOSS as the default browser
+ *
+ * **Primary path is [LaunchServices]**, bound through JNA. The Swift scripts
+ * below remain as a fallback for the case where that binding fails, and only for
+ * URL schemes - a machine that cannot load CoreServices through JNA is odd
+ * enough that keeping a second implementation of every call would cost more than
+ * it buys. See [LaunchServices] for why the shell-out is no longer the primary
+ * path (it needs Xcode installed, which most users do not have).
  */
 object MacOSDefaultBrowserHandler {
     private const val PROCESS_TIMEOUT_SECONDS = 30L
 
+    /** The schemes "default browser" means. Both must point at BOSS for it to be true. */
+    private val BROWSER_SCHEMES = listOf("http", "https")
+
     /**
-     * Check if BOSS is currently the default browser on macOS
+     * The document type that travels with the browser role.
      *
-     * Uses a single Swift script with LSCopyDefaultHandlerForURLScheme to query
-     * both http and https handlers, avoiding double Swift JIT compilation overhead.
+     * Included in the check and the repair because the engine bundle claimed it
+     * too, and a machine where http/https point at BOSS while double-clicking an
+     * `.html` file still launches a bare Chromium is not fixed.
      */
-    suspend fun isDefaultBrowser(): Result<Boolean> =
+    private const val WEB_PAGE_CONTENT_TYPE = "public.html"
+
+    /**
+     * Who owns each browser scheme right now.
+     *
+     * Returned per scheme rather than reduced to one answer: http and https can
+     * genuinely disagree (Launch Services stores them separately, and setting
+     * one can succeed while the other fails), and the Settings card should not
+     * flatten that into a bare false.
+     */
+    internal suspend fun browserHandlerStates(): Result<Map<String, DefaultHandlerState>> =
         withContext(Dispatchers.IO) {
             try {
                 val handlers = getDefaultHandlers()
-                val httpDefault = handlers["http"]
-                val httpsDefault = handlers["https"]
+                val states = BROWSER_SCHEMES.associateWith { DefaultHandlerState.of(handlers[it]) }
 
                 logger.debug(
                     LogCategory.BROWSER,
                     "macOS default browser check",
-                    mapOf(
-                        "httpHandler" to (httpDefault ?: "none"),
-                        "httpsHandler" to (httpsDefault ?: "none"),
-                    ),
+                    states.mapValues { (_, state) -> state.toString() },
                 )
 
-                // BOSS is default if both schemes point to our bundle ID
-                val isDefault =
-                    BOSS_MACOS_BUNDLE_ID.equals(httpDefault, ignoreCase = true) &&
-                        BOSS_MACOS_BUNDLE_ID.equals(httpsDefault, ignoreCase = true)
-
-                Result.success(isDefault)
+                Result.success(states)
             } catch (e: Exception) {
                 logger.warn(LogCategory.BROWSER, "Error checking default browser on macOS", error = e)
                 Result.failure(e)
@@ -57,29 +70,64 @@ object MacOSDefaultBrowserHandler {
         }
 
     /**
+     * The single state for the browser role: [DefaultHandlerState.Ours] only
+     * when every scheme and the web-page content type point at BOSS.
+     *
+     * When they disagree, the *worst* answer wins, and [DefaultHandlerState.OurEngine]
+     * outranks [DefaultHandlerState.Other] - because "a BOSS component stole
+     * this" is the actionable thing to say, and it stays true and repairable
+     * whether one scheme or all three are affected.
+     */
+    internal suspend fun browserHandlerState(): Result<DefaultHandlerState> =
+        withContext(Dispatchers.IO) {
+            // Inside the IO block, not in a `Result.map` on the result of
+            // browserHandlerStates(). `map` is inline and runs on the CALLER's
+            // dispatcher after that withContext has already returned, so the
+            // content-type read - a native Launch Services call - was landing on
+            // Dispatchers.Main via DefaultBrowserSection's LaunchedEffect. Exactly
+            // what DefaultAppsManager's KDoc and docs/THREADING.md forbid.
+            browserHandlerStates().map { schemeStates ->
+                val contentTypeState = DefaultHandlerState.of(defaultHandlerForContentType(WEB_PAGE_CONTENT_TYPE))
+                DefaultHandlerState.reduce(schemeStates.values + contentTypeState)
+            }
+        }
+
+    /**
+     * Check if BOSS is currently the default browser on macOS
+     */
+    suspend fun isDefaultBrowser(): Result<Boolean> = browserHandlerState().map { it.isOurs }
+
+    /**
      * Set BOSS as the default browser on macOS
      *
-     * Uses LSSetDefaultHandlerForURLScheme via Swift script or system commands
+     * Claims http, https and `public.html`. Returns true when every one of them
+     * was accepted; false means the user has to finish the job in System
+     * Settings, which is opened for them.
      */
     suspend fun setAsDefaultBrowser(): Result<Boolean> =
         withContext(Dispatchers.IO) {
             try {
                 // First check if already default
-                val checkResult = isDefaultBrowser()
-                if (checkResult.isSuccess && checkResult.getOrNull() == true) {
+                val state = browserHandlerState()
+                if (state.getOrNull()?.isOurs == true) {
                     logger.info(LogCategory.BROWSER, "BOSS is already the default browser")
                     return@withContext Result.success(true)
                 }
 
-                // Try to set as default using Swift script
-                val setHttpResult = setDefaultHandlerForScheme("http")
-                val setHttpsResult = setDefaultHandlerForScheme("https")
+                // Sequenced with `fold`, not `all`, so a failure on http does not
+                // skip https: partial success is a real state here (the OS accepts
+                // them independently) and leaving one behind is worse than trying
+                // both and reporting the truth.
+                val schemesSet =
+                    BROWSER_SCHEMES.fold(true) { acc, scheme ->
+                        setDefaultHandlerForScheme(scheme) && acc
+                    }
+                val contentTypeSet = setDefaultHandlerForContentType(WEB_PAGE_CONTENT_TYPE)
 
-                if (setHttpResult && setHttpsResult) {
+                if (schemesSet && contentTypeSet) {
                     logger.info(LogCategory.BROWSER, "Successfully set BOSS as default browser on macOS")
                     Result.success(true)
                 } else {
-                    // If Swift approach fails, open System Preferences
                     logger.warn(LogCategory.BROWSER, "Could not set default programmatically, opening System Preferences")
                     openSystemPreferences()
                     Result.success(false)
@@ -90,21 +138,69 @@ object MacOSDefaultBrowserHandler {
             }
         }
 
+    /** Bundle id registered for the UTI [contentType], or null. Native path only. */
+    internal fun defaultHandlerForContentType(contentType: String): String? =
+        if (LaunchServices.isAvailable()) {
+            LaunchServices.defaultHandlerForContentType(contentType)
+        } else {
+            // No Swift fallback for content types on purpose: it would mean a
+            // second full implementation of the file-type feature for a case
+            // that only arises when CoreServices cannot be bound at all. Null
+            // reads as "unknown" and the UI says so.
+            logger.debug(
+                LogCategory.BROWSER,
+                "Launch Services unavailable, content type owner unknown",
+                mapOf("type" to contentType),
+            )
+            null
+        }
+
+    /** Registers BOSS for the UTI [contentType]. Native path only. */
+    internal fun setDefaultHandlerForContentType(contentType: String): Boolean =
+        LaunchServices.isAvailable() &&
+            LaunchServices.setDefaultHandlerForContentType(contentType, BOSS_MACOS_BUNDLE_ID)
+
     /**
-     * Get default handlers for both http and https schemes in a single Swift invocation.
+     * Get default handlers for every browser scheme.
      *
-     * Returns a map of scheme -> bundle ID. Uses one Swift process to avoid
-     * double JIT compilation overhead.
+     * Native when possible; one Swift process for all schemes otherwise, which
+     * is why the fallback is written as a batch rather than per scheme.
      */
     private fun getDefaultHandlers(): Map<String, String> {
+        if (LaunchServices.isAvailable()) {
+            return BROWSER_SCHEMES
+                .mapNotNull { scheme ->
+                    LaunchServices.defaultHandlerForScheme(scheme)?.let { scheme to it }
+                }.toMap()
+        }
+        return getDefaultHandlersViaSwift()
+    }
+
+    private fun setDefaultHandlerForScheme(scheme: String): Boolean =
+        if (LaunchServices.isAvailable()) {
+            LaunchServices.setDefaultHandlerForScheme(scheme, BOSS_MACOS_BUNDLE_ID)
+        } else {
+            setDefaultHandlerForSchemeViaSwift(scheme)
+        }
+
+    /**
+     * Fallback: query both handlers in a single Swift invocation.
+     *
+     * One process for all schemes, because each one pays a Swift front-end
+     * compile. Requires Xcode or the Command Line Tools; when `swift` is absent
+     * this returns an empty map and the caller reports "unknown" rather than
+     * "not default".
+     */
+    private fun getDefaultHandlersViaSwift(): Map<String, String> {
         val scriptFile = createTempFile("get_default_browser", ".swift").toFile()
         try {
+            val schemeList = BROWSER_SCHEMES.joinToString(", ") { "\"$it\"" }
             val swiftScript =
                 """
                 import Foundation
                 import ApplicationServices
 
-                for scheme in ["http", "https"] {
+                for scheme in [$schemeList] {
                     if let handler = LSCopyDefaultHandlerForURLScheme(scheme as CFString) {
                         print("\(scheme)=\(handler.takeRetainedValue() as String)")
                     }
@@ -150,10 +246,8 @@ object MacOSDefaultBrowserHandler {
         }
     }
 
-    /**
-     * Set default handler for a URL scheme using Swift script
-     */
-    private fun setDefaultHandlerForScheme(scheme: String): Boolean {
+    /** Fallback: set the default handler for a URL scheme using a Swift script. */
+    private fun setDefaultHandlerForSchemeViaSwift(scheme: String): Boolean {
         val scriptFile = createTempFile("set_default_browser", ".swift").toFile()
         try {
             val swiftScript =
@@ -215,7 +309,7 @@ object MacOSDefaultBrowserHandler {
      * Open System Settings (Ventura+) or System Preferences (Monterey and earlier)
      * to the Default Browser settings pane
      */
-    private fun openSystemPreferences() {
+    internal fun openSystemPreferences() {
         try {
             val url =
                 if (getMacOSMajorVersion() >= 13) {

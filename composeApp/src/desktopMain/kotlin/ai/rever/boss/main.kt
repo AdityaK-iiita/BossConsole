@@ -25,6 +25,7 @@ import ai.rever.boss.project.DefaultWorkingDirectory
 import ai.rever.boss.services.passkey.PasskeyPlatformInit
 import ai.rever.boss.utils.DeepLinkHandler
 import ai.rever.boss.utils.DeepLinkOrigin
+import ai.rever.boss.utils.OsOpenArguments
 import ai.rever.boss.utils.SingleInstanceManager
 import ai.rever.boss.utils.SystemUtils
 import ai.rever.boss.utils.WindowsProtocolHandler
@@ -417,16 +418,19 @@ fun main(args: Array<String>) {
     if (!SingleInstanceManager.acquireLock()) {
         logger.info(LogCategory.SYSTEM, "Another BOSS instance is already running")
 
-        // Check if we have a deep link or URL to send to the existing instance
-        val deepLink =
-            args.firstOrNull {
-                it.startsWith("boss://") ||
-                    it.startsWith("http://") ||
-                    it.startsWith("https://")
-            }
+        // Everything the OS is asking this launch to open, as `boss://` links.
+        // File paths count, not only URL schemes: on Windows and Linux a
+        // double-clicked file arrives as a path in argv, and this branch used to
+        // ignore it and exit 0 with "No URL to send", so the file never opened
+        // while BOSS was running. See OsOpenArguments.
+        val deepLinks = OsOpenArguments.deepLinksFrom(args)
 
-        if (deepLink != null) {
-            logger.info(LogCategory.SYSTEM, "Sending URL to existing instance")
+        if (deepLinks.isNotEmpty()) {
+            logger.info(
+                LogCategory.SYSTEM,
+                "Sending open requests to existing instance",
+                mapOf("count" to deepLinks.size),
+            )
 
             // The origin is stated, not assumed: a `boss://` argument in this
             // process's argv is how the OS protocol handler delivers a URL
@@ -437,14 +441,14 @@ fun main(args: Array<String>) {
             // Try to send with retry logic (important for auth deep links during sign-in)
             // Note: runBlocking is acceptable here as this runs during pre-UI initialization,
             // before the Compose application starts. No UI thread exists yet to block.
-            var success = false
             val maxRetries = 3
-            for (attempt in 1..maxRetries) {
-                if (SingleInstanceManager.sendToExistingInstance(deepLink, DeepLinkOrigin.EXTERNAL)) {
-                    logger.info(LogCategory.SYSTEM, "URL sent successfully", mapOf("attempt" to attempt))
-                    success = true
-                    break
-                } else {
+
+            fun forward(link: String): Boolean {
+                for (attempt in 1..maxRetries) {
+                    if (SingleInstanceManager.sendToExistingInstance(link, DeepLinkOrigin.EXTERNAL)) {
+                        logger.info(LogCategory.SYSTEM, "URL sent successfully", mapOf("attempt" to attempt))
+                        return true
+                    }
                     logger.warn(
                         LogCategory.SYSTEM,
                         "Failed to send URL",
@@ -460,7 +464,13 @@ fun main(args: Array<String>) {
                         }
                     }
                 }
+                return false
             }
+
+            // Every link is attempted, and success means every one landed.
+            // `fold` rather than `all`, which would short-circuit and silently
+            // drop the rest of a multi-file selection after one failure.
+            val success = deepLinks.fold(true) { acc, link -> forward(link) && acc }
 
             if (success) {
                 exitProcess(0)
@@ -771,19 +781,21 @@ fun main(args: Array<String>) {
     // Parse CLI arguments if provided
     if (args.isNotEmpty()) {
         try {
-            // Check if args contain deep link protocols
-            val hasDeepLink =
-                args.any {
-                    it.startsWith("boss://") || it.startsWith("http://") || it.startsWith("https://")
-                }
+            // What the OS is asking this cold start to open: URL-scheme args as
+            // before, plus file paths, which Clikt cannot parse (it has `boss
+            // file <path>`, no bare-path argument) and used to fail on with a
+            // usage error - so a double-clicked file did nothing on a cold start.
+            val osOpenRequests = OsOpenArguments.deepLinksFrom(args)
 
-            // If it's a deep link, let DeepLinkHandler process it
-            // Otherwise, treat as CLI command
-            if (!hasDeepLink) {
+            if (osOpenRequests.isEmpty()) {
+                // Not an OS open request, so it is the operator's CLI.
                 logger.debug(LogCategory.SYSTEM, "Processing CLI arguments", mapOf("args" to args.joinToString(" ")))
                 createBossCLI().main(args)
                 // Commands are queued, continue with app initialization
             }
+            // Otherwise these are links and files the OS wants opened;
+            // `DeepLinkHandler.processCommandLineArgs` below is the single place
+            // that processes them, so nothing is opened twice.
         } catch (e: Exception) {
             logger.error(LogCategory.SYSTEM, "CLI error", error = e)
             // Don't exit - let the app start normally
