@@ -7,6 +7,7 @@ import ai.rever.boss.components.bars.isBarVisible
 import ai.rever.boss.components.bars.withBarVisible
 import ai.rever.boss.components.dialogs.CLIInstallationDialog
 import ai.rever.boss.components.dialogs.ImportDataDialog
+import ai.rever.boss.components.settings.sidebar.SettingsSection
 import ai.rever.boss.components.window_panel.components.main_window_panels.createBossAppContext
 import ai.rever.boss.components.workspaces.workspaceManager
 import ai.rever.boss.focusmode.FocusModeSettingsManager
@@ -910,6 +911,21 @@ fun ApplicationScope.BossWindow(
                     "Toolbox Setup Wizard...",
                     onClick = {
                         MenuActionsHandler.triggerShowPluginWizard(windowState.id)
+                    },
+                )
+
+                // Settings > Default Apps, named by the enum rather than by a string
+                // literal: `resolveSettingsDeepLink` matches on the enum name, and an
+                // unresolved link is a no-op for an already-open Settings window - so a
+                // rename would leave this item silently doing nothing rather than
+                // failing to compile.
+                Item(
+                    "Default Apps...",
+                    onClick = {
+                        MenuActionsHandler.triggerOpenSettings(
+                            windowId = windowState.id,
+                            section = SettingsSection.DEFAULT_APPS.name,
+                        )
                     },
                 )
 

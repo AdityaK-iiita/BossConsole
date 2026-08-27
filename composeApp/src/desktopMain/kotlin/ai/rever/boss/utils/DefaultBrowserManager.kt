@@ -27,6 +27,30 @@ actual object DefaultBrowserManager {
         }
 
     /**
+     * Who owns the browser role, as the three-way answer rather than a boolean.
+     *
+     * The boolean above cannot tell "another browser holds this" from "a BOSS
+     * component holds this", and those need opposite things said to the user: the
+     * second is what happens on every machine that installed BOSS before the
+     * branded Chromium engine stopped declaring `CFBundleURLTypes`, where
+     * `~/.boss/boss-chromium/BOSS.app` is a second app called BOSS and links open
+     * a bare rendering engine with no window. Telling that user "BOSS is not your
+     * default browser" is the wrong story - they did set it - and it points them
+     * at a System Settings list with two identical BOSS entries.
+     *
+     * Not on the `expect` declaration: [DefaultHandlerState] is desktopMain, and
+     * lifting it into commonMain to widen an interface with one desktop
+     * implementation would be churn. desktopMain callers see this directly.
+     */
+    internal suspend fun browserHandlerState(): Result<DefaultHandlerState> =
+        when {
+            isMacOS -> MacOSDefaultBrowserHandler.browserHandlerState()
+            isWindows -> WindowsDefaultBrowserHandler.browserHandlerState()
+            isLinux -> LinuxDefaultBrowserHandler.browserHandlerState()
+            else -> Result.failure(Exception("Unsupported platform: ${System.getProperty("os.name")}"))
+        }
+
+    /**
      * Set BOSS as the default system browser
      *
      * Platform-specific behavior:

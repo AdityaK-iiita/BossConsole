@@ -104,6 +104,27 @@ class FileTypeCategoriesTest {
     }
 
     @Test
+    fun `the browser category is schemes with no extensions, which is why a status must read both`() {
+        // The fact that made the Windows status wrong. `WindowsFileTypeHandler`
+        // read only the per-extension `UserChoice` keys, so `web-links` - schemes
+        // and nothing else - reported Other on every machine, including one where
+        // BOSS did hold http and https, and `register` returned early without ever
+        // adding BOSS to the browser list its own settings page sends the user to.
+        //
+        // Pinned here rather than in that handler because the handler shells out to
+        // `reg`, which no mac or Linux runner can answer. If a later change gives
+        // this category an extension or drops its schemes, the reasoning behind
+        // reading both sides changes with it, and this is where that shows up.
+        assertTrue(table.extensionsFor("web-links").isEmpty(), "web-links gained an extension")
+        assertTrue(table.schemesFor("web-links").isNotEmpty(), "web-links lost its schemes")
+
+        // And the converse, which is why the extension side cannot simply be
+        // dropped: web-pages is extensions with no schemes.
+        assertTrue(table.extensionsFor("web-pages").isNotEmpty())
+        assertTrue(table.schemesFor("web-pages").isEmpty())
+    }
+
+    @Test
     fun `every category has Linux MIME types or schemes to claim`() {
         // A category with neither is a row in Settings whose Set button cannot do
         // anything on Linux.

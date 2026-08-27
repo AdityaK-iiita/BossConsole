@@ -1,6 +1,7 @@
 package ai.rever.boss.filetypes
 
 import ai.rever.boss.utils.DefaultHandlerState
+import ai.rever.boss.utils.WindowsDefaultBrowserHandler
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import java.io.File
@@ -60,8 +61,20 @@ internal object WindowsFileTypeHandler {
             return false
         }
 
+        // A category with schemes needs the `StartMenuInternet` registration as
+        // well, and `web-links` is schemes only - so returning early on "no
+        // extensions" meant claiming Web links from Settings > Default Apps opened
+        // the Windows settings page without ever making BOSS appear in the browser
+        // list it sends the user to.
+        val schemesRegistered =
+            if (FileTypeCategories.table.schemesFor(category.id).isEmpty()) {
+                true
+            } else {
+                WindowsDefaultBrowserHandler.registerAsBrowserCandidate()
+            }
+
         val extensions = FileTypeCategories.table.extensionsFor(category.id)
-        if (extensions.isEmpty()) return true
+        if (extensions.isEmpty()) return schemesRegistered
 
         val script = WindowsRegistryScript.buildScript(extensions, appPath, category.displayName)
 
@@ -109,13 +122,14 @@ internal object WindowsFileTypeHandler {
      */
     fun statusOf(category: FileTypeCategory): DefaultHandlerState {
         val extensions = FileTypeCategories.table.extensionsFor(category.id)
-        if (extensions.isEmpty()) return DefaultHandlerState.Other(null)
+        val schemes = FileTypeCategories.table.schemesFor(category.id)
+        if (extensions.isEmpty() && schemes.isEmpty()) return DefaultHandlerState.Other(null)
 
         // One query over the whole FileExts tree, parsed once, instead of one
         // process per extension.
-        val choices = userChoices()
+        val choices = if (extensions.isEmpty()) emptyMap() else userChoices()
 
-        val states =
+        val extensionStates =
             extensions.map { extension ->
                 val progId = choices[extension.lowercase()]
                 when {
@@ -125,7 +139,14 @@ internal object WindowsFileTypeHandler {
                 }
             }
 
-        return DefaultHandlerState.reduce(states)
+        // Schemes live under UrlAssociations, not FileExts, and `web-links` is
+        // schemes with NO extensions - so reading only the extension side reported
+        // Other on every machine, including one where BOSS held http and https.
+        // macOS has always counted both (MacOSFileTypeHandler reads
+        // `schemesFor` alongside the types); this is Windows catching up.
+        val schemeStates = schemes.map { WindowsDefaultBrowserHandler.schemeState(it) }
+
+        return DefaultHandlerState.reduce(extensionStates + schemeStates)
     }
 
     /** Opens Settings > Default apps, the only place Windows lets the default actually change. */

@@ -783,6 +783,39 @@ the single definition of "BOSS only when every type in the category is BOSS, and
 `OurEngine` outranks `Other`". Each handler had its own copy; they agreed, which
 is the only reason nothing was broken, and a fourth copy would not have.
 
+**`Settings > Browser` reads that fold too, and used to hold a boolean instead.**
+`DefaultBrowserSection` is the older surface for the same two categories, and it
+flattened the answer to `Boolean?` - which cannot tell "Safari holds http" from
+"a BOSS component holds http". So on exactly the machines the three-way state
+exists for, it said "BOSS is not your default browser" while `Settings > Default
+Apps` reported `OurEngine` and offered a Repair: two screens, one machine,
+opposite stories, and the one a user reaches from `Settings > Browser` was the
+wrong one. It now renders all three states, offers **Repair** for `OurEngine`
+(the same claim call, relabelled, because setting and repairing are the same
+work), and **re-reads** the state after a successful set rather than assuming
+`Ours`. `browserHandlerState()` is not on the `expect` declaration:
+`DefaultHandlerState` is desktopMain and lifting it into commonMain to widen an
+interface with one implementation would be churn.
+
+**Windows counts schemes now, and could not before.** `web-links` is schemes with
+no extensions, and `WindowsFileTypeHandler` read only the per-extension
+`UserChoice` keys - so that row reported `Other` on every machine, including one
+where BOSS did hold http and https, and `register` returned early on "no
+extensions" without ever writing the `StartMenuInternet` entry that puts BOSS in
+the browser list its own settings page sends the user to. Both sides now consult
+`schemesFor`, through `WindowsDefaultBrowserHandler.schemeState` and
+`registerAsBrowserCandidate` rather than a second copy of those registry reads
+and writes. macOS always counted both. The `reg` calls cannot run on a mac or
+Linux runner, so what is pinned in a test is the data fact underneath
+(`FileTypeCategoriesTest`: `web-links` has schemes and no extensions, `web-pages`
+the reverse) - if that flips, the reason for reading both sides flips with it.
+
+`OurEngine` is unreachable on Windows and Linux, and that is a fact about those
+platforms rather than a gap: the second "BOSS" is a macOS `.app` that Launch
+Services indexes because it declares `CFBundleURLTypes`. Nothing registers the
+engine under `StartMenuInternet` or writes a desktop entry for it. The shared type
+is still used on all three so the card has one story to tell.
+
 **The engine bundle used to be a second app called "BOSS".**
 `~/.boss/boss-chromium/BOSS.app` is the branded JxBrowser engine, and being
 Chromium it inherited `CFBundleURLTypes` (http, https) and

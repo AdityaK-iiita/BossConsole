@@ -4,6 +4,7 @@ import ai.rever.boss.components.settings.shared.SettingsSection
 import ai.rever.boss.plugin.ui.BossAlertDialog
 import ai.rever.boss.plugin.ui.BossTheme
 import ai.rever.boss.utils.DefaultBrowserManager
+import ai.rever.boss.utils.DefaultHandlerState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -24,14 +25,30 @@ import kotlinx.coroutines.launch
  * Default Browser section for BOSS Console settings
  *
  * Allows users to:
- * - Check if BOSS is the default browser
- * - Set BOSS as the default browser
+ * - Check who currently handles http/https
+ * - Set BOSS as the default browser, or repair the case below
  * - View platform-specific instructions
+ *
+ * **It reads [DefaultHandlerState], not a boolean, for the same reason
+ * `Settings > Default Apps` does.** A machine that installed BOSS before the
+ * branded Chromium engine stopped declaring `CFBundleURLTypes` has a second app
+ * called "BOSS" holding http, https and `public.html`
+ * (`~/.boss/boss-chromium/BOSS.app`, id `ai.rever.boss.browser`), and links open
+ * a bare rendering engine with no window, no tabs and no session. Flattened to a
+ * boolean that is indistinguishable from Safari being the default, so this card
+ * said "BOSS is not your default browser" - the wrong story to tell somebody who
+ * did set it, and it sent them to a System Settings list with two identical BOSS
+ * entries where picking either looks the same.
+ *
+ * `Settings > Default Apps` has reported that case since it shipped. This card is
+ * the older surface for the same two categories and is the one a user reaches
+ * from `Settings > Browser`, so leaving it flattened meant the two screens
+ * contradicted each other about the same machine.
  */
 @Composable
 fun DefaultBrowserSection() {
     val platformName = DefaultBrowserManager.getPlatformName()
-    var isDefault by remember { mutableStateOf<Boolean?>(null) }
+    var state by remember { mutableStateOf<DefaultHandlerState?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var showSuccessDialog by remember { mutableStateOf(false) }
@@ -39,21 +56,28 @@ fun DefaultBrowserSection() {
 
     val coroutineScope = rememberCoroutineScope()
 
-    // Check status on mount
-    LaunchedEffect(Unit) {
+    // One read path for the mount, the Refresh button and the re-read after a
+    // successful set. It was three copies of the same fold, which is how the
+    // "assume success" line below got out of step with what the OS actually holds.
+    suspend fun refresh() {
         isLoading = true
         errorMessage = null
 
-        val result = DefaultBrowserManager.isDefaultBrowser()
+        val result = DefaultBrowserManager.browserHandlerState()
         isLoading = false
 
         result.fold(
-            onSuccess = { isDefault = it },
+            onSuccess = { state = it },
             onFailure = { error ->
                 errorMessage = error.message
-                isDefault = null
+                state = null
             },
         )
+    }
+
+    // Check status on mount
+    LaunchedEffect(Unit) {
+        refresh()
     }
 
     SettingsSection(
@@ -118,7 +142,25 @@ fun DefaultBrowserSection() {
                                 }
                             }
 
-                            isDefault == true -> {
+                            state is DefaultHandlerState.OurEngine -> {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        Icons.Outlined.Warning,
+                                        contentDescription = "Needs repair",
+                                        tint = BossTheme.colors.alert,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "A BOSS component holds this, so links open with no BOSS window",
+                                        color = BossTheme.colors.textPrimary,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Medium,
+                                    )
+                                }
+                            }
+
+                            state?.isOurs == true -> {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(
                                         Icons.Outlined.CheckCircle,
@@ -136,7 +178,7 @@ fun DefaultBrowserSection() {
                                 }
                             }
 
-                            isDefault == false -> {
+                            state != null -> {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(
                                         Icons.Outlined.Cancel,
@@ -160,23 +202,7 @@ fun DefaultBrowserSection() {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         // Refresh button
                         TextButton(
-                            onClick = {
-                                coroutineScope.launch {
-                                    isLoading = true
-                                    errorMessage = null
-
-                                    val result = DefaultBrowserManager.isDefaultBrowser()
-                                    isLoading = false
-
-                                    result.fold(
-                                        onSuccess = { isDefault = it },
-                                        onFailure = { error ->
-                                            errorMessage = error.message
-                                            isDefault = null
-                                        },
-                                    )
-                                }
-                            },
+                            onClick = { coroutineScope.launch { refresh() } },
                             colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.textSecondary),
                         ) {
                             Icon(
@@ -201,8 +227,12 @@ fun DefaultBrowserSection() {
                                     result.fold(
                                         onSuccess = { wasSetProgrammatically ->
                                             if (wasSetProgrammatically) {
-                                                // Successfully set programmatically (macOS/Linux)
-                                                isDefault = true
+                                                // Re-read rather than assume Ours. The call reports
+                                                // that every claim was accepted, which is not the
+                                                // same as the OS still holding it a moment later -
+                                                // and assuming was what let this card disagree with
+                                                // Default Apps about the same machine.
+                                                refresh()
                                                 showSuccessDialog = true
                                             } else {
                                                 // User action required (Windows)
@@ -215,7 +245,7 @@ fun DefaultBrowserSection() {
                                     )
                                 }
                             },
-                            enabled = !isLoading && isDefault != true,
+                            enabled = !isLoading && state?.isOurs != true,
                             colors =
                                 ButtonDefaults.textButtonColors(
                                     contentColor = BossTheme.colors.signalText,
@@ -231,13 +261,18 @@ fun DefaultBrowserSection() {
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("Setting...", fontSize = 13.sp)
                             } else {
+                                val repairing = state is DefaultHandlerState.OurEngine
                                 Icon(
-                                    Icons.AutoMirrored.Outlined.OpenInNew,
-                                    contentDescription = "Set",
+                                    if (repairing) Icons.Outlined.Build else Icons.AutoMirrored.Outlined.OpenInNew,
+                                    contentDescription = if (repairing) "Repair" else "Set",
                                     modifier = Modifier.size(16.dp),
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("Set as Default", fontSize = 13.sp)
+                                // Same call either way: claiming http, https and public.html for
+                                // BOSS is what both setting and repairing amount to. Only the label
+                                // differs, because "Set as Default" reads as a no-op to somebody
+                                // who already set it and is looking at a card that says so.
+                                Text(if (repairing) "Repair" else "Set as Default", fontSize = 13.sp)
                             }
                         }
                     }
@@ -380,6 +415,22 @@ fun DefaultBrowserSection() {
                         fontSize = 13.sp,
                         lineHeight = 22.sp,
                     )
+                    // Only when a BOSS component holds the role: the list the user is
+                    // being sent to then contains TWO entries named BOSS, and picking
+                    // the wrong one repeats the state they are trying to leave. The
+                    // engine bundle stopped declaring these types, but an install that
+                    // has not re-downloaded the engine yet still shows both.
+                    if (state is DefaultHandlerState.OurEngine) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            "If two entries are both named BOSS, the one to pick is the application " +
+                                "itself, not the browser component. Reinstalling the browser engine in " +
+                                "Settings > Browser Engine removes the duplicate.",
+                            color = BossTheme.colors.textPrimary,
+                            fontSize = 12.sp,
+                        )
+                    }
+
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
                         "After completing these steps, click \"Refresh\" to verify.",

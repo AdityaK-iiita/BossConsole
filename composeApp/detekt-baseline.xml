@@ -404,7 +404,7 @@
     <ID>LongMethod:UserExistenceService.kt$UserExistenceService$suspend fun checkUserExists(email: String): Result&lt;UserExistence&gt;</ID>
     <ID>LongMethod:VersionSelectionDialog.kt$@Composable fun VersionSelectionDialog( currentVersion: Version, versions: List&lt;VersionInfo&gt;, isLoading: Boolean, error: String? = null, onVersionSelected: (VersionInfo) -&gt; Unit, onDismiss: () -&gt; Unit, )</ID>
     <ID>LongMethod:VersionSelectionDialog.kt$@Composable private fun VersionItem( versionInfo: VersionInfo, isCurrent: Boolean, isLatest: Boolean = false, onClick: () -&gt; Unit, )</ID>
-    <ID>LongMethod:WindowsDefaultBrowserHandler.kt$WindowsDefaultBrowserHandler$private fun registerAsBrowserCandidate(): Boolean</ID>
+    <ID>LongMethod:WindowsDefaultBrowserHandler.kt$WindowsDefaultBrowserHandler$internal fun registerAsBrowserCandidate(): Boolean</ID>
     <ID>LongMethod:WizardComponents.kt$@Composable fun CheckboxCard( title: String, description: String, icon: ImageVector? = null, isChecked: Boolean, onCheckedChange: (Boolean) -&gt; Unit, enabled: Boolean = true, modifier: Modifier = Modifier, )</ID>
     <ID>LongMethod:WizardComponents.kt$@Composable fun SelectionCard( title: String, description: String, icon: ImageVector? = null, isSelected: Boolean, onClick: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>LongMethod:WizardComponents.kt$@Composable fun WizardStepIndicator( currentStep: Int, totalSteps: Int, modifier: Modifier = Modifier, )</ID>
@@ -1160,7 +1160,7 @@
     <ID>ReturnCount:UrlOpenValidation.kt$UrlOpenValidation$fun isOpenable(url: String): Boolean</ID>
     <ID>ReturnCount:UrlOpenValidation.kt$UrlOpenValidation$private fun hostOf(authority: String): String?</ID>
     <ID>ReturnCount:WebsiteMatchingUtil.kt$WebsiteMatchingUtil$fun extractMainDomain(url: String): String?</ID>
-    <ID>ReturnCount:WindowsDefaultBrowserHandler.kt$WindowsDefaultBrowserHandler$private fun registerAsBrowserCandidate(): Boolean</ID>
+    <ID>ReturnCount:WindowsDefaultBrowserHandler.kt$WindowsDefaultBrowserHandler$internal fun registerAsBrowserCandidate(): Boolean</ID>
     <ID>ReturnCount:WindowsFileTypeHandler.kt$WindowsFileTypeHandler$fun register(category: FileTypeCategory): Boolean</ID>
     <ID>ReturnCount:WindowsRegistryScript.kt$WindowsRegistryScript$private fun userChoiceExtensionOf(keyLine: String): String?</ID>
     <ID>ReturnCount:WorkspacePlaceholders.kt$WorkspacePlaceholders$private fun getGitRemoteUrl(projectPath: String): String</ID>

@@ -25,35 +25,61 @@ object WindowsDefaultBrowserHandler {
     // Registry paths
     private const val START_MENU_KEY = "HKEY_CURRENT_USER\\SOFTWARE\\Clients\\StartMenuInternet\\BOSS"
     private const val REGISTERED_APPS = "HKEY_CURRENT_USER\\SOFTWARE\\RegisteredApplications"
-    private const val HTTP_USER_CHOICE =
-        "HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\http\\UserChoice"
-    private const val HTTPS_USER_CHOICE =
-        "HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\https\\UserChoice"
+    private const val URL_ASSOCIATIONS =
+        "HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations"
+
+    /** The ProgId `registerAsBrowserCandidate` writes, and so the one that means BOSS. */
+    private const val BROWSER_PROG_ID = "BOSS"
+
+    /** The schemes "default browser" means. Both must point at BOSS for it to be true. */
+    private val BROWSER_SCHEMES = listOf("http", "https")
 
     /**
      * Check if BOSS is currently the default browser on Windows
      *
      * Queries registry UserChoice keys for http/https associations
      */
-    suspend fun isDefaultBrowser(): Result<Boolean> =
+    suspend fun isDefaultBrowser(): Result<Boolean> = browserHandlerState().map { it.isOurs }
+
+    /**
+     * Who owns the browser role right now, as the three-way answer the Settings
+     * cards share.
+     *
+     * [DefaultHandlerState.OurEngine] is unreachable here, and that is a fact
+     * about Windows rather than an omission: the second "BOSS" that stole the
+     * role on macOS is the branded Chromium **app bundle**, which Launch Services
+     * lists because it is an `.app` declaring `CFBundleURLTypes`. Nothing
+     * registers the engine under `StartMenuInternet` on Windows, so a ProgId that
+     * is not BOSS's is another vendor's browser. The state is still the shared
+     * type so the card has one story to tell on all three platforms.
+     */
+
+    /**
+     * What a `UserChoice` ProgId means, separated from the `reg query` that reads
+     * it so the mapping can be tested at all.
+     *
+     * Case-insensitive because the registry preserves whatever case wrote the
+     * value, and a case-sensitive comparison would report BOSS as another vendor.
+     */
+    internal fun stateForProgId(progId: String?): DefaultHandlerState =
+        when {
+            progId == null -> DefaultHandlerState.Other(null)
+            progId.equals(BROWSER_PROG_ID, ignoreCase = true) -> DefaultHandlerState.Ours
+            else -> DefaultHandlerState.Other(progId)
+        }
+
+    internal suspend fun browserHandlerState(): Result<DefaultHandlerState> =
         withContext(Dispatchers.IO) {
             try {
-                val httpDefault = getDefaultBrowserProgId("http")
-                val httpsDefault = getDefaultBrowserProgId("https")
+                val states = BROWSER_SCHEMES.associateWith { schemeState(it) }
 
                 logger.debug(
                     LogCategory.BROWSER,
                     "Windows default browser check",
-                    mapOf(
-                        "httpDefault" to (httpDefault ?: "none"),
-                        "httpsDefault" to (httpsDefault ?: "none"),
-                    ),
+                    states.mapValues { (_, state) -> state.toString() },
                 )
 
-                // BOSS is default if both schemes point to BOSS
-                val isDefault = httpDefault == "BOSS" && httpsDefault == "BOSS"
-
-                Result.success(isDefault)
+                Result.success(DefaultHandlerState.reduce(states.values))
             } catch (e: Exception) {
                 logger.error(LogCategory.BROWSER, "Error checking default browser on Windows", error = e)
                 Result.failure(e)
@@ -91,16 +117,27 @@ object WindowsDefaultBrowserHandler {
         }
 
     /**
+     * Who owns [scheme], blocking.
+     *
+     * Not suspending, because `WindowsFileTypeHandler.statusOf` is not either and
+     * needs this same answer: the `web-links` category is schemes with no
+     * extensions, so reading it through the extension path reported
+     * [DefaultHandlerState.Other] on every machine, including one where BOSS did
+     * hold http and https. Callers are responsible for being on IO - both are.
+     */
+    internal fun schemeState(scheme: String): DefaultHandlerState = stateForProgId(getDefaultBrowserProgId(scheme))
+
+    /**
      * Get the current default browser ProgId for a scheme
      */
-    private fun getDefaultBrowserProgId(scheme: String): String? {
-        return try {
-            val keyPath =
-                when (scheme) {
-                    "http" -> HTTP_USER_CHOICE
-                    "https" -> HTTPS_USER_CHOICE
-                    else -> return null
-                }
+    private fun getDefaultBrowserProgId(scheme: String): String? =
+        try {
+            // Built from the scheme rather than matched against two constants: the
+            // key shape is the same for every scheme Windows records here, and the
+            // `else -> return null` that used to sit here reported "nobody owns
+            // this" for any third scheme the type resource might list - which reads
+            // as a fact about the machine rather than a gap in this function.
+            val keyPath = "$URL_ASSOCIATIONS\\$scheme\\UserChoice"
 
             val process = Runtime.getRuntime().exec("""reg query "$keyPath" /v ProgId""")
             val output =
@@ -121,14 +158,20 @@ object WindowsDefaultBrowserHandler {
             logger.warn(LogCategory.BROWSER, "Error querying default browser", mapOf("scheme" to scheme), e)
             null
         }
-    }
 
     /**
      * Register BOSS as a browser candidate in Windows Registry
      *
      * Creates necessary registry keys for Windows to recognize BOSS as a browser
      */
-    private fun registerAsBrowserCandidate(): Boolean {
+
+    /**
+     * Registers BOSS under `StartMenuInternet` so Windows lists it as a browser
+     * at all. `internal` because claiming the `web-links` category from
+     * `Settings > Default Apps` has to do the same thing - the alternative was a
+     * second copy of these registry writes.
+     */
+    internal fun registerAsBrowserCandidate(): Boolean {
         try {
             val appPath = getApplicationPath()
             if (appPath.isNullOrEmpty()) {
