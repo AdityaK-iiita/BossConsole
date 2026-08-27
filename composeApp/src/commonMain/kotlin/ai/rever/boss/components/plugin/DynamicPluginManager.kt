@@ -1304,7 +1304,20 @@ class DynamicPluginManager(
             force = force,
             waitForGC = waitForGC,
             closeTabsAcrossWindows = true,
-        )
+        ).also { outcome ->
+            // The teardown inside detached this plugin's sidebar panels so they would dispose
+            // while the loader was still open. If the unload then did not happen, nothing else
+            // puts them back: the plugin is still loaded, its panels are still registered, and no
+            // (re)install is coming to call notifyPanelsRefresh. Resuming here is what stops a
+            // refused uninstall from blanking a slot for the rest of the session, and a no-op
+            // when nothing was detached.
+            //
+            // Here rather than in the private overload because this is the entry point every
+            // user-facing unload takes (update, reload, remove). The other caller that tears
+            // tabs down globally is dispose(), which is the app shutting down - a panel that
+            // never comes back is exactly right there.
+            if (outcome.isFailure) notifyPanelsRefresh(pluginId)
+        }
 
     private suspend fun uninstallPlugin(
         pluginId: String,

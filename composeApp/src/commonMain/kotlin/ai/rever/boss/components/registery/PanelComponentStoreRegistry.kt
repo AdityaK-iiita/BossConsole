@@ -1,5 +1,7 @@
 package ai.rever.boss.components.registery
 
+import ai.rever.boss.plugin.sandbox.PanelSandboxRegistry
+import androidx.compose.runtime.mutableStateMapOf
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 
@@ -51,5 +53,71 @@ object PanelComponentStoreRegistry {
             }
         }
         return reset
+    }
+
+    /**
+     * Plugins whose panels must not be composed right now.
+     *
+     * Snapshot state, and read from [PanelComponentStore.getOrCreateComponent] during
+     * composition, so suspending recomposes the open slots that are showing the plugin instead of
+     * leaving a stale component on screen.
+     */
+    private val suspendedPlugins = mutableStateMapOf<String, Unit>()
+
+    /** Whether [pluginId]'s panels are currently suspended. */
+    fun isSuspended(pluginId: String): Boolean = suspendedPlugins.containsKey(pluginId)
+
+    /**
+     * Take [pluginId]'s panels out of every window's composition and keep them out until
+     * [resumePanels].
+     *
+     * The unload path's panel counterpart of closing its tabs, and for the same reason: a panel
+     * left composed while the classloader closes runs its `onDispose` against a dead loader.
+     * Closing tabs was never enough - nothing else removes a panel before the unload, so the
+     * disposal wait could only expire (see PluginLoaderDelegateImpl.teardownPluginTabs).
+     *
+     * Suspending is what makes the removal stick: [SidePanel] and the panel-host tab both call
+     * [PanelComponentStore.getOrCreateComponent] *during* composition, so a bare
+     * `removeComponent` would be undone by the very next frame, which would re-instantiate the
+     * plugin's component from the factories that are about to go away.
+     *
+     * Deliberately NOT hiding the slot. The panel stays open and empty for the length of the
+     * unload, so a reload puts the new build back where the user left it - hiding it would need
+     * the far side to guess which slots to reopen, and #856 is the bug that comes from guessing.
+     *
+     * MUST run on the UI thread, like [resetPanels]: it mutates snapshot state that composition
+     * also reads.
+     *
+     * @return the number of cached components dropped, for logging.
+     */
+    fun detachPanels(pluginId: String): Int {
+        suspendedPlugins[pluginId] = Unit
+        var detached = 0
+        getAllStores().forEach { store ->
+            store.activeComponents.keys
+                .filter { PanelSandboxRegistry.getSandbox(it)?.pluginId == pluginId }
+                .forEach { panelId ->
+                    store.removeComponent(panelId)
+                    detached++
+                }
+        }
+        return detached
+    }
+
+    /**
+     * Let [pluginId]'s panels compose again.
+     *
+     * Every path that ends an unload calls this, whether or not the plugin came back: a suspension
+     * that outlives its unload is a slot that stays blank for the rest of the session, which is a
+     * worse failure than the stale component this replaced. See
+     * PluginLoaderDelegateImpl.refreshPluginPanels, which resumes before it resets.
+     */
+    fun resumePanels(pluginId: String) {
+        suspendedPlugins.remove(pluginId)
+    }
+
+    /** Test-only: drop every suspension. */
+    fun clearSuspensions() {
+        suspendedPlugins.clear()
     }
 }

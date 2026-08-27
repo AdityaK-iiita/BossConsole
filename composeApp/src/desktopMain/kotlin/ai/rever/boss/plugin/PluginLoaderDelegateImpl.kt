@@ -24,6 +24,7 @@ import ai.rever.boss.plugin.loader.PluginUnloadException
 import ai.rever.boss.plugin.repository.remote.PluginStoreConfig
 import ai.rever.boss.plugin.sandbox.TabSandboxRegistry
 import ai.rever.boss.plugin.sandbox.ui.PluginCrashRegistry
+import ai.rever.boss.plugin.sandbox.ui.PluginUiMountRegistry
 import ai.rever.boss.utils.ApplicationRestarter
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
@@ -566,16 +567,32 @@ class PluginLoaderDelegateImpl(
      * Sidebar panels re-register on reload; open tabs do not reopen.
      */
     suspend fun teardownAllPluginTabs(): Int {
-        val tabs =
+        val sandboxed =
             SplitViewStateRegistry.getAllStates().values.flatMap { state ->
                 state.getAllPanels().flatMap { panel ->
                     val component = panel.tabsComponent
                     component.tabsState.value.tabs
-                        .filter { tab -> TabSandboxRegistry.getSandbox(tab.typeId) != null }
-                        .map { tab -> component to tab.id }
+                        .mapNotNull { tab ->
+                            TabSandboxRegistry.getSandbox(tab.typeId)?.let { sandbox ->
+                                Triple(component, tab.id, sandbox.pluginId)
+                            }
+                        }
                 }
             }
-        if (tabs.isEmpty()) return 0
+        val tabs = sandboxed.map { (component, tabId, _) -> component to tabId }
+        // The plugins whose loaders the swap is about to close - the only ones worth waiting on.
+        // NOT every mounted plugin: sidebar panels stay up across a swap by design, so an "is
+        // anything mounted" wait could never come true while one was open.
+        val owners = sandboxed.map { (_, _, pluginId) -> pluginId }.toSet()
+        if (tabs.isEmpty()) {
+            // Nothing to await, and the call that used to be here could never say otherwise:
+            // `owners` comes out of the same scan as `tabs`, so no tabs means no owners, and
+            // awaitDisposed returns immediately on an empty set. A panel-only plugin is NOT
+            // covered here - its panel is not in `owners` in either branch, and it stays mounted
+            // across a swap by design. Covering it would mean sourcing owners from
+            // PanelSandboxRegistry too, which is a change to what this waits for, not a comment.
+            return 0
+        }
         logger.info(
             LogCategory.SYSTEM,
             "Tearing down plugin tabs before API-layer swap",
@@ -584,19 +601,42 @@ class PluginLoaderDelegateImpl(
             ),
         )
         closeTabsOnEdt(pluginId = null, tabs = tabs)
+        awaitPluginUiDisposal(owners)
         return tabs.size
     }
 
     /**
-     * Close ONE plugin's open tabs across all windows on the EDT and wait.
-     * Invoked by the shared uninstall path (DynamicPluginManager) before the
-     * classloader closes, so update/reload/remove of a tab-hosting plugin
-     * (terminal-tab, editor-tab, fluck-browser) disposes its tab UI cleanly —
-     * same NoClassDefFoundError-avoidance as the API swap, one plugin at a time.
+     * Close ONE plugin's open tabs across all windows on the EDT, take its sidebar panels out of
+     * the composition, and wait for all of it to dispose.
+     *
+     * Invoked by the shared uninstall path (DynamicPluginManager) before the classloader closes,
+     * so update/reload/remove of a tab-hosting plugin (terminal-tab, editor-tab, fluck-browser)
+     * disposes its tab UI cleanly — same NoClassDefFoundError-avoidance as the API swap, one
+     * plugin at a time.
+     *
+     * Panels need the detach because nothing else removes them in time: the registration drops in
+     * TrackingPluginContext.unregisterAll(), which runs INSIDE the unload, after this has
+     * returned. Without it a plugin with a panel open could only ever time out here, and its
+     * panel disposed against a closed loader anyway - the exact fault this path exists to
+     * prevent. [PanelComponentStoreRegistry.detachPanels] has the mechanics.
+     *
+     * [detachPanels] is false for callers that are NOT about to close the classloader. Crash
+     * recovery is the one that matters: it closes tabs before disabling, `disable` leaves the
+     * loader open, and its panel is on screen showing the crash fallback with the Restart button
+     * the user needs. Detaching there would replace that with a blank slot to no purpose.
      */
-    suspend fun teardownPluginTabs(pluginId: String): Int {
+    suspend fun teardownPluginTabs(
+        pluginId: String,
+        detachPanels: Boolean = true,
+    ): Int {
         val tabs = findOpenTabs(pluginId)
-        if (tabs.isEmpty()) return 0
+        if (detachPanels) detachPluginPanels(pluginId)
+        if (tabs.isEmpty()) {
+            // No tabs is not "nothing to wait for": a sidebar panel is a boundary too, and with
+            // the detach above it now has a disposal to await rather than a timeout to burn.
+            awaitPluginUiDisposal(setOf(pluginId))
+            return 0
+        }
         logger.info(
             LogCategory.SYSTEM,
             "Tearing down plugin tabs before unload",
@@ -606,7 +646,34 @@ class PluginLoaderDelegateImpl(
             ),
         )
         closeTabsOnEdt(pluginId, tabs)
+        awaitPluginUiDisposal(setOf(pluginId))
         return tabs.size
+    }
+
+    /**
+     * Wait for [pluginIds]' UI to actually leave the composition, before their loaders close.
+     *
+     * Closing a tab is not disposing it: `removeTabById` mutates the tab model on the EDT and
+     * returns, while Compose disposes the subtree on a LATER render frame - and that frame is what
+     * runs the plugin's own onDispose lambdas, which cannot resolve once its classloader has gone.
+     *
+     * Hoisted out of [closeTabsOnEdt] because it is not about tabs: a plugin whose only surface is
+     * a sidebar panel has no tabs to close and the same race to lose. Panels reach this wait through
+     * [teardownPluginTabs]'s detach rather than through a tab close, which is why the wait is
+     * phrased in plugins and not in tabs.
+     */
+    private suspend fun awaitPluginUiDisposal(pluginIds: Set<String>) {
+        if (PluginUiMountRegistry.awaitDisposed(pluginIds, UI_DISPOSAL_TIMEOUT_MS)) return
+        logger.warn(
+            LogCategory.SYSTEM,
+            "Plugin UI still mounted after teardown timeout - unloading anyway",
+            mapOf(
+                // The awaited plugins only. Listing every mounted plugin named ones that had
+                // nothing to do with this unload, which is what made the line unactionable.
+                "stillMounted" to PluginUiMountRegistry.stillMounted(pluginIds).toString(),
+                "timeoutMs" to UI_DISPOSAL_TIMEOUT_MS.toString(),
+            ),
+        )
     }
 
     /**
@@ -624,6 +691,11 @@ class PluginLoaderDelegateImpl(
         pluginId: String,
         panelIds: Set<PanelId>,
     ) {
+        // Resume FIRST, and before the empty check: this is the far side of every unload, and a
+        // plugin that did not come back (removed, or a failed reload) has no panels to reset but
+        // must still stop being suspended. Leaving it suspended would blank the slot for the rest
+        // of the session.
+        SwingUtilities.invokeLater { PanelComponentStoreRegistry.resumePanels(pluginId) }
         if (panelIds.isEmpty()) return
         SwingUtilities.invokeLater {
             val reset = PanelComponentStoreRegistry.resetPanels(panelIds)
@@ -637,6 +709,42 @@ class PluginLoaderDelegateImpl(
                     ),
                 )
             }
+        }
+    }
+
+    /**
+     * Take [pluginId]'s sidebar panels out of every window's composition, on the EDT.
+     *
+     * Blocking rather than fire-and-forget, unlike [refreshPluginPanels]: the caller awaits the
+     * disposal that this triggers, so returning before the state change had landed would just
+     * start the wait against a panel that was still composed.
+     */
+    @Suppress("TooGenericExceptionCaught") // A detach touches plugin code; a closed loader throws Error, not Exception.
+    private fun detachPluginPanels(pluginId: String) {
+        var detached = 0
+        runOnEdtAndWait {
+            detached =
+                try {
+                    PanelComponentStoreRegistry.detachPanels(pluginId)
+                } catch (t: Throwable) {
+                    logger.warn(
+                        LogCategory.SYSTEM,
+                        "Detaching sidebar panels before unload failed (continuing)",
+                        mapOf("pluginId" to pluginId),
+                        t,
+                    )
+                    0
+                }
+        }
+        if (detached > 0) {
+            logger.info(
+                LogCategory.SYSTEM,
+                "Detached sidebar panels before unload",
+                mapOf(
+                    "pluginId" to pluginId,
+                    "panels" to detached.toString(),
+                ),
+            )
         }
     }
 
@@ -721,3 +829,11 @@ class PluginLoaderDelegateImpl(
         }
     }
 }
+
+/**
+ * How long an unload waits for Compose to finish disposing a plugin's UI.
+ *
+ * Generous for what it waits on - a render frame is ~16ms - and short enough that a window which
+ * is never going to draw does not hold up an unload. See `PluginUiMountRegistry.awaitDisposed`.
+ */
+private const val UI_DISPOSAL_TIMEOUT_MS = 2_000L

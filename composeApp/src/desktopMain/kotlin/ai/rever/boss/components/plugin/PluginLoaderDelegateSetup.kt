@@ -156,7 +156,11 @@ actual object PluginLoaderDelegateSetup {
                     ) = PluginCrashRegistry.recordRenderFault(pluginId, error, notify = false)
 
                     override suspend fun closeTabs(pluginId: String) {
-                        delegate.teardownPluginTabs(pluginId)
+                        // detachPanels = false: this is quarantine, not an unload. `disable`
+                        // below leaves the classloader open, so there is nothing to race - and
+                        // the plugin's panel is on screen showing the crash fallback, which is
+                        // where the user's Restart button lives. Detaching would blank it.
+                        delegate.teardownPluginTabs(pluginId, detachPanels = false)
                     }
 
                     override suspend fun disable(pluginId: String) = DynamicPluginManager.disableEverywhere(pluginId)

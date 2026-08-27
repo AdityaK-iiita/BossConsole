@@ -1,5 +1,6 @@
 package ai.rever.boss.components.registery
 
+import ai.rever.boss.plugin.sandbox.PanelSandboxRegistry
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import androidx.compose.runtime.mutableStateMapOf
@@ -17,6 +18,13 @@ class PanelComponentStore(
 
     // Get or create a component for a panel
     fun getOrCreateComponent(panelId: PanelId): PanelComponentWithUI? {
+        // Nothing for a plugin that is mid-unload. Called from composition by both panel hosts
+        // (SidePanel and the panel-host tab), so this is also what keeps a detached panel
+        // detached: without it the next frame would re-instantiate the component from factories
+        // that are about to be closed. See PanelComponentStoreRegistry.detachPanels.
+        val owner = PanelSandboxRegistry.getSandbox(panelId)?.pluginId
+        if (owner != null && PanelComponentStoreRegistry.isSuspended(owner)) return null
+
         // Return existing component if available
         activeComponents[panelId]?.let { return it }
 
