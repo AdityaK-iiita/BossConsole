@@ -1,6 +1,7 @@
 package ai.rever.boss.utils
 
 import java.io.File
+import java.net.URLDecoder
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -17,11 +18,22 @@ import kotlin.test.assertTrue
  * be extracted, or the file opens twice.
  */
 class OsOpenArgumentsTest {
-    /** Every path ending `.md` or `.kt` is a file, `/proj` is a directory, nothing else exists. */
-    private val kindOf: (String) -> OsOpenArguments.OpenTargetKind = { path ->
+    /**
+     * Every path ending `.md` or `.kt` is a file, one ending `proj` is a
+     * directory, nothing else exists.
+     *
+     * Separators are normalised before matching, and that is not cosmetic. For a
+     * bare path argument the predicate sees the raw string; for a `file://` URL it
+     * sees the path after `File(URI)` has normalised it, which on Windows means
+     * backslashes. A predicate written against `/proj` therefore matched the
+     * bare-path case and missed the URL case, and only on Windows - which is
+     * exactly how three of these tests passed locally and failed in CI.
+     */
+    private val kindOf: (String) -> OsOpenArguments.OpenTargetKind = { raw ->
+        val path = raw.replace('\\', '/').trimEnd('/')
         when {
             path.endsWith(".md") || path.endsWith(".kt") -> OsOpenArguments.OpenTargetKind.FILE
-            path.trimEnd('/').endsWith("/proj") -> OsOpenArguments.OpenTargetKind.DIRECTORY
+            path.endsWith("/proj") -> OsOpenArguments.OpenTargetKind.DIRECTORY
             else -> OsOpenArguments.OpenTargetKind.ABSENT
         }
     }
@@ -52,9 +64,14 @@ class OsOpenArgumentsTest {
     fun `a path is absolutised, so a relative argument still resolves`() {
         // A shell can hand over `notes.md` with the working directory implied,
         // and the deep link is consumed elsewhere with no memory of that cwd.
+        //
+        // Compared against File().absolutePath rather than asserting a leading
+        // slash: on Windows an absolute path starts `D:\`, which URL-encodes to
+        // `D%3A%5C` and satisfies neither `/` nor `%2F`.
         val link = links("notes.md").single()
-        val path = link.substringAfter("boss://file?path=")
-        assertTrue(path.startsWith("%2F") || path.startsWith("/"), "expected an absolute path, got $path")
+        val path = URLDecoder.decode(link.substringAfter("boss://file?path="), "UTF-8")
+        assertEquals(File("notes.md").absolutePath, path)
+        assertTrue(File(path).isAbsolute, "expected an absolute path, got $path")
     }
 
     @Test
@@ -113,8 +130,13 @@ class OsOpenArgumentsTest {
 
     @Test
     fun `a percent-escaped file URL is decoded`() {
+        // Matched on the decoded FILE NAME, not the whole path: `File(URI)`
+        // normalises `file:///tmp/...` differently per platform, so a literal
+        // POSIX path here never matched on Windows and the URL produced no link
+        // at all. The escape decoding is what this test is about, and the name
+        // carries it.
         val spaced: (String) -> OsOpenArguments.OpenTargetKind = { path ->
-            if (path == "/tmp/my notes.md") {
+            if (File(path).name == "my notes.md") {
                 OsOpenArguments.OpenTargetKind.FILE
             } else {
                 OsOpenArguments.OpenTargetKind.ABSENT
@@ -177,6 +199,26 @@ class OsOpenArgumentsTest {
         }
         val result = OsOpenArguments.deepLinksFrom(arrayOf("/tmp/a.md", "terminal"), kindWithOddName)
         assertEquals(1, result.size, "the second arg names a real file and should open: $result")
+    }
+
+    @Test
+    fun `a Windows-shaped path is recognised, on every platform`() {
+        // Pins the class of bug that made three of these tests fail only in CI:
+        // the predicate saw `D:\proj` for a file:// URL on Windows and matched
+        // against `/proj`. This runs everywhere, so a POSIX-only assumption fails
+        // on a laptop instead of on a Windows runner an hour later.
+        //
+        // Only the injected predicate is exercised, not the filesystem: a
+        // backslash path is not meaningful to File on Unix, so asserting on the
+        // resulting link would test the host OS rather than this code.
+        assertEquals(OsOpenArguments.OpenTargetKind.DIRECTORY, kindOf("""D:\home\me\proj"""))
+        assertEquals(OsOpenArguments.OpenTargetKind.DIRECTORY, kindOf("""D:\home\me\proj\"""))
+        assertEquals(OsOpenArguments.OpenTargetKind.FILE, kindOf("""D:\Users\me\notes.md"""))
+        assertEquals(OsOpenArguments.OpenTargetKind.ABSENT, kindOf("""D:\Users\me\notes.txt"""))
+
+        // And the POSIX shapes still resolve the same way.
+        assertEquals(OsOpenArguments.OpenTargetKind.DIRECTORY, kindOf("/home/me/proj"))
+        assertEquals(OsOpenArguments.OpenTargetKind.FILE, kindOf("/home/me/notes.md"))
     }
 
     @Test

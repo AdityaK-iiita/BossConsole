@@ -363,6 +363,22 @@ val downloadBundledPlugins =
         // hand does not.
         val ciProvider = providers.environmentVariable("CI")
 
+        // A GitHub token, if the environment has one. Unauthenticated
+        // api.github.com is 60 requests per hour PER IP and GitHub-hosted
+        // runners share egress IPs, so five calls per build hit a 403 whose body
+        // carries no assets - which this task then reported as "No JAR asset
+        // found in release" for every plugin, twice in a row, while the same
+        // request succeeded from a laptop. Authenticated is 5,000/hour.
+        //
+        // A Provider for the same reason ciProvider is one: read at execution
+        // time and tracked by Gradle as an input. GH_TOKEN as well as
+        // GITHUB_TOKEN because that is what `gh` exports and a developer running
+        // this by hand is likely to have.
+        val githubTokenProvider =
+            providers
+                .environmentVariable("GITHUB_TOKEN")
+                .orElse(providers.environmentVariable("GH_TOKEN"))
+
         doLast {
             val bundledPluginsDir = destDir.get().asFile
             bundledPluginsDir.mkdirs()
@@ -388,14 +404,64 @@ val downloadBundledPlugins =
                 try {
                     logger.lifecycle("📦 Fetching latest release for $repo...")
 
-                    // Get latest release info from GitHub API using curl
+                    // Get latest release info from GitHub API using curl.
+                    //
+                    // The status code is appended on its own last line rather
+                    // than trusted from the exit code: `curl -s` without `-f`
+                    // exits 0 on a 403, so the old call could not tell a
+                    // rate-limit body from a release. Not `-f` alone either,
+                    // because the body of the error is what says WHICH failure
+                    // it was.
                     val apiUrl = "https://api.github.com/repos/$repo/releases/latest"
+                    val token = githubTokenProvider.orNull?.takeIf { it.isNotBlank() }
+                    val authHeader =
+                        if (token != null) listOf("-H", "Authorization: Bearer $token") else emptyList()
                     val curlProcess =
-                        ProcessBuilder("curl", "-s", "-H", "Accept: application/vnd.github.v3+json", apiUrl)
-                            .redirectErrorStream(true)
+                        ProcessBuilder(
+                            listOf("curl", "-s", "-w", "\n%{http_code}", "-H", "Accept: application/vnd.github.v3+json") +
+                                authHeader +
+                                listOf(apiUrl),
+                        ).redirectErrorStream(true)
                             .start()
-                    val responseText = curlProcess.inputStream.bufferedReader().readText()
+                    // Never log the command: it carries the token.
+                    val rawResponse = curlProcess.inputStream.bufferedReader().readText()
                     curlProcess.waitFor()
+
+                    val httpStatus = rawResponse.substringAfterLast('\n').trim()
+                    val responseText = rawResponse.substringBeforeLast('\n')
+
+                    if (httpStatus != "200") {
+                        // Say which failure it is. All three used to print "No
+                        // JAR asset found in release", which sent the last
+                        // investigation looking for a deleted Gradle task
+                        // instead of a quota.
+                        val apiMessage =
+                            Regex(""""message"\s*:\s*"([^"]{0,200})""").find(responseText)?.groupValues?.get(1)
+                        val hint =
+                            when {
+                                httpStatus in listOf("403", "429") && token == null -> {
+                                    "rate limited and no GITHUB_TOKEN was set (60 requests/hour per IP unauthenticated)"
+                                }
+
+                                httpStatus in listOf("403", "429") -> {
+                                    "rate limited even with a token"
+                                }
+
+                                httpStatus == "401" -> {
+                                    "the token was rejected"
+                                }
+
+                                httpStatus == "404" -> {
+                                    "no release, or the repository is unreachable"
+                                }
+
+                                else -> {
+                                    "unexpected status"
+                                }
+                            }
+                        logger.warn("⚠️  GitHub API returned $httpStatus for $repo - $hint${apiMessage?.let { ": $it" } ?: ""}")
+                        continue
+                    }
 
                     // Parse JSON to find the JAR asset
                     val tagNameMatch = Regex(""""tag_name"\s*:\s*"([^"]+)"""").find(responseText)
@@ -425,7 +491,9 @@ val downloadBundledPlugins =
                             .firstOrNull { !it.endsWith("-thin.jar") }
 
                     if (jarUrl == null) {
-                        logger.warn("⚠️  No JAR asset found in release for $repo")
+                        // Reached only on a 200, so this now means what it says:
+                        // the release really has no non-thin JAR for this prefix.
+                        logger.warn("⚠️  Release $tagName of $repo has no non-thin JAR asset for '$artifactPrefix'")
                         continue
                     }
 
@@ -470,10 +538,25 @@ val downloadBundledPlugins =
                     // Download the JAR using curl
                     logger.lifecycle("⬇️  Downloading $jarFileName...")
                     val downloadProcess =
-                        ProcessBuilder("curl", "-sL", "-o", destFile.absolutePath, jarUrl)
+                        ProcessBuilder("curl", "-fsSL", "-o", destFile.absolutePath, jarUrl)
                             .redirectErrorStream(true)
                             .start()
-                    downloadProcess.waitFor()
+                    val downloadOutput =
+                        downloadProcess.inputStream
+                            .bufferedReader()
+                            .readText()
+                            .trim()
+                    val downloadExit = downloadProcess.waitFor()
+
+                    // `-f` so curl fails on a non-2xx instead of writing the
+                    // error page into the file: without it a 404 left an HTML
+                    // body at a `.jar` name, which the completeness check below
+                    // then counted as present.
+                    if (downloadExit != 0) {
+                        logger.warn("⚠️  Could not download $jarFileName from $repo (curl exit $downloadExit) $downloadOutput")
+                        destFile.delete()
+                        continue
+                    }
 
                     logger.lifecycle("✅ Downloaded $jarFileName (version: $tagName, size: ${destFile.length()} bytes)")
                 } catch (e: Exception) {
