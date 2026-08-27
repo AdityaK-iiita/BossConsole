@@ -84,21 +84,17 @@ env:
   SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_FUNCTION_URL: ${{ secrets.SUPABASE_FUNCTION_URL }}
-  # `downloadBundledPlugins` asks api.github.com for the latest release of five
-  # bundled plugin repos. Unauthenticated that is 60 requests per hour PER IP,
-  # and GitHub-hosted runners share egress IPs - so the call 403s, the response
-  # carries no assets, and the task reports "No JAR asset found in release" for
-  # all five. That failed run 33058141756 twice, twelve minutes apart, while the
-  # identical unauthenticated request succeeded from a laptop: the releases were
-  # fine, the quota was not.
-  #
-  # Declared at WORKFLOW level, not on the build steps: six steps across five
-  # jobs run gradle, and adding it per step is how one gets missed. Authenticated
-  # requests get 5,000/hour, and the default GITHUB_TOKEN is enough because all
-  # five plugin repos are public - it needs no extra scope.
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   # boss-plugin-api-core resolves from GitHub Packages during every gradle
   # invocation; step-level GITHUB_TOKEN assignments still override this.
+  #
+  # `downloadBundledPlugins` reads it too, for the api.github.com release lookups
+  # of the five bundled plugin repos: unauthenticated those are 60 requests per
+  # hour per IP and the macOS runner pool shares addresses, which 403'd and failed
+  # release run 33058141756 twice. It was already available here; the task simply
+  # never sent an Authorization header. Do NOT add a second GITHUB_TOKEN entry -
+  # a duplicate key in this mapping makes Actions refuse to start the workflow
+  # (startup_failure, zero jobs), and PyYAML will not catch it because it silently
+  # takes the last value.
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
