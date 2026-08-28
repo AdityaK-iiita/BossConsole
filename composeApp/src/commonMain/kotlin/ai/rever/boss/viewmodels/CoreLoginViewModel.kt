@@ -50,7 +50,10 @@ class CoreLoginViewModel {
                 },
                 onFailure = { error ->
                     logger.warn(LogCategory.AUTH, "Magic link sending failed", error = error)
-                    _errorMessage.value = error.message
+                    // AuthService already turns the failure into one sentence fit for the screen;
+                    // the fallback only covers an exception that carries no message at all, which
+                    // would otherwise leave the form looking like nothing happened.
+                    _errorMessage.value = error.message ?: "Failed to send magic link"
                 },
             )
 

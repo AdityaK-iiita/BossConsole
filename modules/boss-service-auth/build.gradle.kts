@@ -53,6 +53,9 @@ dependencies {
     // Testing
     testImplementation(libs.kotlin.test.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    // supabase-kt's auth exceptions carry the HttpResponse that produced them, so asserting on
+    // what a failed sign-in tells the user means minting a real response.
+    testImplementation(libs.ktor.client.mock)
 }
 
 // Application entry point
