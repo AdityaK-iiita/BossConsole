@@ -1,9 +1,11 @@
 package ai.rever.boss.updater
 
+import ai.rever.boss.components.dialogs.DownloadCenterDialog
 import ai.rever.boss.layout.TRAFFIC_LIGHT_HEIGHT
 import ai.rever.boss.plugin.ui.BossTheme
 import ai.rever.boss.utils.Version
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.*
@@ -43,8 +45,25 @@ fun UpdateBanner(
     onCheckForUpdates: () -> Unit = {},
     onDownloadUpdate: (UpdateInfo) -> Unit = {},
     onInstallUpdate: (String) -> Unit = {},
+    onCancelDownload: () -> Unit = {},
+    onDiscardDownload: () -> Unit = {},
     onDismiss: () -> Unit = {},
 ) {
+    // Hoisted ABOVE the `when`, and this is load-bearing rather than tidiness. Held inside a
+    // branch, the state it exists to show is what destroys it: a download finishing moves
+    // Downloading -> ReadyToInstall, that branch leaves composition, and an open dialog vanishes
+    // at the exact moment its row gains an Install button. Pressing Install then does it again
+    // (-> Installing -> no banner). The DownloadCenter row survives both transitions, and the
+    // bottom bar's item keeps its dialog open across them, so the banner's copy was the only
+    // thing disappearing - reintroducing one step later the very asymmetry this set out to remove.
+    //
+    // Surviving branch changes means inheriting the hazard DownloadCenterStatusItem documents,
+    // where a dialog whose subtree is removed cannot dismiss itself. It does not apply here:
+    // nothing early-returns this composable, so DownloadCenterDialog's own
+    // LaunchedEffect(transfers.isEmpty()) is always alive to dispatch.
+    var showDialog by remember { mutableStateOf(false) }
+    val openDownloadCenter = { showDialog = true }
+
     when (updateState) {
         is UpdateState.UpdateAvailable -> {
             UpdateAvailableBanner(
@@ -56,13 +75,20 @@ fun UpdateBanner(
         }
 
         is UpdateState.Downloading -> {
-            DownloadProgressBanner(startInset = startInset, progress = updateState.progress)
+            DownloadProgressBanner(
+                startInset = startInset,
+                progress = updateState.progress,
+                onCancel = onCancelDownload,
+                onOpenDownloadCenter = openDownloadCenter,
+            )
         }
 
         is UpdateState.ReadyToInstall -> {
             ReadyToInstallBanner(
                 startInset = startInset,
                 onInstall = { onInstallUpdate(updateState.downloadPath) },
+                onDiscard = onDiscardDownload,
+                onOpenDownloadCenter = openDownloadCenter,
             )
         }
 
@@ -80,6 +106,13 @@ fun UpdateBanner(
         }
 
         else -> { /* No banner for other states */ }
+    }
+
+    // Outside the `when`, so a state change cannot take the dialog with it. Rendered even for
+    // the states that draw no banner: Installing draws nothing here but still has a row, and a
+    // dialog opened from the ready banner should survive pressing Install inside it.
+    if (showDialog) {
+        DownloadCenterDialog(onDismiss = { showDialog = false })
     }
 }
 
@@ -152,6 +185,8 @@ private fun UpdateAvailableBanner(
 private fun DownloadProgressBanner(
     startInset: Dp,
     progress: Float,
+    onCancel: () -> Unit,
+    onOpenDownloadCenter: () -> Unit,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -161,6 +196,12 @@ private fun DownloadProgressBanner(
             modifier =
                 Modifier
                     .fillMaxWidth()
+                    // The banner opens the download center, matching the bottom bar's
+                    // progress item - this is the app's own update, so it is one row in
+                    // the same dialog rather than a separate surface. Cancel below is a
+                    // TextButton and consumes its own press, so hitting it does not also
+                    // open the dialog behind it.
+                    .clickable(onClick = onOpenDownloadCenter)
                     .bannerPad(startInset),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -186,6 +227,15 @@ private fun DownloadProgressBanner(
                 color = BossTheme.colors.ok,
                 backgroundColor = BossTheme.colors.raised,
             )
+            Spacer(modifier = Modifier.width(8.dp))
+            TextButton(
+                onClick = onCancel,
+                colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.textSecondary),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                modifier = Modifier.height(28.dp),
+            ) {
+                Text("Cancel", fontSize = 11.sp)
+            }
         }
     }
 }
@@ -194,6 +244,8 @@ private fun DownloadProgressBanner(
 private fun ReadyToInstallBanner(
     startInset: Dp,
     onInstall: () -> Unit,
+    onDiscard: () -> Unit,
+    onOpenDownloadCenter: () -> Unit,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -203,6 +255,7 @@ private fun ReadyToInstallBanner(
             modifier =
                 Modifier
                     .fillMaxWidth()
+                    .clickable(onClick = onOpenDownloadCenter)
                     .bannerPad(startInset),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
@@ -224,13 +277,26 @@ private fun ReadyToInstallBanner(
                 )
             }
 
-            TextButton(
-                onClick = onInstall,
-                colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.warn),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                modifier = Modifier.height(28.dp),
-            ) {
-                Text("Install Now", fontSize = 11.sp)
+            Row {
+                TextButton(
+                    onClick = onInstall,
+                    colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.warn),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    modifier = Modifier.height(28.dp),
+                ) {
+                    Text("Install Now", fontSize = 11.sp)
+                }
+                // "Cancel", not "Discard", because the download center's dialog calls the same
+                // action Cancel on this row and so does the banner one state earlier. The word
+                // is doing less work than the consistency is: one action, three surfaces.
+                TextButton(
+                    onClick = onDiscard,
+                    colors = ButtonDefaults.textButtonColors(contentColor = BossTheme.colors.textSecondary),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    modifier = Modifier.height(28.dp),
+                ) {
+                    Text("Cancel", fontSize = 11.sp)
+                }
             }
         }
     }

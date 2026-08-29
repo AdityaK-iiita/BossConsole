@@ -56,6 +56,29 @@ interface UpdateHandle {
 
     fun installUpdateInBackground(downloadPath: String)
 
+    /**
+     * Abandon a download in progress.
+     *
+     * Reaches [UpdateManager.cancelDownload] directly rather than through
+     * `DownloadCenter.cancel(APP_UPDATE_ID)`, even though the row carries the same
+     * action: the row exists only while [UpdateDownloadCenterMirror] is running, and
+     * a banner button whose behaviour depends on a collector being live is one that
+     * silently does nothing when it is not. Both surfaces end at the same manager
+     * method, which is idempotent, so pressing Cancel in the banner and in the
+     * dialog is one cancel however they interleave.
+     */
+    fun cancelDownload()
+
+    /**
+     * Throw away an update that downloaded but was never installed.
+     *
+     * Separate from [cancelDownload] because the two abandon different things and only one of
+     * them is free: cancelling stops bytes arriving, while this deletes an artifact that is
+     * already on disk. [UpdateManager.discardDownload] suspends for that delete, which is why
+     * this is one of the fire-and-forget variants and [cancelDownload] is not.
+     */
+    fun discardDownloadInBackground()
+
     fun dismissVersionInBackground(version: Version)
 
     fun dismissDialogOnly()
@@ -249,6 +272,11 @@ class UpdateCoordinator internal constructor(
         manager.shutdown()
     }
 
+    // One delegate per handle capability is the shape of this class, not debt: every method is a
+    // two-line `guard(...)` forward to the shared manager, and UpdateHandleGuardTest requires it
+    // stay that way. Suppressed here rather than baselined so the reason sits with the code - a
+    // baseline row reads as legacy for a class that is deliberately built like this.
+    @Suppress("TooManyFunctions")
     private inner class WindowUpdateHandle(
         override val windowId: String,
     ) : UpdateHandle {
@@ -280,6 +308,18 @@ class UpdateCoordinator internal constructor(
 
         override fun downloadUpdateInBackground(updateInfo: UpdateInfo) {
             if (guard("downloadUpdateInBackground")) manager.downloadUpdateInBackground(updateInfo)
+        }
+
+        override fun discardDownloadInBackground() {
+            if (guard("discardDownloadInBackground")) manager.launchInBackground { manager.discardDownload() }
+        }
+
+        override fun cancelDownload() {
+            // Not launchInBackground: cancelDownload only cancels the download job and
+            // is not itself suspending, so wrapping it would put the cancel behind a
+            // dispatch for no reason - and the point of this button is that the bar
+            // stops immediately.
+            if (guard("cancelDownload")) manager.cancelDownload()
         }
 
         override fun dismissDialogOnly() {
