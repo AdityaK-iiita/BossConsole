@@ -275,17 +275,22 @@ class UpdateManager {
      * The version stays on offer, so the banner can download it again.
      */
     suspend fun discardDownload() {
-        val state = _updateState.value
-        if (state !is UpdateState.ReadyToInstall) return
-        updateService.discardDownload(state.downloadPath)
+        // CLAIM BEFORE DELETING, and give up if the claim is lost. The state move used to
+        // happen AFTER the delete, which is exactly what let an install and a discard both
+        // proceed - see [claimStagedUpdate]. Whoever moves the state out of ReadyToInstall owns
+        // the staged file; the loser touches nothing.
+        //
         // Idle unless there is genuinely a newer version to offer: after discarding a
         // DOWNGRADE, `_updateInfo` holds the older version, and UpdateAvailable would
         // put "Update v9.4.20 available" in the banner.
-        _updateState.value =
-            _updateInfo.value
-                ?.takeIf { it.isNewerVersionAvailable }
-                ?.let { UpdateState.UpdateAvailable(it) }
-                ?: UpdateState.Idle
+        val claimed =
+            _updateState.claimStagedUpdate {
+                _updateInfo.value
+                    ?.takeIf { info -> info.isNewerVersionAvailable }
+                    ?.let { info -> UpdateState.UpdateAvailable(info) }
+                    ?: UpdateState.Idle
+            } ?: return
+        updateService.discardDownload(claimed.downloadPath)
     }
 
     /**
@@ -384,10 +389,29 @@ class UpdateManager {
     /**
      * Install the downloaded update
      */
-    suspend fun installUpdate(downloadPath: String): Boolean =
-        try {
-            _updateState.value = UpdateState.Installing
-
+    suspend fun installUpdate(downloadPath: String): Boolean {
+        // Claim the staged artifact, or do nothing at all.
+        //
+        // Both halves of this matter, and the bug was that neither existed. The state moved to
+        // Installing only once this coroutine had been DISPATCHED, while every caller reaches it
+        // through `launchInBackground` - so between pressing Install and this line running, the
+        // state still read ReadyToInstall and a discard sailed past its own guard, deleted the
+        // artifact, and left this installing a file that was no longer there. The two buttons sit
+        // 8dp apart on the update banner, so "quickly" is one ordinary mis-click.
+        //
+        // A compare-and-set from the exact ReadyToInstall value makes the two mutually exclusive:
+        // whichever lands first wins, and the loser returns without touching the file. It also
+        // makes a second press of Install a no-op rather than a second elevated installer, which
+        // the download center's dialog already got for free by clearing its action on use.
+        if (_updateState.claimStagedUpdate { UpdateState.Installing } == null) {
+            logger.info(
+                LogCategory.SYSTEM,
+                "Ignoring install request - nothing staged, or the staged update was claimed first",
+                mapOf("state" to _updateState.value::class.simpleName.orEmpty()),
+            )
+            return false
+        }
+        return try {
             val outcome = updateService.installUpdate(downloadPath)
             if (outcome.succeeded) {
                 _updateState.value = UpdateState.RestartRequired
@@ -403,6 +427,7 @@ class UpdateManager {
             _updateState.value = UpdateState.Error("Installation failed: ${e.message}")
             false
         }
+    }
 
     /**
      * Get current application version
@@ -474,4 +499,33 @@ sealed class UpdateState {
     data class Error(
         val message: String,
     ) : UpdateState()
+}
+
+/**
+ * Take exclusive ownership of a staged update, moving it to the state [to] describes.
+ *
+ * Returns the [UpdateState.ReadyToInstall] that was claimed, or null when there was nothing
+ * staged or another caller got there first. A null answer means **do not touch the file**.
+ *
+ * This exists because installing and discarding are the same artifact seen two ways, and both
+ * used to check the state and then act, with a gap in between. Every caller reaches them through
+ * `launchInBackground`, so the gap is a real dispatch, not an instruction or two: pressing Install
+ * and then Cancel - two buttons 8dp apart on the update banner - let both pass their checks, and
+ * the discard deleted the artifact while the install was opening it. The user lost the download
+ * AND got an installation failure, which is neither of the two things they asked for.
+ *
+ * A compare-and-set from the exact `ReadyToInstall` value makes them mutually exclusive without a
+ * lock, and the same call makes a second Install press a no-op rather than a second elevated
+ * installer - the download center's dialog already had that, because it clears an action when it
+ * fires; the banner's buttons do not.
+ *
+ * Deliberately takes the destination as a lambda rather than a value: the discard side computes
+ * its next state from `_updateInfo`, and evaluating that eagerly for a claim that then loses would
+ * read state the loser has no business acting on.
+ */
+internal fun MutableStateFlow<UpdateState>.claimStagedUpdate(
+    to: (UpdateState.ReadyToInstall) -> UpdateState,
+): UpdateState.ReadyToInstall? {
+    val ready = value as? UpdateState.ReadyToInstall ?: return null
+    return if (compareAndSet(ready, to(ready))) ready else null
 }
