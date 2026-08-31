@@ -227,6 +227,19 @@ private fun browserEntries() =
             "forward",
             "two finger",
         )
+        group("Video calls")
+        setting(
+            "Keep calls on screen when switching tabs",
+            "Video calls",
+            "picture in picture",
+            "pip",
+            "meet",
+            "google meet",
+            "call",
+            "video call",
+            "pop out",
+            "floating window",
+        )
         group("User Agent")
         setting("Browser Identity", "User Agent", "user agent", "ua", "spoof")
         setting("Custom User Agent String", "User Agent", "ua string")

@@ -10,7 +10,9 @@ import ai.rever.boss.components.settings.shared.SettingsTheme.SurfaceColor
 import ai.rever.boss.components.settings.shared.SettingsTheme.TextPrimary
 import ai.rever.boss.components.settings.shared.SettingsTheme.TextSecondary
 import ai.rever.boss.components.settings.shared.SettingsToggle
+import ai.rever.boss.config.AutoPipSettingsManager
 import ai.rever.boss.config.SwipeNavSettingsManager
+import ai.rever.boss.config.parseAutoPipEnabled
 import ai.rever.boss.config.parseSwipeNavEnabled
 import ai.rever.boss.plugin.browser.BrowserSettings
 import ai.rever.boss.plugin.browser.BrowserSettingsManager
@@ -106,6 +108,32 @@ fun FluckBrowserSettings() {
                             ?: "Swipe right with two fingers to go back, left to go forward.",
                 )
             }
+        }
+
+        // Not gated on platform, unlike Trackpad above: the pop-out is a plain window, and every
+        // platform this app ships on can show one.
+        SettingsSection(title = "Video calls") {
+            // envDecides, not envOverride: an unparseable value is ignored by isEnabled, so gating
+            // on mere presence would disable this row while the setting behind it stayed live.
+            val pipEnvOwned = AutoPipSettingsManager.envDecides()
+            val pipEnvOverride = AutoPipSettingsManager.envOverride()
+            // Collected, so a second Settings window is not left on a stale value.
+            val pipStored by AutoPipSettingsManager.settings.collectAsState()
+            val pipEnabled = parseAutoPipEnabled(pipEnvOverride) ?: pipStored.enabled
+            SettingsToggle(
+                label = "Keep calls on screen when switching tabs",
+                checked = pipEnabled,
+                onCheckedChange = { AutoPipSettingsManager.set(it) },
+                // Disabled rather than silently ignored: a user with the variable exported would
+                // otherwise watch this control do nothing and conclude it is broken.
+                enabled = !pipEnvOwned,
+                description =
+                    pipEnvOverride
+                        .takeIf { pipEnvOwned }
+                        ?.let { "Set by ${AutoPipSettingsManager.KEY}=$it in the environment" }
+                        ?: "A call moves into a small floating window while you use another tab, " +
+                        "and returns when you come back.",
+            )
         }
 
         // User Agent

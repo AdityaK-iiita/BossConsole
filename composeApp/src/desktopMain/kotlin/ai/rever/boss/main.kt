@@ -314,6 +314,12 @@ fun main(args: Array<String>) {
     ai.rever.boss.config.SwipeNavSettingsManager
         .publish()
 
+    // Same channel, same reason: the browser plugin's hibernation guard must agree with the host
+    // about whether a call pops out when its tab is backgrounded, and the two live in different
+    // repos. Republished on change, because it is read per tab switch.
+    ai.rever.boss.config.AutoPipSettingsManager
+        .publish()
+
     // Opt-in override for the Compose UI's own rendering backend (Skiko) - separate from the
     // BROWSER's rendering mode in JxBrowserConfig. Lets a backend be A/B'd on a real machine
     // without a rebuild: pin DIRECT3D, or confirm the GPU-less Windows RDP/VM cohort that falls

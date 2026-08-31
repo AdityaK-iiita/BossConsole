@@ -893,8 +893,61 @@ class DefaultPlugin(
      */
     fun isPluginDisabled(pluginId: String) = sandboxManager.isPluginDisabled(pluginId)
 
+    /**
+     * Selects the tab a pop-out asked to return to, for this window.
+     *
+     * The request travels in-process ([PopOutReturnRequests]) rather than through a new plugin
+     * API: the host cannot select a tab it cannot name - the tab is a dynamic plugin's component
+     * type - but this class can, and the handle already learns its tab id when the plugin
+     * registers a fullscreen handler.
+     *
+     * A request naming another window is ignored here and answered by that window's own
+     * collector. A request nobody can answer is logged rather than dropped silently, which is
+     * how "Back-to-tab does nothing" would otherwise present.
+     */
+    private fun startPopOutReturnCollector() {
+        val splitView = splitViewState
+        val workspaces = workspaceManager
+        val ownWindowId = _windowId
+        if (splitView == null || workspaces == null || ownWindowId == null) return
+        pluginScope.launch {
+            ai.rever.boss.plugin.browser.PopOutReturnRequests.requests
+                .collect { request ->
+                    if (request.windowId != ownWindowId) return@collect
+                    runCatching {
+                        val panelId =
+                            splitView
+                                .collectAllActiveTabs(workspaces, ownWindowId)
+                                .firstOrNull { it.tabInfo.id == request.tabId }
+                                ?.panelId
+                        if (panelId != null) {
+                            splitView.selectTabInPanel(request.tabId, panelId)
+                        } else {
+                            logger.debug(
+                                LogCategory.UI,
+                                "Pop-out asked for a tab this window does not have",
+                                mapOf("tabId" to request.tabId),
+                            )
+                        }
+                    }.onFailure {
+                        // Rethrown, not logged: runCatching catches CancellationException too, and
+                        // swallowing it here breaks structured cancellation when the window closes.
+                        if (it is kotlinx.coroutines.CancellationException) throw it
+                        logger.warn(LogCategory.UI, "Could not return to a pop-out's tab", error = it)
+                    }
+                }
+        }
+    }
+
     init {
         logger.info(LogCategory.SYSTEM, "Initializing DefaultPlugin with sandboxed contexts")
+
+        // Back-to-tab, started per window and unconditionally. This used to run from
+        // ApiActiveTabsProviderAdapter's init, which is created `by lazy` behind
+        // activeTabsProvider - a property that exists for one plugin - so where nothing read it
+        // the adapter was never built, nobody collected, and the pop-out's Back-to-tab button
+        // silently degraded to raising the window.
+        startPopOutReturnCollector()
 
         // ============================================================
         // REGISTER PLUGIN LOADER DELEGATE
@@ -1229,12 +1282,16 @@ private class ApiActiveTabsProviderAdapter(
     private val scope: CoroutineScope,
 ) : ActiveTabsProvider {
     private val tabsLogger = BossLogger.forComponent("ActiveTabsProvider")
-    private val _activeTabs = kotlinx.coroutines.flow.MutableStateFlow<List<ActiveTabData>>(emptyList())
-    override val activeTabs: kotlinx.coroutines.flow.StateFlow<List<ActiveTabData>> = _activeTabs
 
     init {
         // Start polling loop (like bundled LLMRpaIntegration.kt does)
         // This ensures dynamic plugins receive tab updates
+        //
+        // Restored after a refactor deleted it: the pop-out return collector was briefly hosted
+        // in this init and, when it moved to DefaultPlugin, this loop went with it. Nothing else
+        // calls refreshTabs() on a schedule - both consumers of the flow only watch it - so
+        // _activeTabs stayed empty for the life of the process and every plugin observing tabs
+        // silently saw none.
         scope.launch {
             var consecutiveFailures = 0
             while (isActive) {
@@ -1257,6 +1314,9 @@ private class ApiActiveTabsProviderAdapter(
             }
         }
     }
+
+    private val _activeTabs = kotlinx.coroutines.flow.MutableStateFlow<List<ActiveTabData>>(emptyList())
+    override val activeTabs: kotlinx.coroutines.flow.StateFlow<List<ActiveTabData>> = _activeTabs
 
     override suspend fun refreshTabs() {
         val tabs = splitViewState.collectAllActiveTabs(workspaceManager, windowId)

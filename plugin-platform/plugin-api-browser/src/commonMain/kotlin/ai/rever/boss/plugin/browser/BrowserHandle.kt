@@ -595,6 +595,26 @@ interface BrowserHandle {
      */
     fun requestPictureInPicture()
 
+    /**
+     * Whether the host is currently showing this browser in a floating pop-out window.
+     *
+     * True while a backgrounded tab's rendering surface has been reparented into the host's
+     * pop-out (an auto-popped-out call). The tab is backgrounded by definition in that state, so
+     * anything driven by "this tab is not on screen" - hibernation above all - must consult this
+     * or it will dispose the handle and take the pop-out, and the call, with it.
+     *
+     * A plugin cannot answer this for itself: the pop-out is a host window, and the page inside
+     * it knows nothing about which window it is being rendered into. It is the same category of
+     * fact as the fullscreen callbacks below, which exist for the same reason.
+     *
+     * **Defaulted, and plugins must call it reflectively.** A plugin naming a member the host's
+     * copy of this interface lacks is rejected wholesale by BinaryCompatibilityValidator, which
+     * for a browser plugin reads to the user as "my browser disappeared". The default keeps older
+     * hosts answering false rather than failing to load.
+     */
+    val isPoppedOut: Boolean
+        get() = false
+
     // ============================================================
     // FULLSCREEN VIDEO SUPPORT
     // ============================================================
