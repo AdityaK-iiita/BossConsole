@@ -112,3 +112,7 @@ __pycache__/
 # Ignored rather than tracked: what lives here is per-developer and per-task, and a stray
 # entry in `git status` is how a real untracked file gets overlooked.
 .worktrees/
+
+# Eclipse/Kotlin-LSP build output. Regenerated on every IDE build; never tracked.
+bin/
+.kotlin/

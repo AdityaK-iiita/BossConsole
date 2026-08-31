@@ -5,6 +5,8 @@ import ai.rever.boss.components.window_panel.SplitNode
 import ai.rever.boss.components.window_panel.SplitViewState
 import ai.rever.boss.plugin.api.TabInfo
 import ai.rever.boss.plugin.tab.codeeditor.EditorTabInfo
+import ai.rever.boss.plugin.tab.composer.ComposerTabInfo
+import ai.rever.boss.plugin.tab.diff.DiffTabInfo
 import ai.rever.boss.plugin.tab.jupyter.JupyterTabInfo
 import ai.rever.boss.plugin.tab.terminal.TerminalTabInfo
 import ai.rever.boss.plugin.workspace.SplitConfig.HorizontalSplit
@@ -132,6 +134,39 @@ private fun extractTabConfig(
             )
         }
 
+        is DiffTabInfo -> {
+            // Only a plain UNSTAGED WORKING-TREE file diff is persisted, because
+            // that is the only scope restore can rebuild: TabConfig has no field
+            // for refs or for `staged`, and DiffTabInfo.create() defaults both.
+            //
+            // The guard used to be `filePath.isBlank()` alone, which let two
+            // scopes through and silently changed their meaning on restart: a
+            // range diff restricted to one file (fromRef+toRef+filePath all set)
+            // and a staged diff both came back as unstaged working-tree diffs of
+            // that path - same tab position, same title, different content.
+            // Dropping the tab is honest; rebuilding it as something else is not.
+            if (tab.filePath.isBlank() || tab.staged || tab.fromRef != null || tab.toRef != null) {
+                null
+            } else {
+                TabConfig(
+                    type = "diff",
+                    title = tab.title,
+                    filePath = tab.filePath,
+                )
+            }
+        }
+
+        is ComposerTabInfo -> {
+            // The session id rides in filePath: TabConfig has no generic
+            // extra field, and session ids survive placeholder processing
+            // untouched (they contain no project tokens).
+            TabConfig(
+                type = "composer",
+                title = tab.title,
+                filePath = tab.sessionId,
+            )
+        }
+
         is JupyterTabInfo -> {
             TabConfig(
                 type = "jupyter",
@@ -141,9 +176,20 @@ private fun extractTabConfig(
         }
 
         else -> {
-            TabConfig(
-                type = "unknown",
-                title = tab.title,
-            )
+            // Plugin-constructed composer tabs arrive as the plugin's own
+            // TabInfo class (the api jar filters the host's one out), but they
+            // carry the session id as the tab id, so they persist the same way.
+            if (tab.typeId.typeId == "composer") {
+                TabConfig(
+                    type = "composer",
+                    title = tab.title,
+                    filePath = tab.id,
+                )
+            } else {
+                TabConfig(
+                    type = "unknown",
+                    title = tab.title,
+                )
+            }
         }
     }

@@ -1,6 +1,9 @@
 package ai.rever.boss.git
 
 import ai.rever.boss.components.events.GitTerminalEventBus
+import ai.rever.boss.plugin.api.GitDiffData
+import ai.rever.boss.plugin.api.GitFileStatusData
+import ai.rever.boss.plugin.api.GitFileStatusTypeData
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import ai.rever.boss.utils.logging.LogSanitizer
@@ -21,6 +24,7 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.IOException
 import java.io.InputStreamReader
+import kotlin.concurrent.withLock
 import ai.rever.boss.plugin.git.GitOperationResult.Error as GitError
 import ai.rever.boss.plugin.git.GitOperationResult.Success as GitSuccess
 
@@ -140,7 +144,13 @@ actual object GitService {
                         branchName
                     }
 
-                val result = runGitCommand(projectPath, "checkout", localName)
+                if (!isSafeRefName(localName)) {
+                    return@withContext GitError("Refused an unsafe ref: branch")
+                }
+                // `--` terminates the revision list: without it `checkout <name>`
+                // on a name that is also a path checks OUT THE PATH, discarding
+                // that file's uncommitted changes.
+                val result = runGitCommand(projectPath, "checkout", localName, "--")
                 if (result.exitCode == 0) {
                     // Refresh state after checkout
                     refresh(projectPath)
@@ -165,6 +175,14 @@ actual object GitService {
             val projectPath =
                 currentProjectPath
                     ?: return@withContext GitError("No project selected")
+
+            // Validated like every other ref-taking command. Host-UI-only today, but
+            // "not currently plugin-reachable" is a property of the callers, not of
+            // this function, and the checkout/cherry-pick/revert guards exist exactly
+            // because that property changed once already.
+            if (!isSafeRefName(branchName)) {
+                return@withContext GitError("Refused an unsafe ref: branch")
+            }
 
             _isLoading.value = true
             try {
@@ -459,6 +477,26 @@ actual object GitService {
             else -> null
         }
 
+    /**
+     * Serializes every git invocation from this service.
+     *
+     * git takes `.git/index.lock` for a write and does not queue behind it -
+     * a second concurrent write simply fails, which is how staging several
+     * files at once staged the first and silently dropped the rest.
+     *
+     * The lock sits around the whole command rather than around the writes
+     * alone, because `git status` also takes it: it writes the refreshed stat
+     * cache back to the index. With only the writes guarded, the status read
+     * that every operation performs afterwards still collided with the next
+     * file's `git add`, and a file was lost roughly one run in three.
+     *
+     * These are user-driven, IO-bound commands, so serializing them costs
+     * nothing that matters.
+     */
+    private val gitCommandLock =
+        java.util.concurrent.locks
+            .ReentrantLock()
+
     actual suspend fun stage(
         filePath: String,
         windowId: String?,
@@ -505,7 +543,13 @@ actual object GitService {
                 currentProjectPath
                     ?: return@withContext GitError("No project selected")
 
-            val result = runGitCommand(projectPath, "restore", "--staged", "--", filePath)
+            // A staged rename is ONE index entry spanning two paths. Restoring
+            // only the new path unstages the addition and leaves the deletion
+            // of the old path staged - which is why unstaging `helper2.py` put
+            // `helper.py` back in STAGED. VS Code's git extension passes both
+            // sides for exactly this reason, so pass both here too.
+            val paths = stagedPathsFor(projectPath, filePath)
+            val result = runGitCommand(projectPath, "restore", "--staged", "--", *paths.toTypedArray())
             if (result.exitCode == 0) {
                 getStatus() // Refresh global status
                 refreshWindowState(windowId) // Refresh window-specific status
@@ -515,6 +559,36 @@ actual object GitService {
                 GitError(errorMsg, result.exitCode)
             }
         }
+
+    /**
+     * Every index path that belongs with [filePath].
+     *
+     * For a staged rename that is both sides of the arrow; for anything else
+     * it is just the path itself. Read from the current status rather than
+     * remembered, so it stays correct when the index changed underneath.
+     */
+    private fun stagedPathsFor(
+        projectPath: String,
+        filePath: String,
+    ): List<String> {
+        val status =
+            runCatching {
+                runGitCommand(projectPath, "status", "--porcelain=v1", "--untracked-files=all")
+            }.getOrNull() ?: return listOf(filePath)
+        if (status.exitCode != 0) return listOf(filePath)
+        val entry =
+            status.output
+                .lines()
+                .filter { it.length > 3 }
+                .mapNotNull { parseStatusLine(it) }
+                .firstOrNull { it.path == filePath }
+        val original = entry?.originalPath
+        return if (original.isNullOrBlank() || original == filePath) {
+            listOf(filePath)
+        } else {
+            listOf(filePath, original)
+        }
+    }
 
     actual suspend fun unstageAll(windowId: String?): GitOperationResult =
         withContext(Dispatchers.IO) {
@@ -665,6 +739,9 @@ actual object GitService {
                 currentProjectPath
                     ?: return@withContext GitError("No project selected")
 
+            if (!isSafeRefName(commitHash)) {
+                return@withContext GitError("Refused an unsafe ref: commit")
+            }
             _isLoading.value = true
             try {
                 val result = runGitCommand(projectPath, "cherry-pick", commitHash)
@@ -687,6 +764,9 @@ actual object GitService {
                 currentProjectPath
                     ?: return@withContext GitError("No project selected")
 
+            if (!isSafeRefName(commitHash)) {
+                return@withContext GitError("Refused an unsafe ref: commit")
+            }
             _isLoading.value = true
             try {
                 val result = runGitCommand(projectPath, "revert", "--no-edit", commitHash)
@@ -984,11 +1064,17 @@ actual object GitService {
                 .lines()
                 .filter { it.isNotBlank() }
                 .map { line ->
-                    // The line ends with * if it's the current branch
-                    val isCurrent = line.endsWith("*")
-                    val name = if (isCurrent) line.dropLast(1) else line
+                    // `%(HEAD)` is "*" for the checked-out branch and a SPACE
+                    // for every other one, so the marker has to be trimmed off
+                    // both ways: dropping only the "*" left every non-current
+                    // name with a trailing space ("side "), which is not a ref
+                    // git will resolve - `git log "side "` and `git checkout
+                    // "side "` both fail on it.
+                    val isCurrent = line.trimEnd().endsWith("*")
+                    val name = line.trimEnd().removeSuffix("*").trim()
                     GitBranchInfo(name = name, isCurrent = isCurrent, isRemote = false)
-                }.sortedWith(compareBy({ !it.isCurrent }, { it.name })) // Current branch first
+                }.filter { it.name.isNotEmpty() }
+                .sortedWith(compareBy({ !it.isCurrent }, { it.name })) // Current branch first
         } catch (e: Exception) {
             logger.debug(LogCategory.SYSTEM, "Could not list local branches", mapOf("error" to e.toString()))
             emptyList()
@@ -1011,15 +1097,173 @@ actual object GitService {
                 .filter { it.isNotBlank() }
                 .filter { !it.contains("HEAD") } // Exclude origin/HEAD
                 .map { name ->
-                    GitBranchInfo(name = name, isCurrent = false, isRemote = true)
-                }.sortedBy { it.name }
+                    GitBranchInfo(name = name.trim(), isCurrent = false, isRemote = true)
+                }.filter { it.name.isNotEmpty() }
+                .sortedBy { it.name }
         } catch (e: Exception) {
             logger.debug(LogCategory.SYSTEM, "Could not list remote branches", mapOf("error" to e.toString()))
             emptyList()
         }
     }
 
+    // ===== Diff =====
+
+    actual suspend fun getFileDiff(
+        filePath: String,
+        staged: Boolean,
+        projectPathOverride: String?,
+    ): List<GitDiffData> =
+        withContext(Dispatchers.IO) {
+            val projectPath = projectPathOverride ?: currentProjectPath ?: return@withContext emptyList()
+            // -U with a huge context: a diff tab is a file viewer that marks
+            // changes, not a patch. With git's default 3 lines the file arrives
+            // as disconnected fragments and there is no way to read around a
+            // change. `git diff` clamps the context to the file, so this costs
+            // nothing extra on a small one.
+            val context = "-U$FULL_FILE_CONTEXT"
+            val args =
+                if (staged) {
+                    listOf("diff", context, "--cached", "--", filePath)
+                } else {
+                    listOf("diff", context, "--", filePath)
+                }
+            val result = runGitCommand(projectPath, *args.toTypedArray())
+            if (result.exitCode != 0) {
+                logger.debug(
+                    LogCategory.SYSTEM,
+                    "getFileDiff failed",
+                    mapOf("file" to filePath, "error" to result.error),
+                )
+                return@withContext emptyList()
+            }
+            UnifiedDiffParser.parse(result.output)
+        }
+
+    actual suspend fun getCommitDiff(
+        commitHash: String,
+        filePath: String?,
+        projectPathOverride: String?,
+    ): List<GitDiffData> =
+        withContext(Dispatchers.IO) {
+            val projectPath = projectPathOverride ?: currentProjectPath ?: return@withContext emptyList()
+            // Validated for the same reason as getLogForRef: a ref beginning with
+            // `-` is read by git as an OPTION, and `git diff --output=<path>`
+            // TRUNCATES that path. These endpoints are reachable from the
+            // git_diff_ref / git_diff_between MCP tools, which are declared
+            // readOnly - so an unvalidated ref turns a read-only tool into an
+            // arbitrary file write. `--` terminates the revision list so a ref
+            // can never be taken for a pathspec either.
+            if (!isSafeRefName(commitHash)) {
+                logger.warn(LogCategory.SYSTEM, "getCommitDiff refused an unsafe ref", mapOf("commit" to commitHash))
+                return@withContext emptyList()
+            }
+            // -U matches getFileDiff/getRefDiff: the diff tab is a file viewer, so a
+            // commit-scope tab rendered 3-line fragments while the others showed whole files.
+            val args = mutableListOf("show", "-U$FULL_FILE_CONTEXT", "--format=", "--find-renames", commitHash, "--")
+            if (filePath != null) args += filePath
+            val result = runGitCommand(projectPath, *args.toTypedArray())
+            if (result.exitCode != 0) {
+                logger.debug(
+                    LogCategory.SYSTEM,
+                    "getCommitDiff failed",
+                    mapOf("commit" to commitHash, "error" to result.error),
+                )
+                return@withContext emptyList()
+            }
+            UnifiedDiffParser.parse(result.output)
+        }
+
+    actual suspend fun getRefDiff(
+        fromRef: String,
+        toRef: String,
+        filePath: String?,
+        projectPathOverride: String?,
+    ): List<GitDiffData> =
+        withContext(Dispatchers.IO) {
+            val projectPath = projectPathOverride ?: currentProjectPath ?: return@withContext emptyList()
+            // See getCommitDiff: both refs are validated and the revision list is
+            // terminated, because `git diff --output=<path>` truncates that path.
+            if (!isSafeRefName(fromRef) || !isSafeRefName(toRef)) {
+                logger.warn(
+                    LogCategory.SYSTEM,
+                    "getRefDiff refused an unsafe ref",
+                    mapOf("from" to fromRef, "to" to toRef),
+                )
+                return@withContext emptyList()
+            }
+            val args = mutableListOf("diff", "-U$FULL_FILE_CONTEXT", fromRef, toRef, "--")
+            if (filePath != null) args += filePath
+            val result = runGitCommand(projectPath, *args.toTypedArray())
+            if (result.exitCode != 0) {
+                logger.debug(
+                    LogCategory.SYSTEM,
+                    "getRefDiff failed",
+                    mapOf("from" to fromRef, "to" to toRef, "error" to result.error),
+                )
+                return@withContext emptyList()
+            }
+            UnifiedDiffParser.parse(result.output)
+        }
+
+    actual suspend fun getDiffFileNames(
+        staged: Boolean,
+        projectPathOverride: String?,
+    ): List<GitFileStatusData> =
+        withContext(Dispatchers.IO) {
+            val projectPath = projectPathOverride ?: currentProjectPath ?: return@withContext emptyList()
+            val args =
+                if (staged) {
+                    listOf("diff", "--name-status", "--cached")
+                } else {
+                    listOf("diff", "--name-status")
+                }
+            val result = runGitCommand(projectPath, *args.toTypedArray())
+            if (result.exitCode != 0) return@withContext emptyList()
+            parseNameStatus(result.output, staged)
+        }
+
+    private fun parseNameStatus(
+        output: String,
+        staged: Boolean,
+    ): List<GitFileStatusData> {
+        val list = mutableListOf<GitFileStatusData>()
+        for (raw in output.lines()) {
+            if (raw.isBlank()) continue
+            val parts = raw.split("\t")
+            val type = statusTypeFromCode(parts.firstOrNull().orEmpty()) ?: continue
+            // Renames/copies carry two columns: STATUS100\told\tnew.
+            val path = parts.getOrNull(if (parts.size > 2) 2 else 1) ?: continue
+            list.add(
+                GitFileStatusData(
+                    path = path,
+                    indexStatus = if (staged) type else null,
+                    workTreeStatus = if (staged) null else type,
+                    isStaged = staged,
+                    isUnstaged = !staged,
+                ),
+            )
+        }
+        return list
+    }
+
+    private fun statusTypeFromCode(code: String): GitFileStatusTypeData? =
+        when (code.firstOrNull()) {
+            'M' -> GitFileStatusTypeData.MODIFIED
+            'A' -> GitFileStatusTypeData.ADDED
+            'D' -> GitFileStatusTypeData.DELETED
+            'R' -> GitFileStatusTypeData.RENAMED
+            'C' -> GitFileStatusTypeData.COPIED
+            'T' -> GitFileStatusTypeData.MODIFIED
+            'U' -> GitFileStatusTypeData.UNMERGED
+            else -> null
+        }
+
     private fun runGitCommand(
+        workingDir: String,
+        vararg args: String,
+    ): GitCommandResult = gitCommandLock.withLock { runGitCommandLocked(workingDir, *args) }
+
+    private fun runGitCommandLocked(
         workingDir: String,
         vararg args: String,
     ): GitCommandResult {
@@ -1031,11 +1275,14 @@ actual object GitService {
                     environment().putAll(System.getenv())
                 }.start()
 
-        val output = BufferedReader(InputStreamReader(process.inputStream)).use { it.readText() }
-        val error = BufferedReader(InputStreamReader(process.errorStream)).use { it.readText() }
-        val exitCode = process.waitFor()
-
-        return GitCommandResult(output, error, exitCode)
+        // Drained concurrently and bounded, for the reasons runRemoteGitCommand
+        // spells out. This path had neither, and the index lock made that worse
+        // rather than better: gitCommandLock serialises every git command in the
+        // app, so ONE local command blocked on a full stderr pipe - a big
+        // `git add -A` emitting per-file warnings, a chatty hook, a commit waiting
+        // on gpg pinentry - froze the status poll, the diff tabs and the top bar
+        // in every window, with no timeout to end it.
+        return runProcessBounded(process, LOCAL_GIT_TIMEOUT_SECONDS, args)
     }
 
     /**
@@ -1106,6 +1353,15 @@ actual object GitService {
         if (windowGitState == null) return@withContext
 
         windowGitState.setProjectPath(projectPath)
+        // The file- and ref-scoped diff commands (getFileDiff, getCommitDiff,
+        // getRefDiff) read the GLOBAL currentProjectPath, which only the top
+        // bar's refresh() ever set. For a project picked through a panel it
+        // stayed null, so every diff tab opened on "No changes to show" while
+        // the same panel listed the changes correctly. Seed it from the window
+        // that is asking; null is never the better answer.
+        if (currentProjectPath != projectPath) {
+            currentProjectPath = projectPath
+        }
         windowGitState.setLoading(true)
 
         try {
@@ -1194,7 +1450,14 @@ actual object GitService {
             val projectPath = windowGitState.projectPath.value ?: return@withContext emptyList()
 
             try {
-                val result = runGitCommand(projectPath, "status", "--porcelain=v1")
+                // --untracked-files=all, not git's default: the default
+                // collapses an untracked directory into one `?? dir/` entry, so
+                // a source-control view has a row it cannot expand, stage
+                // individually, or show a diff for. Listing the files is what
+                // every editor's SCM view does. .gitignore still applies, so an
+                // ignored build/ or node_modules/ contributes nothing.
+                val result =
+                    runGitCommand(projectPath, "status", "--porcelain=v1", "--untracked-files=all")
                 if (result.exitCode != 0) {
                     return@withContext emptyList()
                 }
@@ -1240,6 +1503,282 @@ actual object GitService {
             } catch (e: Exception) {
                 logger.warn(LogCategory.SYSTEM, "Error getting log for window", error = e)
                 emptyList()
+            }
+        }
+
+    // ===== Window-scoped remote + ref-scoped log (boss-plugin-api 1.0.87) =====
+
+    /**
+     * A ref safe to hand to `git log` as a positional argument.
+     *
+     * The graph's branch picker feeds this from a list git itself produced, but
+     * the value reaches here through the plugin API, so it is validated at the
+     * boundary rather than trusted: anything starting with `-` would be read as
+     * an OPTION (`--upload-pack=…` and friends), and whitespace or control
+     * characters are not part of any refname git will accept anyway.
+     *
+     * Pure and internal so [ai.rever.boss.git] tests can pin it - a check like
+     * this is exactly the kind that rots silently.
+     */
+    internal fun isSafeRefName(ref: String): Boolean {
+        if (ref.isBlank()) return false
+        if (ref.startsWith("-")) return false
+        if (ref.length > MAX_REF_LENGTH) return false
+        return ref.none { it.isWhitespace() || it.code < 0x20 || it == '\u007F' }
+    }
+
+    private const val MAX_REF_LENGTH = 255
+
+    /**
+     * A git command that talks to a REMOTE: bounded, and never interactive.
+     *
+     * Two properties the ordinary [runGitCommand] does not have, and that
+     * fetch/pull/push are the first callers reachable from a panel to need.
+     *
+     * Non-interactive, because the child process gets no terminal: a
+     * credential prompt would have nothing to read from and would block on
+     * stdin forever. `GIT_TERMINAL_PROMPT=0` (and the empty askpass hooks)
+     * turn that into an immediate authentication failure the panel can show.
+     *
+     * Bounded, because the wait happens while holding [gitCommandLock] - the
+     * lock every git command in the app queues behind. A hung fetch would not
+     * only fail its own button, it would freeze the status poll, the diff
+     * tabs and the top bar for the rest of the session. A killed process
+     * releases the lock; a hung one never does.
+     */
+    private fun runRemoteGitCommand(
+        workingDir: String,
+        vararg args: String,
+    ): GitCommandResult =
+        gitCommandLock.withLock {
+            val process =
+                ProcessBuilder("git", *args)
+                    .directory(File(workingDir))
+                    .apply {
+                        environment().putAll(System.getenv())
+                        // Fail instead of prompting: there is no tty to prompt on.
+                        environment()["GIT_TERMINAL_PROMPT"] = "0"
+                        environment()["GIT_ASKPASS"] = ""
+                        environment()["SSH_ASKPASS"] = ""
+                    }.start()
+
+            // Both pipes are drained on their OWN threads, and the timeout wraps the
+            // whole interaction. Two bugs live in the obvious ordering:
+            //
+            // 1. `readText()` blocks until EOF, i.e. until the child exits. Reading
+            //    before `waitFor` made the timeout unreachable - it could only fire
+            //    after the process had already finished. A fetch hung on an
+            //    unreachable host blocked here forever, holding gitCommandLock, which
+            //    every git command in the app queues behind.
+            // 2. Draining stdout to EOF *before* touching stderr deadlocks whenever
+            //    the child fills the stderr pipe buffer (~64KB): it blocks writing
+            //    stderr, so it never closes stdout, so we never stop reading. git
+            //    fetch writes progress to stderr, so this needed no network fault.
+            runProcessBounded(process, REMOTE_GIT_TIMEOUT_SECONDS, args)
+        }
+
+    /** How long a remote git command may hold the git lock before it is killed. */
+    private const val REMOTE_GIT_TIMEOUT_SECONDS = 120L
+
+    /** How long to wait for a killed child's pipes to close before giving up on its output. */
+    private const val STREAM_DRAIN_TIMEOUT_SECONDS = 5L
+
+    /**
+     * Local git commands are bounded too - generously, since they touch no network,
+     * but a hook or a credential prompt can still wedge one, and it would be holding
+     * [gitCommandLock] while it did.
+     */
+    private const val LOCAL_GIT_TIMEOUT_SECONDS = 60L
+
+    /**
+     * Runs [process] to completion with both pipes drained concurrently and a wall
+     * clock bound, returning whatever output was produced either way.
+     *
+     * The ordering is the whole point, and both callers need it:
+     * - drain BEFORE waiting, on separate threads, or a child that fills one pipe
+     *   blocks writing it, never closes the other, and a sequential reader never
+     *   returns - a deadlock that needs no timeout to be unrecoverable;
+     * - wait with a bound, so a genuinely hung child ends;
+     * - kill, then wait for the kill, so the pipes actually close before joining
+     *   the readers - otherwise the join just moves the hang one line down.
+     */
+    private fun runProcessBounded(
+        process: Process,
+        timeoutSeconds: Long,
+        args: Array<out String>,
+    ): GitCommandResult {
+        val outBuf = StringBuilder()
+        val errBuf = StringBuilder()
+        val outReader = drainAsync(process.inputStream, outBuf)
+        val errReader = drainAsync(process.errorStream, errBuf)
+        val finished = process.waitFor(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS)
+        if (!finished) {
+            process.destroyForcibly()
+            process.waitFor(STREAM_DRAIN_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+        }
+        outReader.join(STREAM_DRAIN_TIMEOUT_SECONDS * 1000)
+        errReader.join(STREAM_DRAIN_TIMEOUT_SECONDS * 1000)
+        val output = synchronized(outBuf) { outBuf.toString() }
+        val error = synchronized(errBuf) { errBuf.toString() }
+        if (finished) return GitCommandResult(output, error, process.exitValue())
+        logger.warn(
+            LogCategory.SYSTEM,
+            "git command timed out",
+            mapOf("args" to args.joinToString(" "), "timeoutSeconds" to timeoutSeconds.toString()),
+        )
+        return GitCommandResult(
+            output,
+            "Timed out after ${timeoutSeconds}s. Check the remote, your network, or your credentials.",
+            TIMEOUT_EXIT_CODE,
+        )
+    }
+
+    private const val TIMEOUT_EXIT_CODE = 124
+
+    /**
+     * Drains [stream] into [sink] on a daemon thread.
+     *
+     * A thread rather than a coroutine: this is called from inside
+     * `gitCommandLock.withLock`, which is a blocking lock held across the whole
+     * command, so suspending here would park a lock-holding thread. Daemon, so a
+     * reader still blocked on a wedged pipe cannot keep the JVM alive at shutdown.
+     */
+    private fun drainAsync(
+        stream: java.io.InputStream,
+        sink: StringBuilder,
+    ): Thread =
+        Thread {
+            runCatching {
+                BufferedReader(InputStreamReader(stream)).use { reader ->
+                    val buf = CharArray(DRAIN_BUFFER_CHARS)
+                    while (true) {
+                        val n = reader.read(buf)
+                        if (n < 0) break
+                        synchronized(sink) { sink.appendRange(buf, 0, n) }
+                    }
+                }
+            }
+        }.apply {
+            isDaemon = true
+            start()
+        }
+
+    private const val DRAIN_BUFFER_CHARS = 8192
+
+    actual suspend fun getLogForRef(
+        windowGitState: WindowGitState?,
+        ref: String?,
+        limit: Int,
+    ): List<GitCommitInfo> =
+        withContext(Dispatchers.IO) {
+            if (windowGitState == null) return@withContext emptyList()
+            val projectPath = windowGitState.projectPath.value ?: return@withContext emptyList()
+            val target = ref?.trim().orEmpty()
+            if (target.isNotEmpty() && !isSafeRefName(target)) {
+                logger.warn(LogCategory.SYSTEM, "Refusing an unsafe git ref for log", mapOf("ref" to target))
+                return@withContext emptyList()
+            }
+
+            try {
+                val format = "%H%x00%h%x00%an%x00%ae%x00%at%x00%s%x00%P%x00%D"
+                // `--` terminates the revision list, so a ref that survived the
+                // check above still cannot be read as a pathspec or an option.
+                val args =
+                    buildList {
+                        add("log")
+                        add("--format=$format")
+                        add("-n")
+                        add(limit.toString())
+                        if (target.isNotEmpty()) add(target)
+                        add("--")
+                    }
+                val result = runGitCommand(projectPath, *args.toTypedArray())
+                if (result.exitCode != 0) return@withContext emptyList()
+
+                // Deliberately NOT windowGitState.updateCommitLog(...): see the
+                // expect declaration - that flow is HEAD's history.
+                result.output
+                    .lines()
+                    .filter { it.isNotBlank() }
+                    .mapNotNull { parseCommitLine(it) }
+            } catch (e: Exception) {
+                logger.warn(LogCategory.SYSTEM, "Error getting log for ref", error = e)
+                emptyList()
+            }
+        }
+
+    actual suspend fun listBranchesForWindow(windowGitState: WindowGitState?): List<GitBranchInfo> =
+        withContext(Dispatchers.IO) {
+            val projectPath = windowGitState?.projectPath?.value ?: return@withContext emptyList()
+            if (!isGitRepo(projectPath)) return@withContext emptyList()
+            getLocalBranchList(projectPath) + getRemoteBranchList(projectPath)
+        }
+
+    actual suspend fun fetchForWindow(
+        windowGitState: WindowGitState?,
+        prune: Boolean,
+    ): GitOperationResult =
+        withContext(Dispatchers.IO) {
+            val projectPath =
+                windowGitState?.projectPath?.value
+                    ?: return@withContext GitError("No project selected")
+            val args = if (prune) arrayOf("fetch", "--all", "--prune") else arrayOf("fetch", "--all")
+            val result = runRemoteGitCommand(projectPath, *args)
+            if (result.exitCode == 0) {
+                // A fetch moves remote-tracking refs, which is exactly what the
+                // branch list and the graph decorations show.
+                refreshForWindow(projectPath, windowGitState)
+                // git fetch reports on stderr; an empty pair means "nothing new",
+                // which is a result worth saying out loud rather than silence.
+                val message =
+                    result.error
+                        .trim()
+                        .ifEmpty { result.output.trim() }
+                        .ifEmpty { "Already up to date" }
+                GitSuccess(message)
+            } else {
+                val errorMsg = result.error.ifEmpty { result.output }.trim()
+                _lastError.value = errorMsg
+                GitError(errorMsg, result.exitCode)
+            }
+        }
+
+    actual suspend fun pullForWindow(windowGitState: WindowGitState?): GitOperationResult =
+        withContext(Dispatchers.IO) {
+            val projectPath =
+                windowGitState?.projectPath?.value
+                    ?: return@withContext GitError("No project selected")
+            val result = runRemoteGitCommand(projectPath, "pull")
+            if (result.exitCode == 0) {
+                refreshForWindow(projectPath, windowGitState)
+                getStatusForWindow(windowGitState)
+                getLogForWindow(windowGitState)
+                GitSuccess(result.output.trim().ifEmpty { "Pull completed successfully" })
+            } else {
+                val errorMsg = result.error.ifEmpty { result.output }.trim()
+                _lastError.value = errorMsg
+                GitError(errorMsg, result.exitCode)
+            }
+        }
+
+    actual suspend fun pushForWindow(windowGitState: WindowGitState?): GitOperationResult =
+        withContext(Dispatchers.IO) {
+            val projectPath =
+                windowGitState?.projectPath?.value
+                    ?: return@withContext GitError("No project selected")
+            // -u sets upstream on a branch that has none. No --force, ever.
+            val result = runRemoteGitCommand(projectPath, "push", "-u", "origin", "HEAD")
+            if (result.exitCode == 0) {
+                refreshForWindow(projectPath, windowGitState)
+                val message =
+                    result.output.trim().ifEmpty {
+                        result.error.trim().ifEmpty { "Push completed successfully" }
+                    }
+                GitSuccess(message)
+            } else {
+                val errorMsg = result.error.ifEmpty { result.output }.trim()
+                _lastError.value = errorMsg
+                GitError(errorMsg, result.exitCode)
             }
         }
 
@@ -1584,3 +2123,9 @@ actual object GitService {
         }
     }
 }
+
+/**
+ * Context lines requested for a diff that is read as a file rather than as a
+ * patch. Git clamps this to the file's length, so a small file costs nothing.
+ */
+private const val FULL_FILE_CONTEXT = 100_000

@@ -68,6 +68,7 @@ import ai.rever.boss.plugin.api.PluginSandboxRef
 import ai.rever.boss.plugin.api.PluginStorageFactory
 import ai.rever.boss.plugin.api.PluginStoreApiKeyProvider
 import ai.rever.boss.plugin.api.ProjectData
+import ai.rever.boss.plugin.api.ProjectSearchProvider
 import ai.rever.boss.plugin.api.RoleManagementProvider
 import ai.rever.boss.plugin.api.ScreenCaptureProvider
 import ai.rever.boss.plugin.api.SearchProvider
@@ -94,6 +95,7 @@ import ai.rever.boss.plugin.sandbox.notification.BossPluginNotificationService
 import ai.rever.boss.plugin.sandbox.notification.PluginSandboxNotificationListener
 import ai.rever.boss.plugin.sandbox.notification.PluginToastState
 import ai.rever.boss.plugin.ui.ContextMenuItemData
+import ai.rever.boss.search.ContentSearchService
 import ai.rever.boss.search.SearchRegistryImpl
 import ai.rever.boss.services.auth.AuthDataProviderImpl
 import ai.rever.boss.services.auth.AuthStateManager
@@ -404,7 +406,14 @@ class DefaultPlugin(
     // Git data provider for plugins that display git information
     override val gitDataProvider: GitDataProvider? by lazy {
         if (windowGitState != null) {
-            GitDataProviderImpl(windowGitState) { _windowId }
+            GitDataProviderImpl(
+                windowGitState,
+                { _windowId },
+                // The window's own selected project: lets the provider bootstrap
+                // windowGitState.projectPath when the project was picked outside
+                // the top bar (e.g. the codebase panel's picker).
+                { windowProjectState?.selectedProject?.value?.path },
+            )
         } else {
             null
         }
@@ -417,6 +426,16 @@ class DefaultPlugin(
     // Project path for project-specific operations
     override val projectPath: String?
         get() = windowProjectState?.selectedProject?.value?.path
+
+    // Project-wide content search (boss-plugin-api 1.0.87). Host-side engine.
+    //
+    // NEVER null: the engine exists whether or not a project is selected, and
+    // answers with empty results when there is none. A plugin cannot therefore
+    // use provider-presence to mean "a project is open" - it means "this host
+    // implements search". Check projectPath for the other question.
+    override val projectSearchProvider: ProjectSearchProvider? by lazy {
+        ContentSearchService { projectPath }
+    }
 
     // Auth data provider for plugins that need authentication state
     override val authDataProvider: AuthDataProvider by lazy {

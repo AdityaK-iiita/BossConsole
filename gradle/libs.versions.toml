@@ -125,7 +125,25 @@ intellij-platform = "243.21565.199"
 #
 # Superset of 1.0.84: both additions are new declarations with a null default on PluginContext,
 # so nothing a host module or an installed plugin resolves has been withdrawn.
-boss-plugin-api = "1.0.85"
+#
+# 1.0.87 adds the IDE-features batch, as ONE release: GitDataProvider diff members
+# (diffFile/diffRef/diffBetween/diffNames/openDiff + GitDiffData/DiffHunk/DiffLine),
+# the graph members (logGraph/logGraphFor/branches + GitCommitNodeData/GitBranchRefData),
+# the remote actions (fetch/pull/push), the EditorTabPluginAPI buffer section
+# (readBuffer/applyEdit/observeChanges/focusedDocument/openEditor/openSplit),
+# ProjectSearchProvider + PluginContext.projectSearchProvider, DiffTabConfig (so the
+# diff renderer can live in editor-tab, where BossEditor is), the deprecated no-op
+# legacy EditorContentProvider methods, and AiRequest.modelOverride (body-level getter
+# over extras, no constructor change). All additive with default bodies.
+#
+# The surface was developed across four working versions (.87/.88/.89/.90) and
+# collapsed back to a single release before publishing, per the plan's R8 rule - one
+# release means one number for every consumer to pin and no manifest drift.
+#
+# The host implements the new members in this branch: UnifiedDiffParser + git diff
+# plumbing, HunkApplier, the diff/composer tab types, the editor buffer API, and
+# ContentSearchService. Same forced order as above: api first, then this.
+boss-plugin-api = "1.0.87"
 
 [libraries]
 kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }

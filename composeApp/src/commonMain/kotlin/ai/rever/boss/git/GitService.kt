@@ -2,6 +2,8 @@
 
 package ai.rever.boss.git
 
+import ai.rever.boss.plugin.api.GitDiffData
+import ai.rever.boss.plugin.api.GitFileStatusData
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -427,6 +429,55 @@ expect object GitService {
         limit: Int = 100,
     ): List<GitCommitInfo>
 
+    // ===== Window-scoped remote + ref-scoped log (boss-plugin-api 1.0.87) =====
+    //
+    // These take the WINDOW's state rather than reading the global
+    // `currentProjectPath` the way pull()/push() do. The global is written by
+    // whichever window refreshed last, so a two-window session could fetch,
+    // pull or push the wrong repository; a window-scoped path cannot.
+
+    /**
+     * Commit log for an arbitrary [ref] (`git log <ref>`), for the graph's
+     * branch selector.
+     *
+     * Deliberately does NOT write [ai.rever.boss.window.WindowGitState.commitLog]:
+     * that flow is HEAD's history, which the top bar and the git-log panel
+     * read, and filling it with another branch's commits would silently
+     * mis-label them.
+     *
+     * @param ref branch, tag or commit-ish. Blank/null means HEAD.
+     * @return the commits, or an empty list when [ref] resolves to nothing.
+     */
+    suspend fun getLogForRef(
+        windowGitState: ai.rever.boss.window.WindowGitState?,
+        ref: String?,
+        limit: Int = 100,
+    ): List<GitCommitInfo>
+
+    /**
+     * Local + remote-tracking branches of the window's project, read fresh.
+     *
+     * [ai.rever.boss.window.WindowGitState.localBranches] is only written by
+     * [refreshForWindow], which panels call at most once per project, so it
+     * goes stale the moment a branch is created or fetched.
+     */
+    suspend fun listBranchesForWindow(windowGitState: ai.rever.boss.window.WindowGitState?): List<GitBranchInfo>
+
+    /** `git fetch --all [--prune]` in the window's project. */
+    suspend fun fetchForWindow(
+        windowGitState: ai.rever.boss.window.WindowGitState?,
+        prune: Boolean = false,
+    ): GitOperationResult
+
+    /** `git pull` in the window's project. */
+    suspend fun pullForWindow(windowGitState: ai.rever.boss.window.WindowGitState?): GitOperationResult
+
+    /**
+     * `git push -u origin HEAD` in the window's project. Never `--force`:
+     * a force push has no in-app undo and belongs in a terminal.
+     */
+    suspend fun pushForWindow(windowGitState: ai.rever.boss.window.WindowGitState?): GitOperationResult
+
     /**
      * Watch the project's `.git/HEAD` (and refs) for external mutations and
      * refresh [windowGitState] whenever an external `git checkout`,
@@ -446,4 +497,64 @@ expect object GitService {
         projectPath: String,
         windowGitState: ai.rever.boss.window.WindowGitState?,
     )
+
+    // ===== Diff =====
+
+    /**
+     * Unified diff for one file.
+     *
+     * @param filePath Path relative to the project root.
+     * @param staged true = index vs HEAD (staged changes), false = working tree vs index.
+     * @return Parsed diff data for the file, or empty if there is no diff (or git failed).
+     */
+    // Each takes the WINDOW's project path. Reading the global `currentProjectPath`
+    // meant a two-window session could render the OTHER window's diff: the global is
+    // written by whichever window refreshed last, and ensureRepoState only reseeds it
+    // when that window's project CHANGED - so once both windows settle, nothing
+    // re-aligns it before a diff read. Same fix, same reason, as the remote verbs above.
+    // A null path falls back to the global for callers that have no window.
+    suspend fun getFileDiff(
+        filePath: String,
+        staged: Boolean,
+        projectPathOverride: String? = null,
+    ): List<GitDiffData>
+
+    /**
+     * Unified diff of a single commit (against its parent; a root commit diffs
+     * against the empty tree).
+     *
+     * @param commitHash Full or short commit hash.
+     * @param filePath Optional path to restrict the diff to one file.
+     */
+    suspend fun getCommitDiff(
+        commitHash: String,
+        filePath: String? = null,
+        projectPathOverride: String? = null,
+    ): List<GitDiffData>
+
+    /**
+     * Unified diff between two refs.
+     *
+     * @param fromRef Base ref (commit/branch/tag).
+     * @param toRef Target ref (commit/branch/tag).
+     * @param filePath Optional path to restrict the diff to one file.
+     */
+    suspend fun getRefDiff(
+        fromRef: String,
+        toRef: String,
+        filePath: String? = null,
+        projectPathOverride: String? = null,
+    ): List<GitDiffData>
+
+    /**
+     * Name-status listing of the changed files.
+     *
+     * @param staged true = staged (index vs HEAD), false = working tree vs index.
+     * @return One entry per changed file (untracked files are not included -
+     * they have no index or HEAD entry to diff against).
+     */
+    suspend fun getDiffFileNames(
+        staged: Boolean,
+        projectPathOverride: String? = null,
+    ): List<GitFileStatusData>
 }

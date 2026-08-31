@@ -1,0 +1,606 @@
+package ai.rever.boss.search
+
+import ai.rever.boss.plugin.api.FileMatch
+import ai.rever.boss.plugin.api.FileReplaceResult
+import ai.rever.boss.plugin.api.ProjectSearchProvider
+import ai.rever.boss.plugin.api.ReplaceSummary
+import ai.rever.boss.services.editor.EditorAPIAccess
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
+import java.io.File
+
+/**
+ * Host implementation of the plugin-facing [ProjectSearchProvider] (boss-plugin-api 1.0.87):
+ * project-wide content search, and replace scoped to an explicit file list.
+ *
+ * Design notes:
+ * - File walking is the same shape as [FileIndexer] (skip VCS/build/VCS-adjacent
+ *   directories), but the scan is on demand: files are read at search time, so a
+ *   fresh checkout needs no reindex. An mtime-keyed result cache makes a repeat
+ *   search with the same query and options cheap.
+ * - Files containing a NUL byte (binary) or larger than [MAX_FILE_SIZE] are
+ *   skipped, so a search over a repo with binaries stays fast and sane.
+ * - `wholeWord` wraps the pattern in `\b...\b`, which for regex queries
+ *   composes with the caller's pattern.
+ * - Replace never touches a file the caller did not name. Open buffers are
+ *   edited through the editor's undoable path (EditorAPIAccess.applyEdit);
+ *   closed files are written to disk directly.
+ */
+class ContentSearchService(
+    private val projectPathProvider: () -> String?,
+) : ProjectSearchProvider {
+    private val cache = HashMap<String, CacheEntry>()
+
+    override suspend fun searchInProject(
+        query: String,
+        pathPattern: String?,
+        isRegex: Boolean,
+        caseSensitive: Boolean,
+        wholeWord: Boolean,
+        maxResults: Int,
+    ): List<FileMatch> = searchInProject(query, pathPattern, null, isRegex, caseSensitive, wholeWord, maxResults)
+
+    /**
+     * The one search path; the overload above is this with no exclude.
+     *
+     * [excludePattern] is applied during the WALK, so [maxResults] caps matches the
+     * caller wants rather than matches it is about to discard. Filtering the returned
+     * list instead - which the codebase panel used to do, with its own copy of the glob
+     * compiler - silently returns fewer results than exist whenever the excluded files
+     * are reached first.
+     */
+    override suspend fun searchInProject(
+        query: String,
+        pathPattern: String?,
+        excludePattern: String?,
+        isRegex: Boolean,
+        caseSensitive: Boolean,
+        wholeWord: Boolean,
+        maxResults: Int,
+    ): List<FileMatch> {
+        val projectPath = projectPathProvider() ?: return emptyList()
+        if (query.isEmpty()) return emptyList()
+
+        val regex = buildRegex(query, isRegex, caseSensitive, wholeWord) ?: return emptyList()
+        return withContext(Dispatchers.IO) {
+            val results = mutableListOf<FileMatch>()
+            for (file in walkProjectFiles(projectPath, pathPattern, excludePattern)) {
+                ensureActive()
+                if (results.size >= maxResults) break
+
+                // An open file is searched as the user sees it, not as the disk
+                // has it. Otherwise a replace into a live buffer - or any
+                // unsaved edit - leaves the results tree reporting matches the
+                // editor no longer shows.
+                val buffer = EditorAPIAccess.readBuffer(file.absolutePath)
+                val key =
+                    cacheKey(projectPath, query, pathPattern, excludePattern, isRegex, caseSensitive, wholeWord, file.absolutePath) +
+                        if (buffer != null) "|buf" else "|disk"
+                // The freshness stamp combines BOTH signals for an open file, because
+                // each alone has a blind spot:
+                // - mtime alone misses buffer edits (an unsaved edit does not touch it),
+                //   so the pre-edit matches would be served from cache;
+                // - buffer version alone misses a close-reopen. documentVersion is
+                //   per-document and restarts when a document is created, so closing a
+                //   tab, changing the file on disk and reopening it yields the same key
+                //   AND the same version - and the pre-change matches come back.
+                val stamp =
+                    if (buffer != null) buffer.version * STAMP_MIX + file.lastModified() else file.lastModified()
+                val matches: List<FileMatch> =
+                    synchronized(cache) {
+                        val cached = cache[key]
+                        if (cached != null && cached.stamp == stamp) cached.matches else null
+                    }
+                        ?: scanText(
+                            file = file,
+                            text = buffer?.content ?: readTextOrNull(file) ?: continue,
+                            regex = regex,
+                        )?.also { found ->
+                            synchronized(cache) {
+                                if (cache.size > MAX_CACHE_ENTRIES) cache.clear()
+                                cache[key] = CacheEntry(stamp, found)
+                            }
+                        } ?: continue
+
+                for (match in matches) {
+                    results.add(match)
+                    if (results.size >= maxResults) break
+                }
+            }
+            results.take(maxResults)
+        }
+    }
+
+    override suspend fun replaceInProject(
+        query: String,
+        replacement: String,
+        files: List<String>,
+        isRegex: Boolean,
+        caseSensitive: Boolean,
+        wholeWord: Boolean,
+        dryRun: Boolean,
+    ): ReplaceSummary {
+        val projectPath = projectPathProvider() ?: return ReplaceSummary(0, 0, emptyList())
+        if (query.isEmpty() || files.isEmpty()) return ReplaceSummary(0, 0, emptyList())
+        val regex = buildRegex(query, isRegex, caseSensitive, wholeWord) ?: return ReplaceSummary(0, 0, emptyList())
+
+        return withContext(Dispatchers.IO) {
+            var total = 0
+            var filesReplaced = 0
+            val perFile = mutableListOf<FileReplaceResult>()
+            for (rawPath in files) {
+                ensureActive()
+                val file = resolveFile(rawPath, projectPath)
+                val result =
+                    if (file == null) {
+                        FileReplaceResult(rawPath, 0, "outside the project")
+                    } else {
+                        replaceInOneFile(file, regex, replacement, isRegex, dryRun)
+                    }
+                if (result.error == null && result.replacements > 0) {
+                    total += result.replacements
+                    filesReplaced++
+                }
+                perFile.add(result)
+            }
+            ReplaceSummary(filesReplaced, total, perFile)
+        }
+    }
+
+    // ===== Internals =====
+
+    private fun buildRegex(
+        query: String,
+        isRegex: Boolean,
+        caseSensitive: Boolean,
+        wholeWord: Boolean,
+    ): Regex? {
+        val pattern =
+            if (isRegex) {
+                query
+            } else {
+                Regex.escape(query)
+            }
+        val wrapped = if (wholeWord) "\\b(?:$pattern)\\b" else pattern
+        return try {
+            if (caseSensitive) Regex(wrapped) else Regex(wrapped, RegexOption.IGNORE_CASE)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Resolves a caller-supplied path, and refuses anything outside the project.
+     *
+     * Replace is a WRITE reached from the `project_replace` MCP tool, whose permission
+     * is named `project.replace` and whose description says "in an EXPLICIT list of
+     * files". Both imply confinement that absolute paths did not have: a caller holding
+     * that permission could rewrite any file the process can write, `~/.zshrc` included.
+     * Relative traversal (`../../etc`) is covered too, since the check is on the
+     * canonical path.
+     *
+     * Returns null when the path escapes; callers report that as a per-file error
+     * rather than failing the whole batch.
+     */
+    private fun resolveFile(
+        rawPath: String,
+        projectPath: String,
+    ): File? {
+        val f = File(rawPath)
+        val candidate = if (f.isAbsolute) f else File(projectPath, rawPath)
+        // Confinement is decided on the CANONICAL form (so `../` and symlink escapes
+        // are caught), but the NON-canonical candidate is what we return and use. The
+        // editor keys its open buffers by the plain absolute path a tab was opened
+        // with; returning the canonical path here made readBuffer miss the buffer of a
+        // file open under a symlinked checkout (/tmp vs /private/tmp), so replace wrote
+        // to disk under an unsaved buffer and the next save clobbered it.
+        val root = runCatching { File(projectPath).canonicalFile }.getOrNull() ?: return null
+        val resolvedCanon = runCatching { candidate.canonicalFile }.getOrNull() ?: return null
+        val rootPath = root.path.trimEnd(File.separatorChar) + File.separatorChar
+        val inside = resolvedCanon.path == root.path || resolvedCanon.path.startsWith(rootPath)
+        return if (inside) candidate else null
+    }
+
+    /** Canonical path when resolvable, else the absolute one - identity for cycle detection. */
+    private fun canonicalOrPath(f: File): String = runCatching { f.canonicalPath }.getOrDefault(f.absolutePath)
+
+    private fun cacheKey(
+        projectRoot: String,
+        query: String,
+        pathPattern: String?,
+        excludePattern: String?,
+        isRegex: Boolean,
+        caseSensitive: Boolean,
+        wholeWord: Boolean,
+        path: String,
+        // projectRoot is part of the key because a cached FileMatch carries a path
+        // RELATIVE to the root it was found under. The same absolute file walked under
+        // a different root (switching between nested projects) would otherwise get its
+        // old relative path served from cache until its mtime changed, and a
+        // result-click would resolve it against the new root - the wrong file.
+    ): String = "$projectRoot|$query|$pathPattern|$excludePattern|$isRegex|$caseSensitive|$wholeWord|$path"
+
+    private fun walkProjectFiles(
+        projectPath: String,
+        pathPattern: String?,
+        excludePattern: String?,
+    ): Sequence<File> {
+        val root = File(projectPath)
+        // The root's canonical path is IN the set from the start, but the root is still
+        // always entered (the isRoot branch below). Without seeding it, a symlink
+        // `proj/link -> proj` had a canonical path that was not yet "seen", so it was
+        // entered, its children registered their canonicals, and the real subtree was
+        // then skipped as already-seen - matches came back as `link/src/...`.
+        val rootCanon = canonicalOrPath(root)
+        val seen = hashSetOf(rootCanon)
+        val globs = pathPattern?.let { compileIncludeGlobs(it) }
+        // Same compiler for both boxes: include and exclude take identical syntax,
+        // so two implementations would be two sets of edge cases to keep in step.
+        val excludes = excludePattern?.let { compileIncludeGlobs(it) }
+        return root
+            .walkTopDown()
+            // onEnter DESCENDS on true. The predicate has to be "not skipped",
+            // and the root has to pass it: the previous form returned true only
+            // for the skip list, so the walk entered node_modules/.git and
+            // nothing else - including refusing to enter the project root, which
+            // made every search return zero results.
+            .onEnter { dir ->
+                // A directory symlink pointing at an ancestor makes walkTopDown recurse
+                // forever, and ensureActive() only helps if something cancels. A directory
+                // is entered once per canonical path; the root always enters (its canonical
+                // is pre-seeded, so a link back to it is what gets refused).
+                val isRoot = dir.absolutePath == root.absolutePath
+                val notSkipped = isRoot || dir.name !in SKIP_DIRECTORIES
+                notSkipped && (isRoot || seen.add(canonicalOrPath(dir)))
+            }.filter { it.isFile }
+            .filter { it.length() <= MAX_FILE_SIZE }
+            .filter { file ->
+                val rel = file.relativeTo(root).path.replace('\\', '/')
+                val included = globs.isNullOrEmpty() || globs.any { it.matches(rel) }
+                included && excludes?.any { it.matches(rel) } != true
+            }.asSequence()
+    }
+
+    /**
+     * Compile an include pattern the way VS Code's "files to include" box does:
+     * comma-separated alternatives, and a pattern with no path separator
+     * matching at any depth. Matched against the whole relative path, the
+     * "*.kt" a user actually types found only root-level files.
+     *
+     * A literal name yields two patterns - the file itself, and everything
+     * under a folder of that name. Returns null for a blank pattern.
+     */
+    private fun compileIncludeGlobs(pattern: String): List<Regex>? {
+        val parts = pattern.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        if (parts.isEmpty()) return null
+        val expanded = mutableListOf<String>()
+        for (raw in parts) {
+            val p = raw.removePrefix("./").removePrefix("/").removeSuffix("/")
+            if (p.isEmpty()) continue
+            val hasWildcard = p.indexOf('*') >= 0 || p.indexOf('?') >= 0
+            when {
+                p.startsWith(ANY_DEPTH_PREFIX) -> {
+                    expanded.add(p)
+                }
+
+                hasWildcard -> {
+                    expanded.add(ANY_DEPTH_PREFIX + "/" + p)
+                }
+
+                else -> {
+                    expanded.add(ANY_DEPTH_PREFIX + "/" + p)
+                    expanded.add(ANY_DEPTH_PREFIX + "/" + p + "/" + ANY_DEPTH_PREFIX)
+                }
+            }
+        }
+        return expanded.map { globToRegex(it) }
+    }
+
+    /** File contents, or null when it cannot be read (permissions, races). */
+    private fun readTextOrNull(file: File): String? =
+        try {
+            file.readText()
+        } catch (e: Exception) {
+            null
+        }
+
+    private fun scanText(
+        file: File,
+        text: String,
+        regex: Regex,
+    ): List<FileMatch>? {
+        return try {
+            val projectRoot = File(projectPathProvider() ?: return null)
+            val relative = file.relativeTo(projectRoot).path.replace('\\', '/')
+            if ('\u0000' in text) return null
+            val lineMap = LineMap(text)
+            val matches = mutableListOf<FileMatch>()
+            var searchFrom = 0
+            while (searchFrom <= text.length && matches.size < MAX_MATCHES_PER_FILE) {
+                val m = regex.find(text, searchFrom) ?: break
+                matches.add(
+                    FileMatch(
+                        path = relative,
+                        line = lineMap.lineOf(m.range.first),
+                        column = lineMap.columnOf(m.range.first),
+                        matchLength = m.value.length,
+                        contextLine = lineMap.lineText(lineMap.lineOf(m.range.first)),
+                    ),
+                )
+                // A zero-length match (\b, an empty alternation) has
+                // range.last < range.first, so "last + 1" rescanned the same
+                // offset until the per-file cap - 500 hits at one position.
+                searchFrom = maxOf(m.range.last + 1, m.range.first + 1)
+            }
+            matches
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** 1-based line numbers and columns from precomputed line-start offsets. */
+    internal class LineMap(
+        val text: String,
+    ) : LineOffsets {
+        val lineStarts: IntArray
+
+        init {
+            val starts = mutableListOf(0)
+            for (i in text.indices) {
+                if (text[i] == '\n') starts.add(i + 1)
+            }
+            lineStarts = starts.toIntArray()
+        }
+
+        /** 1-based line number containing [offset]. */
+        override fun lineOf(offset: Int): Int {
+            var lo = 0
+            var hi = lineStarts.size - 1
+            while (lo < hi) {
+                val mid = (lo + hi + 1) ushr 1
+                if (lineStarts[mid] <= offset) lo = mid else hi = mid - 1
+            }
+            return lo + 1
+        }
+
+        /** 1-based column of [offset] within its line. */
+        override fun columnOf(offset: Int): Int = offset - lineStarts[lineOf(offset) - 1] + 1
+
+        /**
+         * Full text of 1-based line [line], INCLUDING its trailing newline when it
+         * has one (the last line of a file without a final newline does not).
+         * FileMatch.contextLine carries it through, and the tests pin that.
+         */
+        fun lineText(line: Int): String {
+            val start = lineStarts[line - 1]
+            val end = if (line < lineStarts.size) lineStarts[line] else text.length
+            return text.substring(start, end)
+        }
+    }
+
+    private suspend fun replaceInOneFile(
+        file: File,
+        regex: Regex,
+        replacement: String,
+        isRegex: Boolean,
+        dryRun: Boolean,
+    ): FileReplaceResult {
+        if (!file.isFile) return FileReplaceResult(file.path, 0, "not a file")
+        if (file.length() > MAX_FILE_SIZE) return FileReplaceResult(file.path, 0, "file too large")
+
+        return try {
+            // Open buffers go through the editor's undoable path.
+            val buffer = EditorAPIAccess.readBuffer(file.absolutePath)
+            if (buffer != null) {
+                replaceInBuffer(file, buffer.content, buffer.version, regex, replacement, isRegex, dryRun)
+            } else {
+                // UTF-8 in, UTF-8 out. A file in another single-byte encoding has no NUL
+                // bytes, so it passes the binary check, and round-tripping it through
+                // readText/writeText replaces its undecodable bytes with U+FFFD - a
+                // silent rewrite of bytes the user never asked to touch. Detect that the
+                // decode was lossy and refuse, rather than corrupting the file.
+                val text = file.readText()
+                if ('\u0000' in text) return FileReplaceResult(file.path, 0, "binary file")
+                if ('\uFFFD' in text) return FileReplaceResult(file.path, 0, "not valid UTF-8")
+                val outcome = computeReplaced(text, regex, replacement, isRegex)
+                if (!dryRun && outcome.count > 0) file.writeText(outcome.text)
+                FileReplaceResult(file.path, outcome.count, null)
+            }
+        } catch (e: Exception) {
+            FileReplaceResult(file.path, 0, e.message ?: "replace failed")
+        }
+    }
+
+    /**
+     * Replace in a live buffer as ONE version-guarded, undoable edit.
+     *
+     * The replaced content is computed the same way as the disk path
+     * ([computeReplaced]), then applied as the single span that actually changed
+     * (common prefix and suffix trimmed off). One edit rather than one per match
+     * buys three things at once:
+     * - the replacement string is expanded EXACTLY as on disk - the two paths can
+     *   no longer disagree about whether `$1` is a capture reference or literal text
+     *   (the bug that let the same replace write different bytes depending on whether
+     *   the file happened to be open);
+     * - one `expectedVersion` check covers the whole operation, so a keystroke that
+     *   lands mid-replace rejects it cleanly instead of shifting later edits onto
+     *   stale offsets;
+     * - one undo step, which is what the user means by "undo the replace".
+     */
+    private suspend fun replaceInBuffer(
+        file: File,
+        text: String,
+        version: Long,
+        regex: Regex,
+        replacement: String,
+        isRegex: Boolean,
+        dryRun: Boolean,
+    ): FileReplaceResult {
+        val outcome = computeReplaced(text, regex, replacement, isRegex)
+        if (dryRun || outcome.count == 0) return FileReplaceResult(file.path, outcome.count, null)
+
+        val span = changedSpan(text, outcome.text)
+        val lineMap = LineMap(text)
+        val range = BufferEditRange.ofSpan(lineMap, span.oldStart, span.oldEndExclusive)
+        val newText = outcome.text.substring(span.newStart, span.newEndExclusive)
+        val result =
+            EditorAPIAccess.applyEdit(
+                path = file.absolutePath,
+                startLine = range.startLine,
+                startCol = range.startCol,
+                endLine = range.endLine,
+                endCol = range.endCol,
+                newText = newText,
+                expectedVersion = version,
+            ) ?: return FileReplaceResult(file.path, 0, "editor buffer no longer available")
+        return if (result.applied) {
+            FileReplaceResult(file.path, outcome.count, null)
+        } else {
+            FileReplaceResult(file.path, 0, result.reason ?: "edit rejected")
+        }
+    }
+
+    /** The result of a bounded replace: the new text and how many matches it replaced. */
+    internal data class ReplaceOutcome(
+        val text: String,
+        val count: Int,
+    )
+
+    /**
+     * Replaces up to [MAX_MATCHES_PER_FILE] matches, via Java's reference `Matcher`
+     * expansion - NOT a hand-written one.
+     *
+     * `appendReplacement`/`appendTail` are the exact semantics
+     * [ProjectSearchProvider.replaceInProject]'s KDoc promises: `$1`..`$9` and
+     * `${name}` capture references and `\` escaping for a regex query, and - via
+     * [java.util.regex.Matcher.quoteReplacement] - a truly literal replacement for a
+     * literal query, so a `$` or `\` in the replacement text is not misread as a
+     * group reference. It also advances past zero-width matches on its own, and
+     * throws on a bad group reference exactly as `Regex.replace` does, rather than
+     * silently substituting the empty string. The returned [ReplaceOutcome.count] is
+     * the authority for both the dry-run preview and the applied count, so the two
+     * can never disagree.
+     */
+    internal fun computeReplaced(
+        text: String,
+        regex: Regex,
+        replacement: String,
+        isRegex: Boolean,
+    ): ReplaceOutcome {
+        val matcher = regex.toPattern().matcher(text)
+        val repl =
+            if (isRegex) {
+                replacement
+            } else {
+                java.util.regex.Matcher
+                    .quoteReplacement(replacement)
+            }
+        val sb = StringBuffer(text.length)
+        var count = 0
+        while (count < MAX_MATCHES_PER_FILE && matcher.find()) {
+            matcher.appendReplacement(sb, repl)
+            count++
+        }
+        matcher.appendTail(sb)
+        return ReplaceOutcome(sb.toString(), count)
+    }
+
+    /** The single span that differs between [old] and [new] (common ends trimmed). */
+    internal data class Span(
+        val oldStart: Int,
+        val oldEndExclusive: Int,
+        val newStart: Int,
+        val newEndExclusive: Int,
+    )
+
+    internal fun changedSpan(
+        old: String,
+        new: String,
+    ): Span {
+        val min = minOf(old.length, new.length)
+        var p = 0
+        while (p < min && old[p] == new[p]) p++
+        var s = 0
+        while (s < min - p && old[old.length - 1 - s] == new[new.length - 1 - s]) s++
+        return Span(
+            oldStart = p,
+            oldEndExclusive = old.length - s,
+            newStart = p,
+            newEndExclusive = new.length - s,
+        )
+    }
+
+    /** Glob with `**` path segments and `*`/`?` within a segment. */
+    private fun globToRegex(glob: String): Regex {
+        val sb = StringBuilder()
+        var i = 0
+        while (i < glob.length) {
+            val c = glob[i]
+            when {
+                glob.startsWith("**/", i) -> {
+                    sb.append("(?:[^/]+/)*")
+                    i += 3
+                }
+
+                glob.startsWith("**", i) -> {
+                    sb.append(".*")
+                    i += 2
+                }
+
+                c == '*' -> {
+                    sb.append("[^/]*")
+                    i++
+                }
+
+                c == '?' -> {
+                    sb.append("[^/]")
+                    i++
+                }
+
+                else -> {
+                    sb.append(Regex.escape(c.toString()))
+                    i++
+                }
+            }
+        }
+        return Regex(sb.toString())
+    }
+
+    /**
+     * [stamp] is the file's mtime, mixed with the buffer version when one is open.
+     * See the call site for why neither signal is sufficient alone.
+     */
+    private data class CacheEntry(
+        val stamp: Long,
+        val matches: List<FileMatch>,
+    )
+
+    private companion object {
+        const val MAX_FILE_SIZE: Long = 1_048_576 // 1 MiB
+        const val MAX_MATCHES_PER_FILE = 500
+        const val MAX_CACHE_ENTRIES = 500
+
+        /** Odd multiplier so a buffer-version bump and an mtime change cannot cancel out. */
+        const val STAMP_MIX = 1_000_003L
+
+        /** Recursive-wildcard glob segment; kept out of literals with a slash. */
+        const val ANY_DEPTH_PREFIX = "**"
+
+        val SKIP_DIRECTORIES =
+            setOf(
+                ".git",
+                ".hg",
+                ".svn",
+                "node_modules",
+                ".build",
+                "build",
+                ".gradle",
+                ".idea",
+                "dist",
+                "out",
+                "target",
+                "__pycache__",
+            )
+    }
+}

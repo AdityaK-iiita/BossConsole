@@ -20,5 +20,10 @@ package ai.rever.boss.components.plugin
  * without a matching entry here fails rather than quietly staying installable.
  */
 object RetiredPluginIds {
-    val ALL: Set<String> = setOf("ai.rever.boss.plugin.dynamic.usersecretlist")
+    val ALL: Set<String> =
+        setOf(
+            "ai.rever.boss.plugin.dynamic.usersecretlist",
+            "ai.rever.boss.plugin.dynamic.gitstatus",
+            "ai.rever.boss.plugin.dynamic.gitlog",
+        )
 }
