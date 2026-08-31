@@ -32,7 +32,10 @@ internal object TabPaths {
 
     /** Collapse repeated separators and drop a trailing one. */
     private fun lexicalClean(path: String): String {
-        val unified = path.replace('\\', '/')
+        // Backslash is a path separator on Windows but a LEGAL filename character on
+        // macOS/Linux, so translating it unconditionally turned `a\b.kt` into `a/b.kt`
+        // and could canonicalise onto a different real file (focusing the wrong tab).
+        val unified = if (File.separatorChar == '\\') path.replace('\\', '/') else path
         val collapsed = unified.replace(Regex("/{2,}"), "/")
         return if (collapsed.length > 1) collapsed.trimEnd('/') else collapsed
     }

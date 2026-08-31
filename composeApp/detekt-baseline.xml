@@ -2,6 +2,10 @@
 <SmellBaseline>
   <ManuallySuppressedIssues/>
   <CurrentIssues>
+    <ID>ReturnCount:ContentSearchService.kt$ContentSearchService$internal fun resolveFile( rawPath: String, projectPath: String, ): File?</ID>
+    <ID>SwallowedException:ContentSearchService.kt$ContentSearchService$e: java.nio.file.AtomicMoveNotSupportedException</ID>
+    <ID>SwallowedException:ResolveFileConfinementTest.kt$ResolveFileConfinementTest$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:ResolveFileConfinementTest.kt$ResolveFileConfinementTest$e: Exception</ID>
     <ID>ComplexCondition:UnifiedDiffParser.kt$UnifiedDiffParser$h != null &amp;&amp; (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ") || line.isEmpty())</ID>
     <ID>ComplexCondition:WorkspaceExtractor.kt$tab.filePath.isBlank() || tab.staged || tab.fromRef != null || tab.toRef != null</ID>
     <ID>CyclomaticComplexMethod:ContentSearchService.kt$ContentSearchService$override suspend fun searchInProject( query: String, pathPattern: String?, excludePattern: String?, isRegex: Boolean, caseSensitive: Boolean, wholeWord: Boolean, maxResults: Int, ): List&lt;FileMatch&gt;</ID>

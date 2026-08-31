@@ -19,10 +19,6 @@ internal data class BufferEditRange(
 ) {
     companion object {
         /**
-         * @param lines line-start offsets of the text the match came from
-         * @param range the match range, inclusive of its last character
-         */
-        /**
          * The positions for an arbitrary half-open offset span [[start], [endExclusive]).
          *
          * Unlike [of], which takes a match's inclusive range, this maps the two
@@ -41,6 +37,15 @@ internal data class BufferEditRange(
                 endCol = lines.columnOf(endExclusive),
             )
 
+        /**
+         * The positions for a match's INCLUSIVE range (the +1 to an exclusive end is
+         * the whole point - see the class KDoc). No production caller since replace
+         * moved to whole-file diffing, but kept and pinned by [BufferEditRangeTest]:
+         * it is the smallest place that exercises the off-by-one this type exists for.
+         *
+         * @param lines line-start offsets of the text the match came from
+         * @param range the match range, inclusive of its last character
+         */
         fun of(
             lines: LineOffsets,
             range: IntRange,

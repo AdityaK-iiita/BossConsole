@@ -40,6 +40,12 @@ object TabTypePlugins {
         mapOf(
             "fluck" to FLUCK_BROWSER,
             "editor" to EDITOR_TAB,
+            // diff and composer are editor-tab's too: the host opens both (a diff via
+            // GitDataProvider.openDiff, a composer tab), so without these a request with
+            // editor-tab absent fell through to a 15s wait and a silent no-op instead of
+            // the install prompt.
+            "diff" to EDITOR_TAB,
+            "composer" to EDITOR_TAB,
             "terminal" to TERMINAL_TAB,
             "jupyter" to JUPYTER_NOTEBOOK,
         )
@@ -60,6 +66,8 @@ object TabTypePlugins {
         when (typeId.typeId) {
             "fluck" -> "web pages"
             "editor" -> "files in the editor"
+            "diff" -> "git diffs"
+            "composer" -> "the AI composer"
             "terminal" -> "terminals"
             "jupyter" -> "notebooks"
             else -> typeId.typeId

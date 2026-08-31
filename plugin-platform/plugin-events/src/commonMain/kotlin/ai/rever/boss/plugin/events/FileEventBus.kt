@@ -323,7 +323,8 @@ object FileEventBus {
      * @param staged true = staged (index vs HEAD), false = working tree vs index
      * @param fromRef Base ref for commit/range diffs
      * @param toRef Target ref for range diffs
-     * @param sourceWindowId The window to open the tab in ("" = current window)
+     * @param sourceWindowId The window to open the tab in. Required: consumers filter
+     *   on exact equality, so a blank id matches no window (the caller refuses it).
      */
     suspend fun openDiffTab(
         filePath: String,

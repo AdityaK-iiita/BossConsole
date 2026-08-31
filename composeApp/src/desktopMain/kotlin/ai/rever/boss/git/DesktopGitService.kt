@@ -1108,6 +1108,19 @@ actual object GitService {
 
     // ===== Diff =====
 
+    /**
+     * Parses diff output, degrading an unparseable stream to "no diff" rather than
+     * throwing. The parser's `require(path.isNotEmpty())` can still trip on a header
+     * shape DIFF_SHAPE_FLAGS does not cover; a blank diff tab is recoverable, an
+     * exception propagating into the calling plugin is not.
+     */
+    private fun parseDiffSafely(output: String): List<GitDiffData> =
+        runCatching { UnifiedDiffParser.parse(output) }
+            .getOrElse {
+                logger.warn(LogCategory.SYSTEM, "diff parse failed; showing no diff", error = it)
+                emptyList()
+            }
+
     actual suspend fun getFileDiff(
         filePath: String,
         staged: Boolean,
@@ -1123,9 +1136,9 @@ actual object GitService {
             val context = "-U$FULL_FILE_CONTEXT"
             val args =
                 if (staged) {
-                    listOf("diff", context, "--cached", "--", filePath)
+                    listOf("diff") + DIFF_SHAPE_FLAGS + listOf(context, "--cached", "--", filePath)
                 } else {
-                    listOf("diff", context, "--", filePath)
+                    listOf("diff") + DIFF_SHAPE_FLAGS + listOf(context, "--", filePath)
                 }
             val result = runGitCommand(projectPath, *args.toTypedArray())
             if (result.exitCode != 0) {
@@ -1136,7 +1149,7 @@ actual object GitService {
                 )
                 return@withContext emptyList()
             }
-            UnifiedDiffParser.parse(result.output)
+            parseDiffSafely(result.output)
         }
 
     actual suspend fun getCommitDiff(
@@ -1159,7 +1172,8 @@ actual object GitService {
             }
             // -U matches getFileDiff/getRefDiff: the diff tab is a file viewer, so a
             // commit-scope tab rendered 3-line fragments while the others showed whole files.
-            val args = mutableListOf("show", "-U$FULL_FILE_CONTEXT", "--format=", "--find-renames", commitHash, "--")
+            val args = (mutableListOf("show") + DIFF_SHAPE_FLAGS).toMutableList()
+            args += listOf("-U$FULL_FILE_CONTEXT", "--format=", "--find-renames", commitHash, "--")
             if (filePath != null) args += filePath
             val result = runGitCommand(projectPath, *args.toTypedArray())
             if (result.exitCode != 0) {
@@ -1170,7 +1184,7 @@ actual object GitService {
                 )
                 return@withContext emptyList()
             }
-            UnifiedDiffParser.parse(result.output)
+            parseDiffSafely(result.output)
         }
 
     actual suspend fun getRefDiff(
@@ -1191,7 +1205,8 @@ actual object GitService {
                 )
                 return@withContext emptyList()
             }
-            val args = mutableListOf("diff", "-U$FULL_FILE_CONTEXT", fromRef, toRef, "--")
+            val args = (mutableListOf("diff") + DIFF_SHAPE_FLAGS).toMutableList()
+            args += listOf("-U$FULL_FILE_CONTEXT", fromRef, toRef, "--")
             if (filePath != null) args += filePath
             val result = runGitCommand(projectPath, *args.toTypedArray())
             if (result.exitCode != 0) {
@@ -1202,7 +1217,7 @@ actual object GitService {
                 )
                 return@withContext emptyList()
             }
-            UnifiedDiffParser.parse(result.output)
+            parseDiffSafely(result.output)
         }
 
     actual suspend fun getDiffFileNames(
@@ -1649,7 +1664,7 @@ actual object GitService {
     ): Thread =
         Thread {
             runCatching {
-                BufferedReader(InputStreamReader(stream)).use { reader ->
+                BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { reader ->
                     val buf = CharArray(DRAIN_BUFFER_CHARS)
                     while (true) {
                         val n = reader.read(buf)
@@ -2129,3 +2144,10 @@ actual object GitService {
  * patch. Git clamps this to the file's length, so a small file costs nothing.
  */
 private const val FULL_FILE_CONTEXT = 100_000
+
+// Pins the diff header shape against a user's personal gitconfig. `diff.noprefix`,
+// `diff.mnemonicPrefix`, `color.diff=always` and `diff.external` all reshape the
+// `diff --git` header or inject colour, which UnifiedDiffParser cannot read - and a
+// header it cannot read throws out through the provider into the calling plugin.
+// These flags force `a/`..`b/` prefixes, no colour, and git's own diff, regardless.
+private val DIFF_SHAPE_FLAGS = listOf("--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/")

@@ -30,7 +30,15 @@ import java.io.File
 class ContentSearchService(
     private val projectPathProvider: () -> String?,
 ) : ProjectSearchProvider {
-    private val cache = HashMap<String, CacheEntry>()
+    // Access-ordered and self-evicting: at capacity the ELDEST entry is dropped, not
+    // the whole map. The old wholesale clear() meant a project above the cap wiped the
+    // cache on nearly every scanned file, so the repeat search this exists for hit on
+    // nothing. Guarded by `synchronized(cache)` at every access, so a plain
+    // LinkedHashMap (not a concurrent map) is safe.
+    private val cache =
+        object : LinkedHashMap<String, CacheEntry>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: Map.Entry<String, CacheEntry>): Boolean = size > MAX_CACHE_ENTRIES
+        }
 
     override suspend fun searchInProject(
         query: String,
@@ -97,9 +105,13 @@ class ContentSearchService(
                             text = buffer?.content ?: readTextOrNull(file) ?: continue,
                             regex = regex,
                         )?.also { found ->
-                            synchronized(cache) {
-                                if (cache.size > MAX_CACHE_ENTRIES) cache.clear()
-                                cache[key] = CacheEntry(stamp, found)
+                            // Empty results are not cached: on a large project most files
+                            // match nothing, and caching them all filled the map and tripped
+                            // the wholesale clear below, so a repeat search - the one this
+                            // cache exists for - hit on nothing. Re-scanning a no-match file
+                            // is cheap; evicting a real hit is not.
+                            if (found.isNotEmpty()) {
+                                synchronized(cache) { cache[key] = CacheEntry(stamp, found) }
                             }
                         } ?: continue
 
@@ -183,7 +195,7 @@ class ContentSearchService(
      * Returns null when the path escapes; callers report that as a per-file error
      * rather than failing the whole batch.
      */
-    private fun resolveFile(
+    internal fun resolveFile(
         rawPath: String,
         projectPath: String,
     ): File? {
@@ -404,7 +416,7 @@ class ContentSearchService(
                 if ('\u0000' in text) return FileReplaceResult(file.path, 0, "binary file")
                 if ('\uFFFD' in text) return FileReplaceResult(file.path, 0, "not valid UTF-8")
                 val outcome = computeReplaced(text, regex, replacement, isRegex)
-                if (!dryRun && outcome.count > 0) file.writeText(outcome.text)
+                if (!dryRun && outcome.count > 0) writeAtomically(file, outcome.text)
                 FileReplaceResult(file.path, outcome.count, null)
             }
         } catch (e: Exception) {
@@ -461,6 +473,33 @@ class ContentSearchService(
         }
     }
 
+    /**
+     * Writes [text] to [file] atomically: a sibling temp file, then an atomic rename.
+     * A crash or I/O error mid-write must not leave a truncated source file with no
+     * backup - the plugin installer promotes its jar the same way, for the same reason.
+     */
+    private fun writeAtomically(
+        file: File,
+        text: String,
+    ) {
+        val tmp = File.createTempFile(file.name, ".tmp", file.parentFile)
+        try {
+            tmp.writeText(text)
+            java.nio.file.Files.move(
+                tmp.toPath(),
+                file.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+            )
+        } catch (e: java.nio.file.AtomicMoveNotSupportedException) {
+            // Rare (a temp on a different filesystem); fall back to a plain replace.
+            tmp.copyTo(file, overwrite = true)
+            tmp.delete()
+        } finally {
+            tmp.delete()
+        }
+    }
+
     /** The result of a bounded replace: the new text and how many matches it replaced. */
     internal data class ReplaceOutcome(
         val text: String,
@@ -468,7 +507,7 @@ class ContentSearchService(
     )
 
     /**
-     * Replaces up to [MAX_MATCHES_PER_FILE] matches, via Java's reference `Matcher`
+     * Replaces EVERY match, via Java's reference `Matcher`
      * expansion - NOT a hand-written one.
      *
      * `appendReplacement`/`appendTail` are the exact semantics
@@ -498,7 +537,11 @@ class ContentSearchService(
             }
         val sb = StringBuffer(text.length)
         var count = 0
-        while (count < MAX_MATCHES_PER_FILE && matcher.find()) {
+        // No match cap here: the file is already bounded to MAX_FILE_SIZE, and a
+        // capped replace leaves the file half-transformed with a success report - worse
+        // than the work of finishing. The loop terminates because a file has finitely
+        // many matches (zero-width matches self-advance via appendReplacement).
+        while (matcher.find()) {
             matcher.appendReplacement(sb, repl)
             count++
         }
