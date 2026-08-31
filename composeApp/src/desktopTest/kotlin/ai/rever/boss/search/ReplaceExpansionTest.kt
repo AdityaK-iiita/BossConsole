@@ -10,7 +10,7 @@ import kotlin.test.assertEquals
  * paths disagreed about whether `$1` was literal or a group.
  */
 class ReplaceExpansionTest {
-    private val svc = ContentSearchService { null }
+    private val svc = ContentSearchService(projectPathProvider = { null })
 
     private fun run(
         text: String,

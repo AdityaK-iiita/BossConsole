@@ -12,7 +12,7 @@ import kotlin.test.assertNull
  * that silently rots is worse than none.
  */
 class ResolveFileConfinementTest {
-    private val svc = ContentSearchService { null }
+    private val svc = ContentSearchService(projectPathProvider = { null })
 
     @Test
     fun `a relative path inside the project resolves`(

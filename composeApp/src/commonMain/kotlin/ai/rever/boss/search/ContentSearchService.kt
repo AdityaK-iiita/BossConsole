@@ -29,6 +29,12 @@ import java.io.File
  */
 class ContentSearchService(
     private val projectPathProvider: () -> String?,
+    // How the search reaches the editor's live buffers. Injected, not the global
+    // EditorAPIAccess, because that resolves through a process-wide last-window-wins
+    // DefaultPlugin - so window 1's search would edit buffers in window 2's editor.
+    // DefaultPlugin passes a bridge over its OWN (window-scoped) getPluginAPI; the
+    // default keeps the old global behaviour for callers and tests that do not care.
+    private val bufferBridge: EditorBufferBridge = GlobalEditorBufferBridge,
 ) : ProjectSearchProvider {
     // Access-ordered and self-evicting: at capacity the ELDEST entry is dropped, not
     // the whole map. The old wholesale clear() meant a project above the cap wiped the
@@ -81,7 +87,7 @@ class ContentSearchService(
                 // has it. Otherwise a replace into a live buffer - or any
                 // unsaved edit - leaves the results tree reporting matches the
                 // editor no longer shows.
-                val buffer = EditorAPIAccess.readBuffer(file.absolutePath)
+                val buffer = bufferBridge.readBuffer(file.absolutePath)
                 val key =
                     cacheKey(projectPath, query, pathPattern, excludePattern, isRegex, caseSensitive, wholeWord, file.absolutePath) +
                         if (buffer != null) "|buf" else "|disk"
@@ -104,6 +110,7 @@ class ContentSearchService(
                             file = file,
                             text = buffer?.content ?: readTextOrNull(file) ?: continue,
                             regex = regex,
+                            projectRoot = File(projectPath),
                         )?.also { found ->
                             // Empty results are not cached: on a large project most files
                             // match nothing, and caching them all filled the map and tripped
@@ -266,7 +273,15 @@ class ContentSearchService(
                 val notSkipped = isRoot || dir.name !in SKIP_DIRECTORIES
                 notSkipped && (isRoot || seen.add(canonicalOrPath(dir)))
             }.filter { it.isFile }
-            .filter { it.length() <= MAX_FILE_SIZE }
+            // Skip symlinked files, so the walk and replaceInProject agree: replace
+            // refuses a path resolving outside the project (resolveFile), and a followed
+            // symlink is exactly such a path. Directory-symlink cycles are handled above.
+            .filterNot {
+                runCatching {
+                    java.nio.file.Files
+                        .isSymbolicLink(it.toPath())
+                }.getOrDefault(false)
+            }.filter { it.length() <= MAX_FILE_SIZE }
             .filter { file ->
                 val rel = file.relativeTo(root).path.replace('\\', '/')
                 val included = globs.isNullOrEmpty() || globs.any { it.matches(rel) }
@@ -321,9 +336,9 @@ class ContentSearchService(
         file: File,
         text: String,
         regex: Regex,
+        projectRoot: File,
     ): List<FileMatch>? {
         return try {
-            val projectRoot = File(projectPathProvider() ?: return null)
             val relative = file.relativeTo(projectRoot).path.replace('\\', '/')
             if ('\u0000' in text) return null
             val lineMap = LineMap(text)
@@ -403,7 +418,7 @@ class ContentSearchService(
 
         return try {
             // Open buffers go through the editor's undoable path.
-            val buffer = EditorAPIAccess.readBuffer(file.absolutePath)
+            val buffer = bufferBridge.readBuffer(file.absolutePath)
             if (buffer != null) {
                 replaceInBuffer(file, buffer.content, buffer.version, regex, replacement, isRegex, dryRun)
             } else {
@@ -457,7 +472,7 @@ class ContentSearchService(
         val range = BufferEditRange.ofSpan(lineMap, span.oldStart, span.oldEndExclusive)
         val newText = outcome.text.substring(span.newStart, span.newEndExclusive)
         val result =
-            EditorAPIAccess.applyEdit(
+            bufferBridge.applyEdit(
                 path = file.absolutePath,
                 startLine = range.startLine,
                 startCol = range.startCol,
@@ -482,6 +497,15 @@ class ContentSearchService(
         file: File,
         text: String,
     ) {
+        // createTempFile is 0600 and ATOMIC_MOVE carries the temp's attributes onto the
+        // destination, so without this an executable script loses +x and a shared file
+        // becomes owner-only. Capture the target's POSIX bits first, reapply after.
+        // Null on a non-POSIX filesystem (the getter throws) - nothing to carry there.
+        val perms =
+            runCatching {
+                java.nio.file.Files
+                    .getPosixFilePermissions(file.toPath())
+            }.getOrNull()
         val tmp = File.createTempFile(file.name, ".tmp", file.parentFile)
         try {
             tmp.writeText(text)
@@ -491,9 +515,21 @@ class ContentSearchService(
                 java.nio.file.StandardCopyOption.REPLACE_EXISTING,
                 java.nio.file.StandardCopyOption.ATOMIC_MOVE,
             )
+            perms?.let {
+                runCatching {
+                    java.nio.file.Files
+                        .setPosixFilePermissions(file.toPath(), it)
+                }
+            }
         } catch (e: java.nio.file.AtomicMoveNotSupportedException) {
             // Rare (a temp on a different filesystem); fall back to a plain replace.
             tmp.copyTo(file, overwrite = true)
+            perms?.let {
+                runCatching {
+                    java.nio.file.Files
+                        .setPosixFilePermissions(file.toPath(), it)
+                }
+            }
             tmp.delete()
         } finally {
             tmp.delete()
@@ -646,4 +682,38 @@ class ContentSearchService(
                 "__pycache__",
             )
     }
+}
+
+/**
+ * How [ContentSearchService] reaches the editor's live buffers. An interface so it is
+ * WINDOW-SCOPED (bound to a specific DefaultPlugin's registry, not the process global)
+ * and fakeable in tests - the replace-into-a-buffer path is otherwise unreachable.
+ */
+interface EditorBufferBridge {
+    suspend fun readBuffer(path: String): ai.rever.boss.plugin.api.BufferSnapshot?
+
+    suspend fun applyEdit(
+        path: String,
+        startLine: Int,
+        startCol: Int,
+        endLine: Int,
+        endCol: Int,
+        newText: String,
+        expectedVersion: Long,
+    ): ai.rever.boss.plugin.api.EditResult?
+}
+
+/** Backs onto the process-global [EditorAPIAccess]; the default, for callers with no window. */
+object GlobalEditorBufferBridge : EditorBufferBridge {
+    override suspend fun readBuffer(path: String) = EditorAPIAccess.readBuffer(path)
+
+    override suspend fun applyEdit(
+        path: String,
+        startLine: Int,
+        startCol: Int,
+        endLine: Int,
+        endCol: Int,
+        newText: String,
+        expectedVersion: Long,
+    ) = EditorAPIAccess.applyEdit(path, startLine, startCol, endLine, endCol, newText, expectedVersion)
 }

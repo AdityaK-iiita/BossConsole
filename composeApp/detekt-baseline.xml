@@ -2,6 +2,8 @@
 <SmellBaseline>
   <ManuallySuppressedIssues/>
   <CurrentIssues>
+    <ID>CyclomaticComplexMethod:UnifiedDiffParser.kt$UnifiedDiffParser$internal fun cUnquote(p: String): String</ID>
+    <ID>LongParameterList:ContentSearchService.kt$EditorBufferBridge$( path: String, startLine: Int, startCol: Int, endLine: Int, endCol: Int, newText: String, expectedVersion: Long, )</ID>
     <ID>ReturnCount:ContentSearchService.kt$ContentSearchService$internal fun resolveFile( rawPath: String, projectPath: String, ): File?</ID>
     <ID>SwallowedException:ContentSearchService.kt$ContentSearchService$e: java.nio.file.AtomicMoveNotSupportedException</ID>
     <ID>SwallowedException:ResolveFileConfinementTest.kt$ResolveFileConfinementTest$e: Exception</ID>

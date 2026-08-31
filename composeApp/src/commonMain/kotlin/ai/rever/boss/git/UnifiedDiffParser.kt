@@ -281,7 +281,7 @@ object UnifiedDiffParser {
      * single `é`. Mapping each octal escape to its own Char would produce `Ã©`.
      * An unquoted token is returned unchanged.
      */
-    private fun cUnquote(p: String): String {
+    internal fun cUnquote(p: String): String {
         val t = p.trim()
         if (!t.startsWith("\"") || !t.endsWith("\"") || t.length < 2) return t
         val body = t.substring(1, t.length - 1)

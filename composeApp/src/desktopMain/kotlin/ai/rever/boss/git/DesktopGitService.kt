@@ -1247,7 +1247,11 @@ actual object GitService {
             val parts = raw.split("\t")
             val type = statusTypeFromCode(parts.firstOrNull().orEmpty()) ?: continue
             // Renames/copies carry two columns: STATUS100\told\tnew.
-            val path = parts.getOrNull(if (parts.size > 2) 2 else 1) ?: continue
+            // C-unquote: with core.quotePath on (the default) git wraps a non-ASCII
+            // path in quotes and octal-escapes its bytes, and that token then fails to
+            // resolve when handed back as a pathspec (dead tab / empty diff). The same
+            // decoder the diff header uses fixes it; an unquoted path passes through.
+            val path = UnifiedDiffParser.cUnquote(parts.getOrNull(if (parts.size > 2) 2 else 1) ?: continue)
             list.add(
                 GitFileStatusData(
                     path = path,
@@ -1361,6 +1365,10 @@ actual object GitService {
      * Updates the provided WindowGitState instead of global state.
      * This allows multiple windows to have independent git states.
      */
+    actual fun alignCurrentProjectPath(projectPath: String) {
+        currentProjectPath = projectPath
+    }
+
     actual suspend fun refreshForWindow(
         projectPath: String,
         windowGitState: WindowGitState?,
@@ -1635,6 +1643,16 @@ actual object GitService {
         errReader.join(STREAM_DRAIN_TIMEOUT_SECONDS * 1000)
         val output = synchronized(outBuf) { outBuf.toString() }
         val error = synchronized(errBuf) { errBuf.toString() }
+        if (output.length >= MAX_GIT_OUTPUT_CHARS) {
+            // Not silent: parseDiffSafely will parse the truncated stream into a PARTIAL
+            // diff that looks complete, so at least leave a trail for why a huge diff is
+            // missing its tail.
+            logger.warn(
+                LogCategory.SYSTEM,
+                "git output truncated at the ${MAX_GIT_OUTPUT_CHARS}-char cap; diff may be incomplete",
+                mapOf("args" to args.joinToString(" ")),
+            )
+        }
         if (finished) return GitCommandResult(output, error, process.exitValue())
         logger.warn(
             LogCategory.SYSTEM,

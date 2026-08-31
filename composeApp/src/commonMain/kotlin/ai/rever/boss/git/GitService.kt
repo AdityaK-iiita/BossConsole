@@ -396,6 +396,21 @@ expect object GitService {
      * @param projectPath The root path of the project
      * @param windowGitState The window-specific git state to update
      */
+
+    /**
+     * Point the global `currentProjectPath` at [projectPath] - a cheap assignment,
+     * no git invocation.
+     *
+     * The write verbs (stage/commit/discard/cherry-pick/revert) still resolve their
+     * repository from the global, and [refreshForWindow] - the only other writer of it -
+     * is gated behind a probe short-circuit, so once two windows on different worktrees
+     * have settled the global belonged to whichever refreshed last. A Discard in the
+     * other window then ran `git restore` in the wrong tree. Aligning here,
+     * unconditionally and before the gated probe, keeps the global tracking the window
+     * whose provider is being used.
+     */
+    fun alignCurrentProjectPath(projectPath: String)
+
     suspend fun refreshForWindow(
         projectPath: String,
         windowGitState: ai.rever.boss.window.WindowGitState?,

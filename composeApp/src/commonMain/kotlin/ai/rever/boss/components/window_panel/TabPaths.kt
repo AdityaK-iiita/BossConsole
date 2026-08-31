@@ -36,7 +36,11 @@ internal object TabPaths {
         // macOS/Linux, so translating it unconditionally turned `a\b.kt` into `a/b.kt`
         // and could canonicalise onto a different real file (focusing the wrong tab).
         val unified = if (File.separatorChar == '\\') path.replace('\\', '/') else path
-        val collapsed = unified.replace(Regex("/{2,}"), "/")
+        // Collapse repeated slashes, but keep a leading "//" - a Windows UNC path
+        // (\\server\share) becomes //server/share, and flattening it to /server/share
+        // makes two tabs on different servers compare equal.
+        val uncPrefix = if (unified.startsWith("//")) "/" else ""
+        val collapsed = uncPrefix + unified.replace(Regex("/{2,}"), "/")
         return if (collapsed.length > 1) collapsed.trimEnd('/') else collapsed
     }
 }

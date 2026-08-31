@@ -34,7 +34,7 @@ class ContentSearchServiceTest {
         @TempDir dir: File,
     ) = runBlocking {
         tree(dir)
-        val service = ContentSearchService { dir.absolutePath }
+        val service = ContentSearchService(projectPathProvider = { dir.absolutePath })
 
         val hits = service.searchInProject(query = "needle")
 
@@ -48,7 +48,7 @@ class ContentSearchServiceTest {
         @TempDir dir: File,
     ) = runBlocking {
         tree(dir)
-        val service = ContentSearchService { dir.absolutePath }
+        val service = ContentSearchService(projectPathProvider = { dir.absolutePath })
 
         val paths = service.searchInProject(query = "needle").map { it.path }
 
@@ -61,7 +61,7 @@ class ContentSearchServiceTest {
         @TempDir dir: File,
     ) = runBlocking {
         tree(dir)
-        val service = ContentSearchService { dir.absolutePath }
+        val service = ContentSearchService(projectPathProvider = { dir.absolutePath })
 
         // What a user actually types in "files to include". Matched against the
         // whole relative path, `*.kt` used to find only root-level files.
@@ -75,7 +75,7 @@ class ContentSearchServiceTest {
         @TempDir dir: File,
     ) = runBlocking {
         tree(dir)
-        val service = ContentSearchService { dir.absolutePath }
+        val service = ContentSearchService(projectPathProvider = { dir.absolutePath })
 
         val paths =
             service
@@ -91,7 +91,7 @@ class ContentSearchServiceTest {
         @TempDir dir: File,
     ) = runBlocking {
         tree(dir)
-        val service = ContentSearchService { dir.absolutePath }
+        val service = ContentSearchService(projectPathProvider = { dir.absolutePath })
 
         val paths = service.searchInProject(query = "needle", pathPattern = "src").map { it.path }.toSet()
 
@@ -124,7 +124,7 @@ class ContentSearchServiceTest {
         exclude: String?,
     ): Set<String> =
         runBlocking {
-            ContentSearchService { dir.absolutePath }
+            ContentSearchService(projectPathProvider = { dir.absolutePath })
                 .searchInProject(
                     query = "needle",
                     pathPattern = null,
@@ -209,7 +209,7 @@ class ContentSearchServiceTest {
 
         val paths =
             runBlocking {
-                ContentSearchService { dir.absolutePath }
+                ContentSearchService(projectPathProvider = { dir.absolutePath })
                     .searchInProject(
                         query = "needle",
                         pathPattern = null,
@@ -231,7 +231,7 @@ class ContentSearchServiceTest {
         @TempDir dir: File,
     ) = runBlocking {
         File(dir, "a.txt").writeText("first\n  needle\n")
-        val service = ContentSearchService { dir.absolutePath }
+        val service = ContentSearchService(projectPathProvider = { dir.absolutePath })
 
         val hit = service.searchInProject(query = "needle").single()
 
@@ -246,7 +246,7 @@ class ContentSearchServiceTest {
         @TempDir dir: File,
     ) = runBlocking {
         File(dir, "a.txt").writeText("ab\n")
-        val service = ContentSearchService { dir.absolutePath }
+        val service = ContentSearchService(projectPathProvider = { dir.absolutePath })
 
         // `x*` matches empty at every offset. Advancing by `range.last + 1`
         // never moved past a zero-length match, so this used to return the
@@ -266,7 +266,7 @@ class ContentSearchServiceTest {
         // a zero-length match, so this grew a list until the app stopped
         // responding. It has to come back bounded.
         val summary =
-            ContentSearchService { dir.absolutePath }.replaceInProject(
+            ContentSearchService(projectPathProvider = { dir.absolutePath }).replaceInProject(
                 query = "x*",
                 replacement = "-",
                 files = listOf("a.txt"),
@@ -281,7 +281,7 @@ class ContentSearchServiceTest {
     fun `a per-file replace failure is reported, not swallowed`(
         @TempDir dir: File,
     ) = runBlocking {
-        val service = ContentSearchService { dir.absolutePath }
+        val service = ContentSearchService(projectPathProvider = { dir.absolutePath })
 
         // A path that is not a file: the summary has to carry the reason so a
         // caller can say why nothing changed.
@@ -308,7 +308,7 @@ class ContentSearchServiceTest {
         a.writeText("val needle = 1\nval other = needle\n")
         val b = File(dir, "B.kt")
         b.writeText("// needle\n")
-        val service = ContentSearchService { dir.absolutePath }
+        val service = ContentSearchService(projectPathProvider = { dir.absolutePath })
 
         // 1. Exactly what the SEARCH tab does: scan, then feed the result
         //    paths (project-relative, as reported) into a dry run.
@@ -346,7 +346,7 @@ class ContentSearchServiceTest {
     ) = runBlocking {
         val f = File(dir, "a.kt")
         f.writeText("fun oldName(x: Int)\n")
-        val service = ContentSearchService { dir.absolutePath }
+        val service = ContentSearchService(projectPathProvider = { dir.absolutePath })
 
         val applied =
             service.replaceInProject(
@@ -367,7 +367,7 @@ class ContentSearchServiceTest {
     ) = runBlocking {
         val file = File(dir, "a.txt")
         file.writeText("needle needle\n")
-        val service = ContentSearchService { dir.absolutePath }
+        val service = ContentSearchService(projectPathProvider = { dir.absolutePath })
 
         val summary =
             service.replaceInProject(
@@ -391,7 +391,7 @@ class ContentSearchServiceTest {
         // landed after the second match, whose lookahead reads past it, so re-matching
         // the truncated prefix found only the first.
         val f = File(dir, "a.txt").apply { writeText("ab ab") }
-        val service = ContentSearchService { dir.absolutePath }
+        val service = ContentSearchService(projectPathProvider = { dir.absolutePath })
 
         val summary =
             service.replaceInProject(
@@ -411,7 +411,7 @@ class ContentSearchServiceTest {
         @TempDir dir: File,
     ) = runBlocking {
         val f = File(dir, "b.txt").apply { writeText("foo=1\nbar=2\n") }
-        val service = ContentSearchService { dir.absolutePath }
+        val service = ContentSearchService(projectPathProvider = { dir.absolutePath })
 
         service.replaceInProject(
             query = "(\\w+)=(\\d)",

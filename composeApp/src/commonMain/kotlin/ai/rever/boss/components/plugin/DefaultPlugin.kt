@@ -434,7 +434,27 @@ class DefaultPlugin(
     // use provider-presence to mean "a project is open" - it means "this host
     // implements search". Check projectPath for the other question.
     override val projectSearchProvider: ProjectSearchProvider? by lazy {
-        ContentSearchService { projectPath }
+        ContentSearchService(
+            projectPathProvider = { projectPath },
+            // Bridge over THIS window's registry, not the global EditorAPIAccess, so a
+            // search in this window edits this window's buffers.
+            bufferBridge =
+                object : ai.rever.boss.search.EditorBufferBridge {
+                    private fun provider() = getPluginAPI(ai.rever.boss.plugin.api.EditorTabPluginAPI::class.java)
+
+                    override suspend fun readBuffer(path: String) = provider()?.readBuffer(path)
+
+                    override suspend fun applyEdit(
+                        path: String,
+                        startLine: Int,
+                        startCol: Int,
+                        endLine: Int,
+                        endCol: Int,
+                        newText: String,
+                        expectedVersion: Long,
+                    ) = provider()?.applyEdit(path, startLine, startCol, endLine, endCol, newText, expectedVersion)
+                },
+        )
     }
 
     // Auth data provider for plugins that need authentication state

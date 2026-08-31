@@ -167,6 +167,12 @@ class GitDataProviderImpl(
                 ),
             )
         }
+        // Align the global project path unconditionally, so the write verbs
+        // (stage/commit/discard/cherry-pick/revert), which still resolve from it,
+        // operate on THIS window's repo rather than whichever window refreshed last.
+        // It is a bare assignment; the four-command probe below stays gated.
+        GitService.alignCurrentProjectPath(path)
+
         // `changed` covers a project switch. `lastProbedPath != path` covers
         // the case where something wrote [WindowGitState.projectPath] without
         // ever calling refreshForWindow (the top bar used to be the only
