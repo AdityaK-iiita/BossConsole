@@ -1669,7 +1669,18 @@ actual object GitService {
                     while (true) {
                         val n = reader.read(buf)
                         if (n < 0) break
-                        synchronized(sink) { sink.appendRange(buf, 0, n) }
+                        // Bounded memory. A whole-file-context (-U100000) diff of a large
+                        // multi-file commit can be hundreds of MB on stdout; buffering it
+                        // all - while holding gitCommandLock - risks an OOM that takes the
+                        // app down. Past the cap we keep reading (so the child never blocks
+                        // on a full pipe) but stop appending, and the truncated stream still
+                        // parses into a partial diff rather than crashing.
+                        synchronized(sink) {
+                            if (sink.length < MAX_GIT_OUTPUT_CHARS) {
+                                val room = MAX_GIT_OUTPUT_CHARS - sink.length
+                                sink.appendRange(buf, 0, minOf(n, room))
+                            }
+                        }
                     }
                 }
             }
@@ -1679,6 +1690,9 @@ actual object GitService {
         }
 
     private const val DRAIN_BUFFER_CHARS = 8192
+
+    /** ~32 MB ceiling on one git command's captured output; see drainAsync. */
+    private const val MAX_GIT_OUTPUT_CHARS = 32 * 1024 * 1024
 
     actual suspend fun getLogForRef(
         windowGitState: WindowGitState?,
