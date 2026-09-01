@@ -119,7 +119,7 @@ class GitDataProviderImplTest {
         }
 
     @Test
-    fun refreshStatusDoesNotReProbeAKnownNonRepository() =
+    fun refreshStatusReProbesAKnownNonRepositoryUntilItBecomesOne() =
         runTest {
             val plain =
                 java.nio.file.Files
@@ -132,15 +132,22 @@ class GitDataProviderImplTest {
             assertFalse(state.isGitRepository.value)
             assertEquals(plain.absolutePath, state.projectPath.value)
 
-            // Turning the directory into a repository after the first probe is
-            // how we tell a skip from a re-run: refreshForWindow would see the
-            // new checkout and flip the flag. A status poll must not.
+            // A cached "not a repository" is not the same fact as a cached
+            // "is a repository": `git init`, or a panel's first probe simply
+            // losing a startup race, can both turn a real non-repo into a
+            // real repo underneath an already-open panel. Unlike the
+            // confirmed-repo case (which cannot spontaneously reverse), this
+            // costs only the one `isGitRepo` command per re-check - the
+            // four-command branch bundle still never runs until it is true -
+            // so the panel's own Refresh (or the next status poll) must pick
+            // it up rather than being stuck showing "not a Git repository"
+            // for the rest of the session.
             ProcessBuilder("git", "init", "-q", plain.absolutePath).start().waitFor()
             provider.refreshStatus()
 
-            assertFalse(
+            assertTrue(
                 state.isGitRepository.value,
-                "a known non-repository must not be re-probed on every status poll",
+                "a directory that became a repository must be re-probed and reported as one",
             )
             plain.deleteRecursively()
         }

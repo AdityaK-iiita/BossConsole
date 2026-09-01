@@ -202,9 +202,16 @@ class GitDataProviderImpl(
         // `changed` covers a project switch. `lastProbedPath != path` covers
         // the case where something wrote [WindowGitState.projectPath] without
         // ever calling refreshForWindow (the top bar used to be the only
-        // writer; tests still do this). Together they are "unknown"; a
-        // matching path we have already probed is known, repo or not.
-        if (changed || lastProbedPath != path) {
+        // writer; tests still do this). `!state.isGitRepository.value` covers
+        // a cached "not a repository" specifically: that fact can change
+        // underneath an open panel (`git init`, or the first probe losing the
+        // race against [DesktopGitService]'s async `_isGitAvailable` check at
+        // app startup) and, unlike a confirmed repo, costs only the one
+        // `isGitRepo` command to keep re-checking - `refreshForWindow` returns
+        // before the four-command branch bundle when it is not a repo. A
+        // confirmed repo still caches (that fact does not spontaneously
+        // reverse), so the steady-state cost this gate exists for is unchanged.
+        if (changed || lastProbedPath != path || !state.isGitRepository.value) {
             GitService.refreshForWindow(path, state)
             lastProbedPath = path
         }
