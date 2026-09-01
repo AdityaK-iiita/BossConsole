@@ -24,6 +24,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 
 /**
@@ -53,6 +55,13 @@ class GitDataProviderImpl(
     // `isGitRepository` cannot carry this: after the first probe a non-repo
     // is also false, which is "known not a repository", not "unknown".
     private var lastProbedPath: String? = null
+
+    // [ensureRepoState] is called from every suspend member, so two of them
+    // can run it at once after a project switch. The check-and-probe is not
+    // atomic without this: both callers would see `lastProbedPath != path`
+    // and both would run the four-command refresh (eight subprocesses behind
+    // the global git lock instead of four, and two racing state writes).
+    private val ensureMutex = Mutex()
 
     // State flows mapped from WindowGitState - initialized with current values
     private val _fileStatus =
@@ -155,6 +164,12 @@ class GitDataProviderImpl(
      */
     private suspend fun ensureRepoState() {
         val state = windowGitState ?: return
+        ensureMutex.withLock {
+            ensureRepoStateLocked(state)
+        }
+    }
+
+    private suspend fun ensureRepoStateLocked(state: WindowGitState) {
         val path = projectPathProvider()
         if (path.isNullOrBlank()) {
             if (state.projectPath.value == null) {

@@ -477,12 +477,22 @@ fun BossDraggableComponent.BossTopLeftBar(
     val isGitLoading by windowGitState?.isLoading?.collectAsState() ?: remember { mutableStateOf(false) }
     // Git availability is global (system-level) so we still use GitService for this
     val isGitAvailable by GitService.isGitAvailable.collectAsState()
+    // Process-wide: true while ANY git command in ANY window holds (or waits on)
+    // the git lock. The git menu's own actions report through isGitLoading; this
+    // is the signal for when some OTHER slow command freezes every git read.
+    val gitCommandRunning by GitService.gitCommandsRunning.collectAsState()
     var showCreateBranchDialog by remember { mutableStateOf(false) }
     var showCommitDialog by remember { mutableStateOf(false) }
     var gitErrorMessage by remember { mutableStateOf<String?>(null) }
     var gitSuccessMessage by remember { mutableStateOf<String?>(null) }
     var createPRUrl by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+
+    // Every git verb below runs in THIS window's project, never in the global
+    // currentProjectPath: with two windows on two worktrees the global belongs
+    // to whichever window aligned last, and a Merge pressed here could land in
+    // the other window's tree.
+    val windowProjectPath = selectedProject.path.ifBlank { null }
 
     // Refresh Git state when project changes - uses window-specific state
     // This ensures each window's git UI is independent
@@ -491,7 +501,7 @@ fun BossDraggableComponent.BossTopLeftBar(
             // Refresh git for THIS window only
             GitService.refreshForWindow(selectedProject.path, windowGitState)
             // Also fetch the PR URL and stash list for this window
-            createPRUrl = GitService.getCreatePRUrl()
+            createPRUrl = GitService.getCreatePRUrl(projectPathOverride = windowProjectPath)
             GitService.refreshStashListForWindow(windowGitState)
         } else {
             // Only clear THIS window's git state, not other windows
@@ -513,7 +523,7 @@ fun BossDraggableComponent.BossTopLeftBar(
     // Update PR URL when branch changes
     LaunchedEffect(currentBranch) {
         if (isGitRepo && currentBranch != null) {
-            createPRUrl = GitService.getCreatePRUrl()
+            createPRUrl = GitService.getCreatePRUrl(projectPathOverride = windowProjectPath)
         }
     }
 
@@ -603,18 +613,22 @@ fun BossDraggableComponent.BossTopLeftBar(
                         }
                     },
                     onMerge = { branchName ->
-                        scope.launch { GitService.mergeInTerminal(windowId, branchName) }
+                        scope.launch {
+                            GitService.mergeInTerminal(windowId, branchName, projectPathOverride = windowProjectPath)
+                        }
                     },
                     onRebase = { branchName ->
-                        scope.launch { GitService.rebaseInTerminal(windowId, branchName) }
+                        scope.launch {
+                            GitService.rebaseInTerminal(windowId, branchName, projectPathOverride = windowProjectPath)
+                        }
                     },
                     onCreateBranch = { showCreateBranchDialog = true },
                     onCommit = { showCommitDialog = true },
                     onPull = {
-                        scope.launch { GitService.pullInTerminal(windowId) }
+                        scope.launch { GitService.pullInTerminal(windowId, projectPathOverride = windowProjectPath) }
                     },
                     onPush = {
-                        scope.launch { GitService.pushInTerminal(windowId) }
+                        scope.launch { GitService.pushInTerminal(windowId, projectPathOverride = windowProjectPath) }
                     },
                     onCreatePR =
                         createPRUrl?.let { url ->
@@ -646,12 +660,14 @@ fun BossDraggableComponent.BossTopLeftBar(
                     onRefresh = {
                         scope.launch {
                             GitService.refreshForWindow(selectedProject.path, windowGitState)
-                            createPRUrl = GitService.getCreatePRUrl()
+                            createPRUrl = GitService.getCreatePRUrl(projectPathOverride = windowProjectPath)
                             GitService.refreshStashListForWindow(windowGitState)
                         }
                     },
                 ),
-            hintText = "Git Branch: ${currentBranch ?: "unknown"}",
+            hintText =
+                "Git Branch: ${currentBranch ?: "unknown"}" +
+                    if (gitCommandRunning) " (a git command is running; git updates wait for it)" else "",
         )
     }
 
@@ -689,7 +705,13 @@ fun BossDraggableComponent.BossTopLeftBar(
             onDismiss = { showCreateBranchDialog = false },
             onCreate = { branchName ->
                 scope.launch {
-                    val result = GitService.createBranch(branchName, checkout = true, windowId = windowId)
+                    val result =
+                        GitService.createBranch(
+                            branchName,
+                            checkout = true,
+                            windowId = windowId,
+                            projectPathOverride = windowProjectPath,
+                        )
                     if (result is GitError) {
                         gitErrorMessage = result.message
                     }

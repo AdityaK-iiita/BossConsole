@@ -437,6 +437,14 @@ class DefaultPlugin(
     // answers with empty results when there is none. A plugin cannot therefore
     // use provider-presence to mean "a project is open" - it means "this host
     // implements search". Check projectPath for the other question.
+    //
+    // UNGATED, deliberately, per the AGENTS.md rule for applicationEventBus
+    // ("gate at install time by choosing which plugins are allowed, not by
+    // trusting the bus") - but this is the first WRITE surface with that
+    // property: any installed plugin can read and rewrite any file inside the
+    // selected project. The corresponding line in the api KDoc (boss-plugin-api
+    // repo) lands with the next api bump; it is stated here now so the host
+    // never ships the surface without the caveat somewhere in-tree.
     override val projectSearchProvider: ProjectSearchProvider? by lazy {
         ContentSearchService(
             projectPathProvider = { projectPath },

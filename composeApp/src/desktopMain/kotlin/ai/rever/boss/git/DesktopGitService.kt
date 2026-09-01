@@ -24,6 +24,9 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.IOException
 import java.io.InputStreamReader
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.withLock
 import ai.rever.boss.plugin.git.GitOperationResult.Error as GitError
 import ai.rever.boss.plugin.git.GitOperationResult.Success as GitSuccess
@@ -71,6 +74,15 @@ actual object GitService {
 
     private var currentProjectPath: String? = null
     private var refreshJob: Job? = null
+
+    // How many git commands are in flight OR waiting on [gitCommandLock], and
+    // the boolean view of it. The lock is process-wide, so a slow index-write
+    // (a commit waiting on gpg pinentry now holds it for up to ten minutes)
+    // freezes every git command in every window; before this the only evidence
+    // was a log line. The UI can say "a git command is running".
+    private val gitCommandDepth = AtomicInteger(0)
+    private val _gitCommandsRunning = MutableStateFlow(false)
+    actual val gitCommandsRunning: StateFlow<Boolean> = _gitCommandsRunning.asStateFlow()
 
     init {
         // Check if git is available on system startup
@@ -176,10 +188,11 @@ actual object GitService {
         branchName: String,
         checkout: Boolean,
         windowId: String?,
+        projectPathOverride: String?,
     ): GitOperationResult =
         withContext(Dispatchers.IO) {
             val projectPath =
-                currentProjectPath
+                projectPathOverride ?: currentProjectPath
                     ?: return@withContext GitError("No project selected")
 
             // Validated like every other ref-taking command. Host-UI-only today, but
@@ -215,10 +228,10 @@ actual object GitService {
             }
         }
 
-    actual suspend fun pull(): GitOperationResult =
+    actual suspend fun pull(projectPathOverride: String?): GitOperationResult =
         withContext(Dispatchers.IO) {
             val projectPath =
-                currentProjectPath
+                projectPathOverride ?: currentProjectPath
                     ?: return@withContext GitError("No project selected")
 
             _isLoading.value = true
@@ -242,10 +255,10 @@ actual object GitService {
             }
         }
 
-    actual suspend fun push(): GitOperationResult =
+    actual suspend fun push(projectPathOverride: String?): GitOperationResult =
         withContext(Dispatchers.IO) {
             val projectPath =
-                currentProjectPath
+                projectPathOverride ?: currentProjectPath
                     ?: return@withContext GitError("No project selected")
 
             _isLoading.value = true
@@ -269,9 +282,9 @@ actual object GitService {
             }
         }
 
-    actual suspend fun getCreatePRUrl(): String? =
+    actual suspend fun getCreatePRUrl(projectPathOverride: String?): String? =
         withContext(Dispatchers.IO) {
-            val projectPath = currentProjectPath ?: return@withContext null
+            val projectPath = projectPathOverride ?: currentProjectPath ?: return@withContext null
             val branch = _currentBranch.value ?: return@withContext null
 
             try {
@@ -309,10 +322,13 @@ actual object GitService {
             }
         }
 
-    actual suspend fun merge(branchName: String): GitOperationResult =
+    actual suspend fun merge(
+        branchName: String,
+        projectPathOverride: String?,
+    ): GitOperationResult =
         withContext(Dispatchers.IO) {
             val projectPath =
-                currentProjectPath
+                projectPathOverride ?: currentProjectPath
                     ?: return@withContext GitError("No project selected")
 
             // The last ref-taking verbs without the guard - which contradicted the
@@ -339,10 +355,13 @@ actual object GitService {
             }
         }
 
-    actual suspend fun rebase(branchName: String): GitOperationResult =
+    actual suspend fun rebase(
+        branchName: String,
+        projectPathOverride: String?,
+    ): GitOperationResult =
         withContext(Dispatchers.IO) {
             val projectPath =
-                currentProjectPath
+                projectPathOverride ?: currentProjectPath
                     ?: return@withContext GitError("No project selected")
 
             // See merge(): validated like every other ref-taking command.
@@ -385,9 +404,9 @@ actual object GitService {
 
     // ===== File Status & Staging Implementation =====
 
-    actual suspend fun getStatus(): List<GitFileStatus> =
+    actual suspend fun getStatus(projectPathOverride: String?): List<GitFileStatus> =
         withContext(Dispatchers.IO) {
-            val projectPath = currentProjectPath ?: return@withContext emptyList()
+            val projectPath = projectPathOverride ?: currentProjectPath ?: return@withContext emptyList()
 
             try {
                 // Use porcelain v1 format for stable parsing
@@ -542,7 +561,7 @@ actual object GitService {
 
             val result = runGitCommand(projectPath, "add", "--", filePath)
             if (result.exitCode == 0) {
-                getStatus() // Refresh global status
+                getStatus(projectPath) // Refresh the repo that was written
                 refreshWindowState(windowId) // Refresh window-specific status
                 GitSuccess("Staged '$filePath'")
             } else {
@@ -562,7 +581,7 @@ actual object GitService {
 
             val result = runGitCommand(projectPath, "add", "-A")
             if (result.exitCode == 0) {
-                getStatus() // Refresh global status
+                getStatus(projectPath) // Refresh the repo that was written
                 refreshWindowState(windowId) // Refresh window-specific status
                 GitSuccess("Staged all changes")
             } else {
@@ -589,7 +608,7 @@ actual object GitService {
             val paths = stagedPathsFor(projectPath, filePath)
             val result = runGitCommand(projectPath, "restore", "--staged", "--", *paths.toTypedArray())
             if (result.exitCode == 0) {
-                getStatus() // Refresh global status
+                getStatus(projectPath) // Refresh the repo that was written
                 refreshWindowState(windowId) // Refresh window-specific status
                 GitSuccess("Unstaged '$filePath'")
             } else {
@@ -990,8 +1009,11 @@ actual object GitService {
 
     // ===== Terminal Integration Implementation =====
 
-    actual suspend fun pullInTerminal(windowId: String) {
-        val projectPath = currentProjectPath ?: return
+    actual suspend fun pullInTerminal(
+        windowId: String,
+        projectPathOverride: String?,
+    ) {
+        val projectPath = projectPathOverride ?: currentProjectPath ?: return
         GitTerminalEventBus.openGitTerminal(
             command = "git pull",
             workingDirectory = projectPath,
@@ -1000,8 +1022,11 @@ actual object GitService {
         )
     }
 
-    actual suspend fun pushInTerminal(windowId: String) {
-        val projectPath = currentProjectPath ?: return
+    actual suspend fun pushInTerminal(
+        windowId: String,
+        projectPathOverride: String?,
+    ) {
+        val projectPath = projectPathOverride ?: currentProjectPath ?: return
         GitTerminalEventBus.openGitTerminal(
             command = "git push -u origin HEAD",
             workingDirectory = projectPath,
@@ -1013,8 +1038,9 @@ actual object GitService {
     actual suspend fun mergeInTerminal(
         windowId: String,
         branchName: String,
+        projectPathOverride: String?,
     ) {
-        val projectPath = currentProjectPath ?: return
+        val projectPath = projectPathOverride ?: currentProjectPath ?: return
         // The branch name lands in a SHELL command string, so this is shell
         // injection, not just option injection, if an unvalidated name ever
         // reaches it. [isSafeRefName] is argv-safety only - git refnames
@@ -1037,8 +1063,9 @@ actual object GitService {
     actual suspend fun rebaseInTerminal(
         windowId: String,
         branchName: String,
+        projectPathOverride: String?,
     ) {
-        val projectPath = currentProjectPath ?: return
+        val projectPath = projectPathOverride ?: currentProjectPath ?: return
         // See mergeInTerminal: the name lands in a shell command string, so
         // isSafeRefName (argv-safety) is not enough on its own - shell-quote it.
         if (!isSafeRefName(branchName)) {
@@ -1204,17 +1231,83 @@ actual object GitService {
      * partial diff that looks complete - files silently missing, a hunk cut mid-way -
      * which reads as "that's the whole change". No diff is a visible failure; a
      * plausible partial diff is a lie.
+     *
+     * "Too large to render" comes back as ONE [GitDiffData] whose [GitDiffData.rawUnified]
+     * is the explanation: the unified view renders that text as-is, so the user sees why
+     * the tab is empty instead of reading blank as "no changes" - the exact ambiguity
+     * the refusal exists to avoid.
      */
-    private fun parseDiffSafely(result: GitCommandResult): List<GitDiffData> {
+    internal fun parseDiffSafely(
+        result: GitCommandResult,
+        label: String,
+    ): List<GitDiffData> {
         if (result.truncated) {
-            logger.warn(LogCategory.SYSTEM, "diff output truncated at the size cap; showing no diff")
-            return emptyList()
+            val capMb = MAX_GIT_OUTPUT_CHARS / (1024 * 1024)
+            logger.warn(
+                LogCategory.SYSTEM,
+                "diff output exceeded the $capMb MB cap; reporting too large to render",
+                mapOf("label" to label),
+            )
+            return listOf(
+                GitDiffData(
+                    path = label,
+                    rawUnified =
+                        "This diff is too large to render (the git output exceeded the $capMb MB cap). " +
+                            "Narrow the diff to fewer files to see the change.",
+                ),
+            )
         }
         return runCatching { UnifiedDiffParser.parse(result.output) }
             .getOrElse {
                 logger.warn(LogCategory.SYSTEM, "diff parse failed; showing no diff", error = it)
                 emptyList()
             }
+    }
+
+    /**
+     * Runs a diff command at [FULL_FILE_CONTEXT], and when the stream blows the output
+     * cap retries once with a small context before falling back to the too-large marker.
+     *
+     * The full context is what makes a diff tab readable (you can read around a change);
+     * its cost is that one huge file, or a big commit, can exceed the cap at full
+     * context. The small-context retry still shows the changes themselves - less to
+     * read around, but not blank - and it is the last stop: if even `-U3` exceeds the
+     * cap, the marker from [parseDiffSafely] is the honest answer.
+     */
+    // Guard clauses per failure mode, each with its own log line; see the same call on
+    // replacementIsReady in RetiredPlugins.kt.
+    @Suppress("ReturnCount")
+    private fun runDiffWithTruncationFallback(
+        label: String,
+        command: (contextFlag: String) -> GitCommandResult,
+    ): List<GitDiffData> {
+        val full = command("-U$FULL_FILE_CONTEXT")
+        if (full.exitCode != 0) {
+            logger.debug(LogCategory.SYSTEM, "diff failed", mapOf("label" to label, "error" to full.error))
+            return emptyList()
+        }
+        // One retry at the small context when the full-context stream blew the output cap.
+        val effective =
+            if (full.truncated) {
+                logger.info(
+                    LogCategory.SYSTEM,
+                    "diff exceeded the output cap at full context; retrying with a small context",
+                    mapOf("label" to label),
+                )
+                val small = command("-U$SMALL_FILE_CONTEXT")
+                if (small.exitCode != 0) {
+                    logger.debug(
+                        LogCategory.SYSTEM,
+                        "diff retry failed",
+                        mapOf("label" to label, "error" to small.error),
+                    )
+                    return emptyList()
+                }
+                small
+            } else {
+                full
+            }
+        return parseDiffSafely(effective, label)
     }
 
     actual suspend fun getFileDiff(
@@ -1229,23 +1322,13 @@ actual object GitService {
             // as disconnected fragments and there is no way to read around a
             // change. `git diff` clamps the context to the file, so this costs
             // nothing extra on a small one.
-            val context = "-U$FULL_FILE_CONTEXT"
-            val args =
-                if (staged) {
-                    listOf("diff") + DIFF_SHAPE_FLAGS + listOf(context, "--cached", "--", filePath)
-                } else {
-                    listOf("diff") + DIFF_SHAPE_FLAGS + listOf(context, "--", filePath)
-                }
-            val result = runGitCommand(projectPath, *args.toTypedArray())
-            if (result.exitCode != 0) {
-                logger.debug(
-                    LogCategory.SYSTEM,
-                    "getFileDiff failed",
-                    mapOf("file" to filePath, "error" to result.error),
-                )
-                return@withContext emptyList()
+            runDiffWithTruncationFallback(filePath) { context ->
+                val diffArgs = (mutableListOf("diff") + DIFF_SHAPE_FLAGS).toMutableList()
+                diffArgs += context
+                if (staged) diffArgs += "--cached"
+                diffArgs += listOf("--", filePath)
+                runGitCommand(projectPath, *diffArgs.toTypedArray())
             }
-            parseDiffSafely(result)
         }
 
     actual suspend fun getCommitDiff(
@@ -1268,19 +1351,12 @@ actual object GitService {
             }
             // -U matches getFileDiff/getRefDiff: the diff tab is a file viewer, so a
             // commit-scope tab rendered 3-line fragments while the others showed whole files.
-            val args = (mutableListOf("show") + DIFF_SHAPE_FLAGS).toMutableList()
-            args += listOf("-U$FULL_FILE_CONTEXT", "--format=", "--find-renames", commitHash, "--")
-            if (filePath != null) args += filePath
-            val result = runGitCommand(projectPath, *args.toTypedArray())
-            if (result.exitCode != 0) {
-                logger.debug(
-                    LogCategory.SYSTEM,
-                    "getCommitDiff failed",
-                    mapOf("commit" to commitHash, "error" to result.error),
-                )
-                return@withContext emptyList()
+            runDiffWithTruncationFallback(filePath ?: commitHash.take(8)) { context ->
+                val diffArgs = (mutableListOf("show") + DIFF_SHAPE_FLAGS).toMutableList()
+                diffArgs += listOf(context, "--format=", "--find-renames", commitHash, "--")
+                if (filePath != null) diffArgs += filePath
+                runGitCommand(projectPath, *diffArgs.toTypedArray())
             }
-            parseDiffSafely(result)
         }
 
     actual suspend fun getRefDiff(
@@ -1301,19 +1377,13 @@ actual object GitService {
                 )
                 return@withContext emptyList()
             }
-            val args = (mutableListOf("diff") + DIFF_SHAPE_FLAGS).toMutableList()
-            args += listOf("-U$FULL_FILE_CONTEXT", fromRef, toRef, "--")
-            if (filePath != null) args += filePath
-            val result = runGitCommand(projectPath, *args.toTypedArray())
-            if (result.exitCode != 0) {
-                logger.debug(
-                    LogCategory.SYSTEM,
-                    "getRefDiff failed",
-                    mapOf("from" to fromRef, "to" to toRef, "error" to result.error),
-                )
-                return@withContext emptyList()
+            val label = if (filePath != null) filePath else "$fromRef...$toRef"
+            runDiffWithTruncationFallback(label) { context ->
+                val diffArgs = (mutableListOf("diff") + DIFF_SHAPE_FLAGS).toMutableList()
+                diffArgs += listOf(context, fromRef, toRef, "--")
+                if (filePath != null) diffArgs += filePath
+                runGitCommand(projectPath, *diffArgs.toTypedArray())
             }
-            parseDiffSafely(result)
         }
 
     actual suspend fun getDiffFileNames(
@@ -1373,10 +1443,31 @@ actual object GitService {
             else -> null
         }
 
+    /**
+     * Counts the caller in [gitCommandDepth] for as long as it holds - or is
+     * queued for - [gitCommandLock], so [gitCommandsRunning] is true from the
+     * first command until the last one that queued behind it finishes.
+     */
+    private inline fun <T> withGitCommandSignal(crossinline block: () -> T): T {
+        val entering = gitCommandDepth.incrementAndGet() == 1
+        if (entering) _gitCommandsRunning.value = true
+        try {
+            return block()
+        } finally {
+            val remaining = gitCommandDepth.decrementAndGet()
+            if (remaining == 0) _gitCommandsRunning.value = false
+        }
+    }
+
     private fun runGitCommand(
         workingDir: String,
         vararg args: String,
-    ): GitCommandResult = gitCommandLock.withLock { runGitCommandLocked(workingDir, *args) }
+    ): GitCommandResult =
+        withGitCommandSignal {
+            gitCommandLock.withLock {
+                runGitCommandLocked(workingDir, *args)
+            }
+        }
 
     private fun runGitCommandLocked(
         workingDir: String,
@@ -1720,36 +1811,38 @@ actual object GitService {
         workingDir: String,
         vararg args: String,
     ): GitCommandResult =
-        gitCommandLock.withLock {
-            val process =
-                ProcessBuilder("git", *args)
-                    .directory(File(workingDir))
-                    .apply {
-                        environment().putAll(System.getenv())
-                        // Fail instead of prompting: there is no tty to prompt on.
-                        environment()["GIT_TERMINAL_PROMPT"] = "0"
-                        environment()["GIT_ASKPASS"] = ""
-                        environment()["SSH_ASKPASS"] = ""
-                    }.start()
+        withGitCommandSignal {
+            gitCommandLock.withLock {
+                val process =
+                    ProcessBuilder("git", *args)
+                        .directory(File(workingDir))
+                        .apply {
+                            environment().putAll(System.getenv())
+                            // Fail instead of prompting: there is no tty to prompt on.
+                            environment()["GIT_TERMINAL_PROMPT"] = "0"
+                            environment()["GIT_ASKPASS"] = ""
+                            environment()["SSH_ASKPASS"] = ""
+                        }.start()
 
-            // The child gets no input at all: a helper that READS stdin would
-            // block on the live pipe (see runGitCommandLocked, where the
-            // discard() equivalent was needed for the same reason).
-            process.outputStream.close()
+                // The child gets no input at all: a helper that READS stdin would
+                // block on the live pipe (see runGitCommandLocked, where the
+                // discard() equivalent was needed for the same reason).
+                process.outputStream.close()
 
-            // Both pipes are drained on their OWN threads, and the timeout wraps the
-            // whole interaction. Two bugs live in the obvious ordering:
-            //
-            // 1. `readText()` blocks until EOF, i.e. until the child exits. Reading
-            //    before `waitFor` made the timeout unreachable - it could only fire
-            //    after the process had already finished. A fetch hung on an
-            //    unreachable host blocked here forever, holding gitCommandLock, which
-            //    every git command in the app queues behind.
-            // 2. Draining stdout to EOF *before* touching stderr deadlocks whenever
-            //    the child fills the stderr pipe buffer (~64KB): it blocks writing
-            //    stderr, so it never closes stdout, so we never stop reading. git
-            //    fetch writes progress to stderr, so this needed no network fault.
-            runProcessBounded(process, REMOTE_GIT_TIMEOUT_SECONDS, args, workingDir)
+                // Both pipes are drained on their OWN threads, and the timeout wraps the
+                // whole interaction. Two bugs live in the obvious ordering:
+                //
+                // 1. `readText()` blocks until EOF, i.e. until the child exits. Reading
+                //    before `waitFor` made the timeout unreachable - it could only fire
+                //    after the process had already finished. A fetch hung on an
+                //    unreachable host blocked here forever, holding gitCommandLock, which
+                //    every git command in the app queues behind.
+                // 2. Draining stdout to EOF *before* touching stderr deadlocks whenever
+                //    the child fills the stderr pipe buffer (~64KB): it blocks writing
+                //    stderr, so it never closes stdout, so we never stop reading. git
+                //    fetch writes progress to stderr, so this needed no network fault.
+                runProcessBounded(process, REMOTE_GIT_TIMEOUT_SECONDS, args, workingDir)
+            }
         }
 
     /** How long a remote git command may hold the git lock before it is killed. */
@@ -1793,18 +1886,22 @@ actual object GitService {
     ): GitCommandResult {
         val outBuf = StringBuilder()
         val errBuf = StringBuilder()
-        val outReader = drainAsync(process.inputStream, outBuf)
-        val errReader = drainAsync(process.errorStream, errBuf)
-        val finished = process.waitFor(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS)
+        val outDropped = AtomicBoolean(false)
+        val outReader = drainAsync(process.inputStream, outBuf, outDropped)
+        val errReader = drainAsync(process.errorStream, errBuf, outDropped)
+        val finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
         if (!finished) {
             process.destroyForcibly()
-            process.waitFor(STREAM_DRAIN_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+            process.waitFor(STREAM_DRAIN_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         }
         outReader.join(STREAM_DRAIN_TIMEOUT_SECONDS * 1000)
         errReader.join(STREAM_DRAIN_TIMEOUT_SECONDS * 1000)
         val output = synchronized(outBuf) { outBuf.toString() }
         val error = synchronized(errBuf) { errBuf.toString() }
-        val truncated = output.length >= MAX_GIT_OUTPUT_CHARS
+        // Set where bytes were actually dropped (drainAsync), not inferred from
+        // the length: output of EXACTLY the cap is complete, and the consequence
+        // of a false positive is refusing the whole diff.
+        val truncated = outDropped.get()
         if (truncated) {
             logger.warn(
                 LogCategory.SYSTEM,
@@ -1878,6 +1975,7 @@ actual object GitService {
     private fun drainAsync(
         stream: java.io.InputStream,
         sink: StringBuilder,
+        dropped: java.util.concurrent.atomic.AtomicBoolean,
     ): Thread =
         Thread {
             runCatching {
@@ -1891,12 +1989,16 @@ actual object GitService {
                         // all - while holding gitCommandLock - risks an OOM that takes the
                         // app down. Past the cap we keep reading (so the child never blocks
                         // on a full pipe) but stop appending; the result is flagged
-                        // truncated and the diff getters refuse it rather than rendering
-                        // a partial diff that looks complete.
+                        // truncated (where the drop happens, not inferred from length)
+                        // and the diff getters refuse it rather than rendering a partial
+                        // diff that looks complete.
                         synchronized(sink) {
                             if (sink.length < MAX_GIT_OUTPUT_CHARS) {
                                 val room = MAX_GIT_OUTPUT_CHARS - sink.length
+                                if (n > room) dropped.set(true)
                                 sink.appendRange(buf, 0, minOf(n, room))
+                            } else {
+                                dropped.set(true)
                             }
                         }
                     }
@@ -2376,6 +2478,9 @@ actual object GitService {
  * patch. Git clamps this to the file's length, so a small file costs nothing.
  */
 private const val FULL_FILE_CONTEXT = 100_000
+
+// The retry context for a diff that blew the output cap at full context.
+private const val SMALL_FILE_CONTEXT = 3
 
 // Pins the diff header shape against a user's personal gitconfig. `diff.noprefix`,
 // `diff.mnemonicPrefix`, `color.diff=always` and `diff.external` all reshape the

@@ -429,13 +429,20 @@ internal fun createTabFromWorkspaceConfig(
 
         DiffTabType.typeId -> {
             // Only file diffs are persisted (see WorkspaceExtractor); restore as
-            // a working-tree diff of that file.
-            DiffTabInfo.create(
-                filePath =
-                    tabConfig.filePath?.let {
-                        WorkspacePlaceholders.processPlaceholders(it, resolvedProjectPath, null)
-                    } ?: "",
-            )
+            // a working-tree diff of that file. A blank filePath (corrupt or
+            // hand-edited layout) yields no tab: a diff tab with no scope can
+            // never show anything, and the composer branch below and the
+            // extractor (which refuses to PERSIST a blank path) already agree
+            // on "no scope, no tab".
+            val processedPath =
+                tabConfig.filePath?.let {
+                    WorkspacePlaceholders.processPlaceholders(it, resolvedProjectPath, null)
+                }
+            if (processedPath.isNullOrBlank()) {
+                null
+            } else {
+                DiffTabInfo.create(filePath = processedPath)
+            }
         }
 
         JupyterTabInfo.TYPE_ID -> {

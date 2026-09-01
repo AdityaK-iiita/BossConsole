@@ -1,6 +1,10 @@
 package ai.rever.boss.search
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
@@ -545,5 +549,45 @@ class ContentSearchServiceTest {
         val paths = service.searchInProject(query = "unsavedNeedle").map { it.path }
 
         assertEquals(listOf("top.kt"), paths, "the live buffer's content was not searched")
+    }
+
+    @Test
+    fun `a cancelling caller unwinds a catastrophic-backtracking regex instead of pinning the thread`(
+        @TempDir dir: File,
+    ) {
+        // The security control this class exists for: [InterruptibleText] re-checks
+        // the CALLER'S job on every character read, so `(a+)+$` against a long line
+        // - catastrophic backtracking in the non-interruptible Java matcher - must
+        // unwind on cancel rather than pinning a Dispatchers.IO thread (and with it
+        // every git/search behind the shared pools). Pinned the same way the
+        // isSafeRefName guard is pinned: a check that rots silently is worse than
+        // none, and only a test can prove it still trips.
+        // The trailing 'b' is what makes it catastrophic: the run of 'a's matches,
+        // the '$' then fails at the 'b', and the matcher backtracks exponentially.
+        // A pure 'a' line would simply match at the end and finish in milliseconds,
+        // proving nothing.
+        runBlocking {
+            File(dir, "long.kt").writeText("a".repeat(40_000) + "b\n")
+            val service = ContentSearchService(projectPathProvider = { dir.absolutePath })
+
+            val finished: Boolean? =
+                withTimeoutOrNull(20_000L) {
+                    val job: Job =
+                        launch(Dispatchers.IO) {
+                            service.searchInProject(query = "(a+)+\$", isRegex = true)
+                        }
+                    // Let the matcher start spinning before the cancel lands.
+                    kotlinx.coroutines.delay(1_000)
+                    job.cancel()
+                    job.join()
+                    true
+                }
+
+            assertTrue(
+                finished == true,
+                "the cancel did not unwind the wedged matcher within 20s - the check inside the " +
+                    "character stream has stopped working",
+            )
+        }
     }
 }

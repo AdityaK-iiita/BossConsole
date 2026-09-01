@@ -3,6 +3,7 @@
   <ManuallySuppressedIssues/>
   <CurrentIssues>
     <ID>CyclomaticComplexMethod:UnifiedDiffParser.kt$UnifiedDiffParser$internal fun cUnquote(p: String): String</ID>
+    <ID>LongParameterList:HomeToolCatalog.kt$HomeToolCatalog$( tabTypes: List&lt;HomeTabTypeInput&gt;, panels: List&lt;HomePanelInput&gt;, storeCatalogue: List&lt;HomeStorePluginInput&gt;, installedPluginIds: Set&lt;String&gt;, access: RegistryAccess, installedVersionOf: (String) -&gt; String? = { null }, )</ID>
     <ID>LongParameterList:ContentSearchService.kt$EditorBufferBridge$( path: String, startLine: Int, startCol: Int, endLine: Int, endCol: Int, newText: String, expectedVersion: Long, )</ID>
     <ID>ReturnCount:ContentSearchService.kt$ContentSearchService$internal fun resolveFile( rawPath: String, projectPath: String, ): File?</ID>
     <ID>SwallowedException:ContentSearchService.kt$ContentSearchService$e: java.nio.file.AtomicMoveNotSupportedException</ID>
@@ -22,6 +23,7 @@
     <ID>LoopWithTooManyJumpStatements:DesktopGitService.kt$GitService$for</ID>
     <ID>LoopWithTooManyJumpStatements:UnifiedDiffParser.kt$UnifiedDiffParser$for</ID>
     <ID>MaxLineLength:BufferEditRangeTest.kt$BufferEditRangeTest$assertEquals("y", text.substring(offsetOf(lines, r.startLine, r.startCol), offsetOf(lines, r.endLine, r.endCol)))</ID>
+    <ID>MaxLineLength:InstalledPluginVersionDesktop.kt$internal actual fun installedPluginVersionOf(pluginId: String): String?</ID>
     <ID>MaxLineLength:ContentSearchService.kt$ContentSearchService$cacheKey(projectPath, query, pathPattern, excludePattern, isRegex, caseSensitive, wholeWord, file.absolutePath)</ID>
     <ID>MaxLineLength:EditorAPIAccess.kt$EditorAPIAccess$/** Snapshot of the live buffer for [path], or null when the file has no open buffer (or the plugin predates the method). */</ID>
     <ID>MaxLineLength:UnifiedDiffParser.kt$UnifiedDiffParser.HunkBuilder$DiffLine(DiffLineKind.CONTEXT, text, oldLine = o.takeIf { o &gt; 0 }, newLine = n.takeIf { n &gt; 0 })</ID>
@@ -1209,6 +1211,7 @@
     <ID>ReturnCount:WorkspacePlaceholders.kt$WorkspacePlaceholders$private fun getGitRemoteUrl(projectPath: String): String</ID>
     <ID>SpreadOperator:CrashHandler.kt$CrashHandler$(javaBin, *getRestartArgs())</ID>
     <ID>SpreadOperator:DesktopGitService.kt$GitService$(projectPath, *args.toTypedArray())</ID>
+    <ID>SpreadOperator:DesktopGitService.kt$GitService$(projectPath, *diffArgs.toTypedArray())</ID>
     <ID>SpreadOperator:FilePickerProviderFactory.kt$DesktopFilePickerProvider$( filters.joinToString(", ") { "*.$it" }, *filters.toTypedArray(), )</ID>
     <ID>ThrowsCount:UpdateInstaller.kt$UpdateInstaller$internal fun validateDownloadFile( downloadFile: File, expectedExtension: String, stagingDir: File = defaultStagingDir(), )</ID>
     <ID>ThrowsCount:UpdatePathValidator.kt$UpdatePathValidator$fun validatePath( path: String, description: String, )</ID>
@@ -1866,9 +1869,11 @@
     <ID>PackageNaming:SplitDirectionTest.kt$package ai.rever.boss.components.window_panel</ID>
     <ID>PackageNaming:DiffTabMatch.kt$package ai.rever.boss.components.window_panel</ID>
     <ID>PackageNaming:DiffTabMatchTest.kt$package ai.rever.boss.components.window_panel</ID>
+    <ID>LongParameterList:ContentSearchService.kt$ContentSearchService$( file: File, projectRoot: String, regex: Regex, replacement: String, isRegex: Boolean, dryRun: Boolean, isCancelled: () -> Boolean, )</ID>
     <ID>LongParameterList:ContentSearchService.kt$ContentSearchService$( file: File, regex: Regex, replacement: String, isRegex: Boolean, dryRun: Boolean, isCancelled: () -> Boolean, )</ID>
     <ID>LongParameterList:ContentSearchService.kt$ContentSearchService$( file: File, text: String, version: Long, regex: Regex, replacement: String, isRegex: Boolean, dryRun: Boolean, isCancelled: () -> Boolean, )</ID>
     <ID>ReturnCount:ContentSearchService.kt$ContentSearchService$private suspend fun replaceInOneFile( file: File, regex: Regex, replacement: String, isRegex: Boolean, dryRun: Boolean, isCancelled: () -> Boolean, ): FileReplaceResult</ID>
+    <ID>ReturnCount:ContentSearchService.kt$ContentSearchService$private suspend fun replaceInOneFile( file: File, projectRoot: String, regex: Regex, replacement: String, isRegex: Boolean, dryRun: Boolean, isCancelled: () -&gt; Boolean, ): FileReplaceResult</ID>
     <ID>ReturnCount:ContentSearchService.kt$ContentSearchService$private suspend fun replaceInBuffer( file: File, text: String, version: Long, regex: Regex, replacement: String, isRegex: Boolean, dryRun: Boolean, isCancelled: () -> Boolean, ): FileReplaceResult</ID>
   </CurrentIssues>
 </SmellBaseline>

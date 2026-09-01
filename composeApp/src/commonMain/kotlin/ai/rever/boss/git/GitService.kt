@@ -59,6 +59,16 @@ expect object GitService {
     val isLoading: StateFlow<Boolean>
 
     /**
+     * True while ANY git command is running or queued on the process-wide git
+     * lock - all windows, all repos, including status polls. [isLoading] tracks
+     * one operation's own button state; this is what the user needs when a
+     * DIFFERENT window's slow command (an index write now holds the lock for up
+     * to ten minutes) freezes every git read: "a git command is running",
+     * rather than an unexplained blank.
+     */
+    val gitCommandsRunning: StateFlow<Boolean>
+
+    /**
      * Last error message, if any.
      */
     val lastError: StateFlow<String?>
@@ -102,45 +112,57 @@ expect object GitService {
         branchName: String,
         checkout: Boolean = true,
         windowId: String? = null,
+        projectPathOverride: String? = null,
     ): GitOperationResult
 
     /**
      * Pull changes from remote.
      *
+     * @param projectPathOverride The repo to run in (the caller's window's project).
      * @return Result indicating success or failure
      */
-    suspend fun pull(): GitOperationResult
+    suspend fun pull(projectPathOverride: String? = null): GitOperationResult
 
     /**
      * Push changes to remote.
      *
+     * @param projectPathOverride The repo to run in (the caller's window's project).
      * @return Result indicating success or failure
      */
-    suspend fun push(): GitOperationResult
+    suspend fun push(projectPathOverride: String? = null): GitOperationResult
 
     /**
      * Get the URL for creating a pull request in the browser.
      * Returns the GitHub/GitLab PR creation URL based on the remote origin.
      *
+     * @param projectPathOverride The repo to read the remote from (the caller's window's project).
      * @return The PR creation URL, or null if not a supported remote
      */
-    suspend fun getCreatePRUrl(): String?
+    suspend fun getCreatePRUrl(projectPathOverride: String? = null): String?
 
     /**
      * Merge a branch into the current branch.
      *
      * @param branchName The branch to merge into current
+     * @param projectPathOverride The repo to merge in (the caller's window's project).
      * @return Result indicating success or failure
      */
-    suspend fun merge(branchName: String): GitOperationResult
+    suspend fun merge(
+        branchName: String,
+        projectPathOverride: String? = null,
+    ): GitOperationResult
 
     /**
      * Rebase current branch onto another branch.
      *
      * @param branchName The branch to rebase onto
+     * @param projectPathOverride The repo to rebase in (the caller's window's project).
      * @return Result indicating success or failure
      */
-    suspend fun rebase(branchName: String): GitOperationResult
+    suspend fun rebase(
+        branchName: String,
+        projectPathOverride: String? = null,
+    ): GitOperationResult
 
     /**
      * Clear Git state (when no project is selected).
@@ -157,9 +179,10 @@ expect object GitService {
     /**
      * Get current file status (refreshes the fileStatus StateFlow).
      *
+     * @param projectPathOverride The repo to read (null: the global current project).
      * @return List of files with their status
      */
-    suspend fun getStatus(): List<GitFileStatus>
+    suspend fun getStatus(projectPathOverride: String? = null): List<GitFileStatus>
 
     /**
      * Stage a file for commit.
@@ -349,14 +372,20 @@ expect object GitService {
      *
      * @param windowId The window ID for per-window terminal isolation (Issue #498)
      */
-    suspend fun pullInTerminal(windowId: String)
+    suspend fun pullInTerminal(
+        windowId: String,
+        projectPathOverride: String? = null,
+    )
 
     /**
      * Run git push in the terminal (for real-time output).
      *
      * @param windowId The window ID for per-window terminal isolation (Issue #498)
      */
-    suspend fun pushInTerminal(windowId: String)
+    suspend fun pushInTerminal(
+        windowId: String,
+        projectPathOverride: String? = null,
+    )
 
     /**
      * Run git merge in the terminal (for real-time output).
@@ -367,6 +396,7 @@ expect object GitService {
     suspend fun mergeInTerminal(
         windowId: String,
         branchName: String,
+        projectPathOverride: String? = null,
     )
 
     /**
@@ -378,6 +408,7 @@ expect object GitService {
     suspend fun rebaseInTerminal(
         windowId: String,
         branchName: String,
+        projectPathOverride: String? = null,
     )
 
     /**

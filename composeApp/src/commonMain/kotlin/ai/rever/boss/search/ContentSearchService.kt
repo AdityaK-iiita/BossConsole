@@ -13,6 +13,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.nio.file.Files
 
 /**
  * Host implementation of the plugin-facing [ProjectSearchProvider] (boss-plugin-api 1.0.87):
@@ -93,6 +94,13 @@ class ContentSearchService(
                     )
                     return emptyList()
                 }
+        // The open-tab set is Compose snapshot state (SplitView's _rootNode).
+        // Snapshot it on Main, where the snapshot lives, BEFORE the scan
+        // drops to IO: a background read can observe a different snapshot
+        // than the UI is showing (docs/THREADING.md is direct about which
+        // dispatcher owns UI state), and the set is computed once per search
+        // anyway. The canonicalise work stays on IO.
+        val rawOpenPaths = withContext(Dispatchers.Main) { openEditorPathsProvider() }
         return withContext(Dispatchers.IO) {
             // The cancellation check the scan hands to the matcher: a caller-
             // supplied pattern can wedge a thread (see [InterruptibleText]), and
@@ -101,7 +109,7 @@ class ContentSearchService(
             val isCancelled = { job != null && !job.isActive }
             val results = mutableListOf<FileMatch>()
             // Snapshotted once per search, not per file - the whole point.
-            val openPaths = openBufferLookupSet(projectPath)
+            val openPaths = openBufferLookupSet(projectPath, rawOpenPaths)
             for (file in walkProjectFiles(projectPath, pathPattern, excludePattern)) {
                 ensureActive()
                 if (results.size >= maxResults) break
@@ -118,9 +126,9 @@ class ContentSearchService(
                     } else {
                         null
                     }
-                val key =
-                    cacheKey(projectPath, query, pathPattern, excludePattern, isRegex, caseSensitive, wholeWord, file.absolutePath) +
-                        if (buffer != null) "|buf" else "|disk"
+                val cacheKeyArg =
+                    cacheKey(projectPath, query, pathPattern, excludePattern, isRegex, caseSensitive, wholeWord, file.absolutePath)
+                val key = cacheKeyArg + if (buffer != null) "|buf" else "|disk"
                 // The freshness stamp combines BOTH signals for an open file, because
                 // each alone has a blind spot:
                 // - mtime alone misses buffer edits (an unsaved edit does not touch it),
@@ -199,7 +207,7 @@ class ContentSearchService(
                     if (file == null) {
                         FileReplaceResult(rawPath, 0, "outside the project")
                     } else {
-                        replaceInOneFile(file, regex, replacement, isRegex, dryRun, isCancelled)
+                        replaceInOneFile(file, projectPath, regex, replacement, isRegex, dryRun, isCancelled)
                     }
                 if (result.error == null && result.replacements > 0) {
                     total += result.replacements
@@ -279,21 +287,43 @@ class ContentSearchService(
      * canonical, and re-expressed under the raw root when the roots differ. O(open
      * tabs), so the cost is a handful of canonicalise calls per search.
      */
-    private fun openBufferLookupSet(projectPath: String): Set<String>? {
-        val raw = openEditorPathsProvider() ?: return null
-        val root = File(projectPath).absolutePath.trimEnd(File.separatorChar)
+    private fun openBufferLookupSet(
+        projectPath: String,
+        raw: Set<String>?,
+    ): Set<String>? {
+        if (raw == null) return null
+        return raw
+            .map { if (File(it).isAbsolute) File(it) else File(projectPath, it) }
+            .flatMap { bufferPathSpellings(it, projectPath) }
+            .toHashSet()
+    }
+
+    /**
+     * Every spelling a live buffer for [file] can be registered under, given the
+     * project root the walk runs under: the walk's absolute path, the canonical
+     * path, and the canonical path re-expressed under the walk's raw root when
+     * the two differ (a project under /tmp is really /private/tmp on macOS -
+     * the same mismatch [resolveFile] documents).
+     *
+     * Shared by the search side ([openBufferLookupSet], a set over all open tabs)
+     * and the replace side (one file at a time): the tab can hold ANY of the
+     * three spellings, and the replace path used to ask under one only. Missing
+     * the buffer there meant a disk write under the user's open, unsaved tab -
+     * clobbered by the next save.
+     */
+    private fun bufferPathSpellings(
+        file: File,
+        projectPath: String,
+    ): List<String> {
+        val abs = file.absolutePath
+        val canon = canonicalOrPath(file)
+        val out = linkedSetOf(abs, canon)
+        val root = projectPath.trimEnd(File.separatorChar)
         val rootCanon = canonicalOrPath(File(projectPath)).trimEnd(File.separatorChar)
-        val out = HashSet<String>(raw.size * 3 + 1)
-        for (p in raw) {
-            val abs = if (File(p).isAbsolute) File(p).path else File(projectPath, p).path
-            out.add(abs)
-            val canon = canonicalOrPath(File(abs))
-            out.add(canon)
-            if (root != rootCanon && canon.startsWith(rootCanon + File.separatorChar)) {
-                out.add(root + canon.removePrefix(rootCanon))
-            }
+        if (root != rootCanon && canon.startsWith(rootCanon + File.separatorChar)) {
+            out.add(root + canon.removePrefix(rootCanon))
         }
-        return out
+        return out.toList()
     }
 
     private fun cacheKey(
@@ -490,6 +520,7 @@ class ContentSearchService(
 
     private suspend fun replaceInOneFile(
         file: File,
+        projectRoot: String,
         regex: Regex,
         replacement: String,
         isRegex: Boolean,
@@ -500,8 +531,10 @@ class ContentSearchService(
         if (file.length() > MAX_FILE_SIZE) return FileReplaceResult(file.path, 0, "file too large")
 
         return try {
-            // Open buffers go through the editor's undoable path.
-            val buffer = bufferBridge.readBuffer(file.absolutePath)
+            // Open buffers go through the editor's undoable path - under every
+            // spelling the tab may hold the file (see bufferPathSpellings).
+            val buffer =
+                bufferPathSpellings(file, projectRoot).firstNotNullOfOrNull { bufferBridge.readBuffer(it) }
             if (buffer != null) {
                 replaceInBuffer(file, buffer.content, buffer.version, regex, replacement, isRegex, dryRun, isCancelled)
             } else {
@@ -617,14 +650,36 @@ class ContentSearchService(
             }
         } catch (e: java.nio.file.AtomicMoveNotSupportedException) {
             // Rare (a temp on a different filesystem); fall back to a plain replace.
-            tmp.copyTo(file, overwrite = true)
+            // A plain `tmp.copyTo(file, overwrite = true)` would TRUNCATE the target
+            // first - the exact torn state the atomic move exists to prevent, in this
+            // rarer case. So move the target aside, move the temp into place, and
+            // restore the aside if the second move fails. If even the first move
+            // fails (a locked target), FAIL the replace: risking the original
+            // content is worse than one file reported as "replace failed".
+            val aside = File(file.parentFile, file.name + ".aside-" + System.nanoTime())
+            if (!file.renameTo(aside)) {
+                tmp.delete()
+                throw java.io.IOException("Could not move \"$file\" aside for the non-atomic replace")
+            }
+            try {
+                Files.move(tmp.toPath(), file.toPath())
+            } catch (moveFailed: java.io.IOException) {
+                if (!aside.renameTo(file)) {
+                    logger.error(
+                        LogCategory.FILE,
+                        "non-atomic replace failed and the target could not be restored; " +
+                            "the old content is at ${aside.path}",
+                    )
+                }
+                throw moveFailed
+            }
+            aside.delete()
             perms?.let {
                 runCatching {
                     java.nio.file.Files
                         .setPosixFilePermissions(file.toPath(), it)
                 }
             }
-            tmp.delete()
         } finally {
             tmp.delete()
         }
