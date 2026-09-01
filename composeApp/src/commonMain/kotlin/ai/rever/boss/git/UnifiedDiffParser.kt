@@ -177,13 +177,13 @@ object UnifiedDiffParser {
                 '+' -> {
                     val n = newLineNo
                     newLineNo++
-                    lines.add(DiffLine(DiffLineKind.ADDED, line.substring(1), oldLine = null, newLine = n.takeIf { n > 0 }))
+                    lines.add(DiffLine(line.substring(1), DiffLineKind.ADDED, oldLine = null, newLine = n.takeIf { n > 0 }))
                 }
 
                 '-' -> {
                     val o = oldLineNo
                     oldLineNo++
-                    lines.add(DiffLine(DiffLineKind.REMOVED, line.substring(1), oldLine = o.takeIf { o > 0 }, newLine = null))
+                    lines.add(DiffLine(line.substring(1), DiffLineKind.REMOVED, oldLine = o.takeIf { o > 0 }, newLine = null))
                 }
 
                 else -> {
@@ -192,7 +192,7 @@ object UnifiedDiffParser {
                     val o = oldLineNo.also { oldLineNo++ }
                     val n = newLineNo.also { newLineNo++ }
                     lines.add(
-                        DiffLine(DiffLineKind.CONTEXT, text, oldLine = o.takeIf { o > 0 }, newLine = n.takeIf { n > 0 }),
+                        DiffLine(text, DiffLineKind.CONTEXT, oldLine = o.takeIf { o > 0 }, newLine = n.takeIf { n > 0 }),
                     )
                 }
             }

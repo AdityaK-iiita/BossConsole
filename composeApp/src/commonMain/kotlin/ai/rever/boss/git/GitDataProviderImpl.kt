@@ -338,10 +338,10 @@ class GitDataProviderImpl(
 
     override fun openDiff(
         filePath: String,
+        windowId: String,
         staged: Boolean,
         fromRef: String?,
         toRef: String?,
-        windowId: String,
     ) {
         val target = windowId.ifBlank { windowIdProvider().orEmpty() }
         if (target.isBlank()) {

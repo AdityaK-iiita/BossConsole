@@ -124,14 +124,14 @@ object EditorAPIAccess {
     fun observeChanges(path: String): kotlinx.coroutines.flow.Flow<BufferChange>? = getProvider()?.observeChanges(path)
 
     /** The focused editor document with its selection, or null. */
-    fun focusedDocument(): FocusedDocument? = getProvider()?.focusedDocument()
+    suspend fun focusedDocument(): FocusedDocument? = getProvider()?.focusedDocument()
 
     /** Open (or focus) an editor tab for [path], optionally at [line]. */
-    fun openEditor(
+    suspend fun openEditor(
         path: String,
         line: Int? = null,
     ): Boolean = getProvider()?.openEditor(path, line) ?: false
 
     /** Open [path] in a split pane of the current editor tab. */
-    fun openSplit(path: String): Boolean = getProvider()?.openSplit(path) ?: false
+    suspend fun openSplit(path: String): Boolean = getProvider()?.openSplit(path) ?: false
 }
