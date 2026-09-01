@@ -53,17 +53,8 @@ class ContentSearchService(
             override fun removeEldestEntry(eldest: Map.Entry<String, CacheEntry>): Boolean = size > MAX_CACHE_ENTRIES
         }
 
-    override suspend fun searchInProject(
-        query: String,
-        pathPattern: String?,
-        isRegex: Boolean,
-        caseSensitive: Boolean,
-        wholeWord: Boolean,
-        maxResults: Int,
-    ): List<FileMatch> = searchInProject(query, pathPattern, null, isRegex, caseSensitive, wholeWord, maxResults)
-
     /**
-     * The one search path; the overload above is this with no exclude.
+     * The one search path.
      *
      * [excludePattern] is applied during the WALK, so [maxResults] caps matches the
      * caller wants rather than matches it is about to discard. Filtering the returned
@@ -156,9 +147,9 @@ class ContentSearchService(
         wholeWord: Boolean,
         dryRun: Boolean,
     ): ReplaceSummary {
-        val projectPath = projectPathProvider() ?: return ReplaceSummary(0, 0, emptyList())
-        if (query.isEmpty() || files.isEmpty()) return ReplaceSummary(0, 0, emptyList())
-        val regex = buildRegex(query, isRegex, caseSensitive, wholeWord) ?: return ReplaceSummary(0, 0, emptyList())
+        val projectPath = projectPathProvider() ?: return ReplaceSummary(0, 0, emptyList(), dryRun)
+        if (query.isEmpty() || files.isEmpty()) return ReplaceSummary(0, 0, emptyList(), dryRun)
+        val regex = buildRegex(query, isRegex, caseSensitive, wholeWord) ?: return ReplaceSummary(0, 0, emptyList(), dryRun)
 
         return withContext(Dispatchers.IO) {
             var total = 0
@@ -179,7 +170,7 @@ class ContentSearchService(
                 }
                 perFile.add(result)
             }
-            ReplaceSummary(filesReplaced, total, perFile)
+            ReplaceSummary(filesReplaced, total, perFile, dryRun)
         }
     }
 
