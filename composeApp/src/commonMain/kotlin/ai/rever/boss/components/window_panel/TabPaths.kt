@@ -35,14 +35,19 @@ internal object TabPaths {
      *
      * Internal so the two deliberate choices in here are pinnable: backslash is only
      * a separator on Windows, and a leading `//` (UNC host) survives the collapse.
-     * On POSIX [normalize] reaches this only when canonicalPath throws, so the tests
-     * exercise it directly.
+     * On POSIX [normalize] reaches this only when canonicalPath throws, so the
+     * tests exercise it directly. The separator is a parameter so the Windows
+     * branch is testable on the Linux/macOS runners too - with the default it is
+     * unreachable there (`File.separatorChar == '/'`).
      */
-    internal fun lexicalClean(path: String): String {
+    internal fun lexicalClean(
+        path: String,
+        separatorChar: Char = File.separatorChar,
+    ): String {
         // Backslash is a path separator on Windows but a LEGAL filename character on
         // macOS/Linux, so translating it unconditionally turned `a\b.kt` into `a/b.kt`
         // and could canonicalise onto a different real file (focusing the wrong tab).
-        val unified = if (File.separatorChar == '\\') path.replace('\\', '/') else path
+        val unified = if (separatorChar == '\\') path.replace('\\', '/') else path
         // Collapse repeated slashes, but keep a leading "//" - a Windows UNC path
         // (\\server\share) becomes //server/share, and flattening it to /server/share
         // makes two tabs on different servers compare equal.

@@ -450,13 +450,18 @@ actual object GitService {
         val workTreeChar = line[1]
         val pathPart = line.substring(3)
 
-        // Handle rename/copy with arrow
+        // Handle rename/copy with arrow. C-unquote afterwards (not before): with
+        // core.quotePath on (the default) git wraps a non-ASCII path in quotes
+        // and octal-escapes its bytes, and that token then fails to resolve
+        // when the panel hands it back as a pathspec (stage/discard/diffFile).
+        // Same decoder parseNameStatus uses - without it the two parsers
+        // report two spellings for the same file.
         val (path, originalPath) =
             if (pathPart.contains(" -> ")) {
                 val parts = pathPart.split(" -> ")
-                parts[1] to parts[0]
+                UnifiedDiffParser.cUnquote(parts[1]) to UnifiedDiffParser.cUnquote(parts[0])
             } else {
-                pathPart to null
+                UnifiedDiffParser.cUnquote(pathPart) to null
             }
 
         val indexStatus = parseStatusChar(indexChar)
@@ -1010,16 +1015,19 @@ actual object GitService {
         branchName: String,
     ) {
         val projectPath = currentProjectPath ?: return
-        // The branch name is interpolated into a SHELL command string, so this is
-        // shell injection, not just option injection, if an unvalidated name ever
-        // reaches it. Host-UI-only today, with names git itself produced - which is
-        // exactly the property createBranch's guard says not to lean on.
+        // The branch name lands in a SHELL command string, so this is shell
+        // injection, not just option injection, if an unvalidated name ever
+        // reaches it. [isSafeRefName] is argv-safety only - git refnames
+        // legally contain `;`, `|`, `&`, `$` and backtick - so the value is
+        // shell-quoted as well. Host-UI-only today, with names git itself
+        // produced - which is exactly the property createBranch's guard says
+        // not to lean on.
         if (!isSafeRefName(branchName)) {
             logger.warn(LogCategory.SYSTEM, "mergeInTerminal refused an unsafe ref", mapOf("branch" to branchName))
             return
         }
         GitTerminalEventBus.openGitTerminal(
-            command = "git merge $branchName",
+            command = "git merge ${shellQuote(branchName)}",
             workingDirectory = projectPath,
             operationName = "Merge",
             sourceWindowId = windowId,
@@ -1031,13 +1039,14 @@ actual object GitService {
         branchName: String,
     ) {
         val projectPath = currentProjectPath ?: return
-        // See mergeInTerminal: the name lands in a shell command string.
+        // See mergeInTerminal: the name lands in a shell command string, so
+        // isSafeRefName (argv-safety) is not enough on its own - shell-quote it.
         if (!isSafeRefName(branchName)) {
             logger.warn(LogCategory.SYSTEM, "rebaseInTerminal refused an unsafe ref", mapOf("branch" to branchName))
             return
         }
         GitTerminalEventBus.openGitTerminal(
-            command = "git rebase $branchName",
+            command = "git rebase ${shellQuote(branchName)}",
             workingDirectory = projectPath,
             operationName = "Rebase",
             sourceWindowId = windowId,
@@ -1049,6 +1058,9 @@ actual object GitService {
         vararg args: String,
     ) {
         val projectPath = currentProjectPath ?: return
+        // Every argument is interpolated VERBATIM into a shell command string.
+        // There is no in-repo caller today; a future one must pass literal,
+        // trusted arguments only - or shell-quote them, as mergeInTerminal does.
         val command = "git ${args.joinToString(" ")}"
         GitTerminalEventBus.openGitTerminal(
             command = command,
@@ -1376,7 +1388,22 @@ actual object GitService {
                 .apply {
                     // Inherit parent process environment for SSH/git credentials
                     environment().putAll(System.getenv())
+                    // Never interactive on this path: a credential prompt or a
+                    // hook reading stdin would otherwise hold gitCommandLock for
+                    // the whole bound. Same guard runRemoteGitCommand applies.
+                    environment()["GIT_TERMINAL_PROMPT"] = "0"
+                    // `--` blocks option injection, not pathspec magic: without
+                    // this a plugin-passed `:/` reaches `git restore -- :/`,
+                    // which discards the entire worktree. Every pathspec this
+                    // file passes is already a literal path, so nothing
+                    // regresses.
+                    environment()["GIT_LITERAL_PATHSPECS"] = "1"
                 }.start()
+        // The child gets no input at all: with a live stdin pipe, a hook or
+        // credential helper that READS it (rather than prompting on a tty)
+        // would block until the timeout while holding gitCommandLock.
+        // (Redirect.discard() does this, but is Java 9+ - this target is 8.)
+        process.outputStream.close()
 
         // Drained concurrently and bounded, for the reasons runRemoteGitCommand
         // spells out. This path had neither, and the index lock made that worse
@@ -1645,6 +1672,11 @@ actual object GitService {
      *
      * Pure and internal so [ai.rever.boss.git] tests can pin it - a check like
      * this is exactly the kind that rots silently.
+     *
+     * This is ARGV safety, not shell safety: git refnames legally contain `;`,
+     * `|`, `&`, `$` and backtick, all of which pass. The two callers that build
+     * a shell command string ([mergeInTerminal], [rebaseInTerminal]) therefore
+     * also pass the value through [shellQuote].
      */
     internal fun isSafeRefName(ref: String): Boolean {
         if (ref.isBlank()) return false
@@ -1654,6 +1686,18 @@ actual object GitService {
     }
 
     private const val MAX_REF_LENGTH = 255
+
+    /**
+     * Single-quotes a value for interpolation into a POSIX shell command
+     * string: `'` becomes `'\''` (end the quote, a literal quote, resume it).
+     *
+     * [mergeInTerminal] and [rebaseInTerminal] build their command this way,
+     * because `git check-ref-format --branch` accepts names carrying `;`, `|`,
+     * `&`, `$` and backtick, and those are live shell metacharacters in a
+     * command string. The result is what a user sees typed in the terminal
+     * pane, so the quoting is deliberate and visible, not hidden.
+     */
+    internal fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
     /**
      * A git command that talks to a REMOTE: bounded, and never interactive.
@@ -1687,6 +1731,11 @@ actual object GitService {
                         environment()["GIT_ASKPASS"] = ""
                         environment()["SSH_ASKPASS"] = ""
                     }.start()
+
+            // The child gets no input at all: a helper that READS stdin would
+            // block on the live pipe (see runGitCommandLocked, where the
+            // discard() equivalent was needed for the same reason).
+            process.outputStream.close()
 
             // Both pipes are drained on their OWN threads, and the timeout wraps the
             // whole interaction. Two bugs live in the obvious ordering:

@@ -24,6 +24,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import java.io.File
 
 /**
  * Implementation of GitDataProvider that wraps GitService and WindowGitState.
@@ -177,10 +178,10 @@ class GitDataProviderImpl(
                 ),
             )
         }
-        // Align the global project path unconditionally, so the write verbs
-        // (stage/commit/discard/cherry-pick/revert), which still resolve from it,
-        // operate on THIS window's repo rather than whichever window refreshed last.
-        // It is a bare assignment; the four-command probe below stays gated.
+        // Align the global project path unconditionally: it is still read by the
+        // verbs that carry no window override (openFile's fallback,
+        // getCurrentProjectPath's fallback), and it is a bare assignment -
+        // the four-command probe below stays gated.
         GitService.alignCurrentProjectPath(path)
 
         // `changed` covers a project switch. `lastProbedPath != path` covers
@@ -258,7 +259,12 @@ class GitDataProviderImpl(
         return GitService.checkout(ref, windowIdProvider(), windowProjectPath()).toData()
     }
 
-    override fun getCurrentProjectPath(): String? = GitService.getCurrentProjectPath()
+    // This window's path FIRST, the global as fallback: the global belongs to
+    // whichever window aligned it last, and with two windows on different
+    // projects a plugin resolving a relative path (the one this method
+    // exists for) would get the other window's repo. A provider with no
+    // window state has no window path, so the global IS the right answer there.
+    override fun getCurrentProjectPath(): String? = windowProjectPath() ?: GitService.getCurrentProjectPath()
 
     override fun openFile(
         filePath: String,
@@ -286,8 +292,11 @@ class GitDataProviderImpl(
             // Trim the separator rather than concatenating blindly: a project
             // path ending in "/" produced "…//file", which then failed to match
             // an already-open tab and opened a duplicate.
+            // [File.isAbsolute] rather than startsWith("/"): on Windows an
+            // absolute path is `C:\…` and the POSIX test would have glued the
+            // project path onto it.
             val fullPath =
-                if (filePath.startsWith("/")) filePath else "${projectPath.trimEnd('/')}/$filePath"
+                if (File(filePath).isAbsolute) filePath else "${projectPath.trimEnd('/')}/$filePath"
             FileEventBus.openFile(fullPath, sourceWindowId = windowId)
         }
     }

@@ -253,7 +253,18 @@ object UnifiedDiffParser {
         return cUnquote(raw).removePrefix(prefix)
     }
 
-    /** Splits `a/<old> b/<new>` into its two tokens, either of which may be quoted. */
+    /**
+     * Splits `a/<old> b/<new>` into its two tokens, either of which may be
+     * quoted.
+     *
+     * Known limit, deliberately left: the unquoted fallback is
+     * `lastIndexOf(" b/")`, and git does not quote a path merely for
+     * containing a space - so a directory literally named `b`
+     * (`diff --git a/x b/y b/x b/y`) splits at the wrong point, with no
+     * exception. It cannot be settled from the header alone; the
+     * `--- a/` / `+++ b/` lines just below the header would settle it, and
+     * anyone who needs certainty can parse `git diff --raw -z` instead.
+     */
     private fun splitSides(s: String): Pair<String, String>? {
         val t = s.trim()
         if (t.startsWith("\"")) {

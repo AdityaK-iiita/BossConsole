@@ -96,7 +96,7 @@ private fun extractSplitConfig(
     }
 
 /** The saved form of one open tab, or null for a tab that must not be persisted. */
-private fun extractTabConfig(
+internal fun extractTabConfig(
     tab: TabInfo,
     defaultWorkingDirectory: String,
 ): TabConfig? =
@@ -135,36 +135,11 @@ private fun extractTabConfig(
         }
 
         is DiffTabInfo -> {
-            // Only a plain UNSTAGED WORKING-TREE file diff is persisted, because
-            // that is the only scope restore can rebuild: TabConfig has no field
-            // for refs or for `staged`, and DiffTabInfo.create() defaults both.
-            //
-            // The guard used to be `filePath.isBlank()` alone, which let two
-            // scopes through and silently changed their meaning on restart: a
-            // range diff restricted to one file (fromRef+toRef+filePath all set)
-            // and a staged diff both came back as unstaged working-tree diffs of
-            // that path - same tab position, same title, different content.
-            // Dropping the tab is honest; rebuilding it as something else is not.
-            if (tab.filePath.isBlank() || tab.staged || tab.fromRef != null || tab.toRef != null) {
-                null
-            } else {
-                TabConfig(
-                    type = "diff",
-                    title = tab.title,
-                    filePath = tab.filePath,
-                )
-            }
+            extractDiffConfig(tab)
         }
 
         is ComposerTabInfo -> {
-            // The session id rides in filePath: TabConfig has no generic
-            // extra field, and session ids survive placeholder processing
-            // untouched (they contain no project tokens).
-            TabConfig(
-                type = "composer",
-                title = tab.title,
-                filePath = tab.sessionId,
-            )
+            extractComposerConfig(tab)
         }
 
         is JupyterTabInfo -> {
@@ -179,6 +154,14 @@ private fun extractTabConfig(
             // Plugin-constructed composer tabs arrive as the plugin's own
             // TabInfo class (the api jar filters the host's one out), but they
             // carry the session id as the tab id, so they persist the same way.
+            //
+            // There is deliberately NO diff branch here: DiffTabInfo lives in
+            // the same host-only source set, so a plugin cannot construct a
+            // host diff tab, and a custom tab claiming the "diff" type carries
+            // no scope fields (staged/fromRef/toRef) - persisting it would
+            // rebuild it on restore as an unstaged working-tree diff of its
+            // filePath, i.e. silently change its meaning, which the branch
+            // above refuses to do for host-constructed tabs.
             if (tab.typeId.typeId == "composer") {
                 TabConfig(
                     type = "composer",
@@ -193,3 +176,48 @@ private fun extractTabConfig(
             }
         }
     }
+
+/**
+ * The saved form of a host diff tab, or null for a scope restore cannot
+ * rebuild.
+ *
+ * Only a plain UNSTAGED WORKING-TREE file diff is persisted, because that is
+ * the only scope restore can rebuild: TabConfig has no field for refs or for
+ * `staged`, and DiffTabInfo.create() defaults both.
+ *
+ * The guard used to be `filePath.isBlank()` alone, which let two scopes
+ * through and silently changed their meaning on restart: a range diff
+ * restricted to one file (fromRef+toRef+filePath all set) and a staged diff
+ * both came back as unstaged working-tree diffs of that path - same tab
+ * position, same title, different content. Dropping the tab is honest;
+ * rebuilding it as something else is not.
+ */
+private fun extractDiffConfig(tab: DiffTabInfo): TabConfig? {
+    if (tab.filePath.isBlank() || tab.staged || tab.fromRef != null || tab.toRef != null) return null
+    return TabConfig(
+        type = "diff",
+        title = tab.title,
+        filePath = tab.filePath,
+    )
+}
+
+/**
+ * The saved form of a host composer tab, or null for a blank session id.
+ *
+ * The session id rides in filePath: TabConfig has no generic extra field,
+ * and session ids survive placeholder processing untouched (they contain no
+ * project tokens).
+ *
+ * A blank session id is dropped, agreeing with the restore side
+ * (WorkspaceApplier refuses to rebuild one): persisting it would save a tab
+ * that can never come back, and the saved layout would disagree with what
+ * the user sees.
+ */
+private fun extractComposerConfig(tab: ComposerTabInfo): TabConfig? {
+    if (tab.sessionId.isBlank()) return null
+    return TabConfig(
+        type = "composer",
+        title = tab.title,
+        filePath = tab.sessionId,
+    )
+}

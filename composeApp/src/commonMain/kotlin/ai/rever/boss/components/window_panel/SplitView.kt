@@ -1274,18 +1274,16 @@ class SplitViewState(
      * refs. A staged diff and a working-tree diff of one file are different
      * views and each gets its own tab, as in VS Code.
      */
-    private fun findPanelWithDiffTab(event: DiffOpenEvent): PanelTabMatch? {
-        val wanted = TabPaths.normalize(event.filePath)
-        return findPanelWithTabMatching { tab ->
+    private fun findPanelWithDiffTab(event: DiffOpenEvent): PanelTabMatch? =
+        findPanelWithTabMatching { tab ->
             tab is DiffTabInfo &&
-                TabPaths.normalize(tab.filePath) == wanted &&
-                tab.staged == event.staged &&
-                tab.fromRef == event.fromRef &&
-                tab.toRef == event.toRef
+                diffTabMatches(tab, event.filePath, event.staged, event.fromRef, event.toRef)
         }
-    }
 
     private fun findPanelWithEditorTab(filePath: String): PanelTabMatch? {
+        // A blank path never matches: normalize("") is "", so a blank query
+        // would focus the first Untitled editor tab.
+        if (filePath.isBlank()) return null
         val wanted = TabPaths.normalize(filePath)
         return findPanelWithTabMatching { tab ->
             tab is EditorTabInfo && TabPaths.normalize(tab.filePath) == wanted

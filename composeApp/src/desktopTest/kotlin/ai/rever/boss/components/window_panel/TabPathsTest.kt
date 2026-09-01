@@ -95,4 +95,21 @@ class TabPathsTest {
         assertEquals("//server/share/x", TabPaths.lexicalClean("//server/share//x"))
         assertNotEquals(TabPaths.lexicalClean("//server/share"), TabPaths.lexicalClean("/server/share"))
     }
+
+    @Test
+    fun `on the windows branch a backslash is a separator and a UNC path keeps its host`() {
+        // The separator is passed explicitly: on the Linux/macOS runners the
+        // default ('/') makes this branch unreachable.
+        assertEquals("/server/share/x", TabPaths.lexicalClean("\\server/share/x", '\\'))
+        assertEquals("//server/share/x", TabPaths.lexicalClean("\\\\server\\share\\x", '\\'))
+        assertNotEquals(
+            TabPaths.lexicalClean("\\\\server\\share", '\\'),
+            TabPaths.lexicalClean("\\server\\share", '\\'),
+        )
+    }
+
+    @Test
+    fun `on the posix branch a backslash stays a filename character`() {
+        assertEquals("/x/a\\bak.kt", TabPaths.lexicalClean("/x/a\\bak.kt", '/'))
+    }
 }

@@ -5,7 +5,11 @@ import ai.rever.boss.plugin.api.FileReplaceResult
 import ai.rever.boss.plugin.api.ProjectSearchProvider
 import ai.rever.boss.plugin.api.ReplaceSummary
 import ai.rever.boss.services.editor.EditorAPIAccess
+import ai.rever.boss.utils.logging.BossLogger
+import ai.rever.boss.utils.logging.LogCategory
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -43,6 +47,8 @@ class ContentSearchService(
     // the safe answer whenever the host cannot enumerate the open tabs.
     private val openEditorPathsProvider: () -> Set<String>? = { null },
 ) : ProjectSearchProvider {
+    private val logger = BossLogger.forComponent("ContentSearchService")
+
     // Access-ordered and self-evicting: at capacity the ELDEST entry is dropped, not
     // the whole map. The old wholesale clear() meant a project above the cap wiped the
     // cache on nearly every scanned file, so the repeat search this exists for hit on
@@ -74,8 +80,25 @@ class ContentSearchService(
         val projectPath = projectPathProvider() ?: return emptyList()
         if (query.isEmpty()) return emptyList()
 
-        val regex = buildRegex(query, isRegex, caseSensitive, wholeWord) ?: return emptyList()
+        val regex =
+            buildRegex(query, isRegex, caseSensitive, wholeWord)
+                ?: run {
+                    // A pattern the regex compiler rejects is a USER error (a half-typed
+                    // `foo(`), not "no matches" - say so, because the empty list is the
+                    // same shape an honest no-result returns.
+                    logger.warn(
+                        LogCategory.GENERAL,
+                        "search rejected: invalid regex pattern",
+                        mapOf("query" to query.take(120)),
+                    )
+                    return emptyList()
+                }
         return withContext(Dispatchers.IO) {
+            // The cancellation check the scan hands to the matcher: a caller-
+            // supplied pattern can wedge a thread (see [InterruptibleText]), and
+            // `ensureActive()` below only runs between files.
+            val job = coroutineContext[Job]
+            val isCancelled = { job != null && !job.isActive }
             val results = mutableListOf<FileMatch>()
             // Snapshotted once per search, not per file - the whole point.
             val openPaths = openBufferLookupSet(projectPath)
@@ -118,6 +141,7 @@ class ContentSearchService(
                             text = buffer?.content ?: readTextOrNull(file) ?: continue,
                             regex = regex,
                             projectRoot = File(projectPath),
+                            isCancelled = isCancelled,
                         )?.also { found ->
                             // Empty results are not cached: on a large project most files
                             // match nothing, and caching them all filled the map and tripped
@@ -151,9 +175,20 @@ class ContentSearchService(
         if (query.isEmpty() || files.isEmpty()) return ReplaceSummary(0, 0, emptyList(), dryRun)
         val regex =
             buildRegex(query, isRegex, caseSensitive, wholeWord)
-                ?: return ReplaceSummary(0, 0, emptyList(), dryRun)
+                ?: run {
+                    // Same reasoning as searchInProject: a bad pattern is an error the
+                    // caller should see, not a zero-replacement success.
+                    logger.warn(
+                        LogCategory.GENERAL,
+                        "replace rejected: invalid regex pattern",
+                        mapOf("query" to query.take(120)),
+                    )
+                    return ReplaceSummary(0, 0, emptyList(), dryRun)
+                }
 
         return withContext(Dispatchers.IO) {
+            val job = coroutineContext[Job]
+            val isCancelled = { job != null && !job.isActive }
             var total = 0
             var filesReplaced = 0
             val perFile = mutableListOf<FileReplaceResult>()
@@ -164,7 +199,7 @@ class ContentSearchService(
                     if (file == null) {
                         FileReplaceResult(rawPath, 0, "outside the project")
                     } else {
-                        replaceInOneFile(file, regex, replacement, isRegex, dryRun)
+                        replaceInOneFile(file, regex, replacement, isRegex, dryRun, isCancelled)
                     }
                 if (result.error == null && result.replacements > 0) {
                     total += result.replacements
@@ -374,15 +409,20 @@ class ContentSearchService(
         text: String,
         regex: Regex,
         projectRoot: File,
+        isCancelled: () -> Boolean,
     ): List<FileMatch>? {
         return try {
             val relative = file.relativeTo(projectRoot).path.replace('\\', '/')
             if ('\u0000' in text) return null
             val lineMap = LineMap(text)
             val matches = mutableListOf<FileMatch>()
+            // The matcher reads through [InterruptibleText] rather than the raw
+            // string, so a cancel lands inside a wedged pattern instead of at the
+            // next suspension point.
+            val searchable = InterruptibleText(text, isCancelled)
             var searchFrom = 0
             while (searchFrom <= text.length && matches.size < MAX_MATCHES_PER_FILE) {
-                val m = regex.find(text, searchFrom) ?: break
+                val m = regex.find(searchable, searchFrom) ?: break
                 matches.add(
                     FileMatch(
                         path = relative,
@@ -398,6 +438,11 @@ class ContentSearchService(
                 searchFrom = maxOf(m.range.last + 1, m.range.first + 1)
             }
             matches
+        } catch (e: CancellationException) {
+            // A cancel raised inside the matcher is a CANCELLATION of this
+            // search, not a scan error: rethrow so the withContext unwinds
+            // instead of the loop quietly moving on to the next file.
+            throw e
         } catch (e: Exception) {
             null
         }
@@ -449,6 +494,7 @@ class ContentSearchService(
         replacement: String,
         isRegex: Boolean,
         dryRun: Boolean,
+        isCancelled: () -> Boolean,
     ): FileReplaceResult {
         if (!file.isFile) return FileReplaceResult(file.path, 0, "not a file")
         if (file.length() > MAX_FILE_SIZE) return FileReplaceResult(file.path, 0, "file too large")
@@ -457,7 +503,7 @@ class ContentSearchService(
             // Open buffers go through the editor's undoable path.
             val buffer = bufferBridge.readBuffer(file.absolutePath)
             if (buffer != null) {
-                replaceInBuffer(file, buffer.content, buffer.version, regex, replacement, isRegex, dryRun)
+                replaceInBuffer(file, buffer.content, buffer.version, regex, replacement, isRegex, dryRun, isCancelled)
             } else {
                 // UTF-8 in, UTF-8 out. A file in another single-byte encoding has no NUL
                 // bytes, so it passes the binary check, and round-tripping it through
@@ -467,10 +513,12 @@ class ContentSearchService(
                 val text = file.readText()
                 if ('\u0000' in text) return FileReplaceResult(file.path, 0, "binary file")
                 if ('\uFFFD' in text) return FileReplaceResult(file.path, 0, "not valid UTF-8")
-                val outcome = computeReplaced(text, regex, replacement, isRegex)
+                val outcome = computeReplaced(text, regex, replacement, isRegex, isCancelled)
                 if (!dryRun && outcome.count > 0) writeAtomically(file, outcome.text)
                 FileReplaceResult(file.path, outcome.count, null)
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             FileReplaceResult(file.path, 0, e.message ?: "replace failed")
         }
@@ -500,8 +548,9 @@ class ContentSearchService(
         replacement: String,
         isRegex: Boolean,
         dryRun: Boolean,
+        isCancelled: () -> Boolean,
     ): FileReplaceResult {
-        val outcome = computeReplaced(text, regex, replacement, isRegex)
+        val outcome = computeReplaced(text, regex, replacement, isRegex, isCancelled)
         if (dryRun || outcome.count == 0) return FileReplaceResult(file.path, outcome.count, null)
 
         val span = changedSpan(text, outcome.text)
@@ -529,6 +578,12 @@ class ContentSearchService(
      * Writes [text] to [file] atomically: a sibling temp file, then an atomic rename.
      * A crash or I/O error mid-write must not leave a truncated source file with no
      * backup - the plugin installer promotes its jar the same way, for the same reason.
+     *
+     * Known: the rename moves a REGULAR file over the target, so a target that is a
+     * symlink becomes a regular file. The project walk filters symlinked files out,
+     * but [replaceInProject] takes an explicit caller-supplied list, and a symlink
+     * pointing inside the project passes [resolveFile] - so this is only reachable
+     * that way, and a replacement there replaces the link, not its referent.
      */
     private fun writeAtomically(
         file: File,
@@ -601,8 +656,12 @@ class ContentSearchService(
         regex: Regex,
         replacement: String,
         isRegex: Boolean,
+        isCancelled: () -> Boolean = { false },
     ): ReplaceOutcome {
-        val matcher = regex.toPattern().matcher(text)
+        // The matcher reads through [InterruptibleText] too: replace is
+        // reachable from a plugin with the same untrusted patterns, and a
+        // wedged file here holds no lock but still parks an IO thread.
+        val matcher = regex.toPattern().matcher(InterruptibleText(text, isCancelled))
         val repl =
             if (isRegex) {
                 replacement
@@ -755,4 +814,48 @@ object GlobalEditorBufferBridge : EditorBufferBridge {
         newText: String,
         expectedVersion: Long,
     ) = EditorAPIAccess.applyEdit(path, startLine, startCol, endLine, endCol, newText, expectedVersion)
+}
+
+/**
+ * A [CharSequence] view of [text] for matcher work that stops the moment
+ * [isCancelled] goes true.
+ *
+ * A caller-supplied pattern is not trusted: `(a+)+$` against a long line is
+ * catastrophic backtracking, and the Java matcher is not interruptible, so
+ * without a check inside the character stream a wedged file pins a
+ * `Dispatchers.IO` thread for as long as the pattern keeps spinning - and
+ * `project_search` is reachable from a plugin, not just the search box.
+ * `ensureActive()` between files cannot reach this: it never suspends.
+ *
+ * The check reads the CALLER's job, not `Thread.interrupted()`: structured
+ * concurrency does not interrupt a thread running a CPU-bound loop, so the
+ * flag would stay clear for the whole wedged run. The matcher re-reads
+ * characters on every backtrack step, so each read is the check, and a
+ * cancel lands mid-pattern rather than at the next suspension point.
+ *
+ * A tripped check throws [CancellationException], so the callers rethrow it
+ * past their `catch (Exception)` - which would otherwise turn the cancel
+ * into a "scan error" and let the loop move on to the next file.
+ */
+internal class InterruptibleText(
+    private val text: String,
+    private val isCancelled: () -> Boolean,
+) : CharSequence {
+    override val length: Int
+        get() = text.length
+
+    override fun get(index: Int): Char {
+        if (isCancelled()) throw CancellationException("search cancelled")
+        return text[index]
+    }
+
+    override fun subSequence(
+        startIndex: Int,
+        endIndex: Int,
+    ): CharSequence {
+        if (isCancelled()) throw CancellationException("search cancelled")
+        return text.subSequence(startIndex, endIndex)
+    }
+
+    override fun toString(): String = text
 }

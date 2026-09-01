@@ -428,4 +428,26 @@ class GitDataProviderImplTest {
         assertFalse(GitService.isSafeRefName("has\nnewline"))
         assertFalse(GitService.isSafeRefName("a".repeat(256)))
     }
+
+    @Test
+    fun shellMetacharactersPassTheArgvGuardSoTheTerminalVerbsQuoteThem() {
+        // All of these are names `git check-ref-format --branch` accepts
+        // (no whitespace, no leading dash, no control chars), so the argv
+        // guard passes them - which is exactly why mergeInTerminal /
+        // rebaseInTerminal cannot lean on it: in a shell command string
+        // they are live metacharacters. The quote round-trip pins the fix.
+        val names =
+            listOf("main;reboot", "x`id`", "y$(id)", "z&whoami", "a'b|sh")
+        for (name in names) {
+            assertTrue(GitService.isSafeRefName(name), "expected $name to pass the argv guard")
+            if (!java.io.File("/bin/sh").exists()) continue // POSIX-shell round trip only
+            val process =
+                ProcessBuilder("/bin/sh", "-c", "printf '%s' ${GitService.shellQuote(name)}")
+                    .redirectErrorStream(true)
+                    .start()
+            val out = process.inputStream.bufferedReader().readText()
+            assertTrue(process.waitFor() == 0, "shell rejected the quoting for $name")
+            assertEquals(name, out, "shell round trip for $name")
+        }
+    }
 }

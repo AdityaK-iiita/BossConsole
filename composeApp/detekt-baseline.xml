@@ -1864,5 +1864,11 @@
     <ID>PackageNaming:SplitCreatorMap.kt$package ai.rever.boss.components.window_panel.components.main_window_panels</ID>
     <ID>PackageNaming:SplitCreatorMapTest.kt$package ai.rever.boss.components.window_panel</ID>
     <ID>PackageNaming:SplitDirectionTest.kt$package ai.rever.boss.components.window_panel</ID>
+    <ID>PackageNaming:DiffTabMatch.kt$package ai.rever.boss.components.window_panel</ID>
+    <ID>PackageNaming:DiffTabMatchTest.kt$package ai.rever.boss.components.window_panel</ID>
+    <ID>LongParameterList:ContentSearchService.kt$ContentSearchService$( file: File, regex: Regex, replacement: String, isRegex: Boolean, dryRun: Boolean, isCancelled: () -> Boolean, )</ID>
+    <ID>LongParameterList:ContentSearchService.kt$ContentSearchService$( file: File, text: String, version: Long, regex: Regex, replacement: String, isRegex: Boolean, dryRun: Boolean, isCancelled: () -> Boolean, )</ID>
+    <ID>ReturnCount:ContentSearchService.kt$ContentSearchService$private suspend fun replaceInOneFile( file: File, regex: Regex, replacement: String, isRegex: Boolean, dryRun: Boolean, isCancelled: () -> Boolean, ): FileReplaceResult</ID>
+    <ID>ReturnCount:ContentSearchService.kt$ContentSearchService$private suspend fun replaceInBuffer( file: File, text: String, version: Long, regex: Regex, replacement: String, isRegex: Boolean, dryRun: Boolean, isCancelled: () -> Boolean, ): FileReplaceResult</ID>
   </CurrentIssues>
 </SmellBaseline>

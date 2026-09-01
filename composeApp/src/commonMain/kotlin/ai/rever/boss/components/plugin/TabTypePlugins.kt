@@ -19,9 +19,10 @@ import ai.rever.boss.plugin.api.TabTypeId
  * immediately - the dialog offers to install the wrong plugin - rather than
  * silent.
  *
- * Only the four tab types the host itself opens are listed. A plugin that opens
- * its own tab type does not come through here, because it is loaded by
- * definition.
+ * Only the tab types the host itself opens are listed - six, of which `diff`
+ * and `composer` both resolve to editor-tab (the host opens them, the
+ * plugin renders them). A plugin that opens its own tab type does not come
+ * through here, because it is loaded by definition.
  */
 object TabTypePlugins {
     /** Browser tabs: `fluck-browser`. */
