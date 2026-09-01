@@ -19,7 +19,7 @@ import ai.rever.boss.plugin.updater.satisfiesVersionFloor
  * retirement hold regardless of what the store says, which is what stops it being a one-way door
  * in the wrong direction.
  *
- * `RetiredPluginIdsTest` pins this against `RetiredPlugins.ALL` (ids, replacements AND floors),
+ * `RetiredPluginsTest` pins this against `RetiredPlugins.ALL` (ids, replacements AND floors),
  * so a retirement added there without a matching entry here fails rather than quietly staying
  * installable.
  *

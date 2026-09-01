@@ -58,7 +58,37 @@ class GitProcessBoundedTest {
     }
 
     @Test
-    fun `a timeout in a repo with a stranded index lock says so`(
+    fun `a stderr flood past the cap does not mark a complete stdout truncated`() {
+        if (onWindows()) return
+        // [truncated] is what parseDiffSafely refuses on, so the flag must mean
+        // "bytes were dropped from THIS stream". With one shared flag a stderr
+        // flood refused a perfectly complete diff as "too large to render".
+        // capChars=10_000 makes the overflow cheap to produce; the production
+        // call sites keep the 32M-char default.
+        val process =
+            ProcessBuilder(
+                "/bin/sh",
+                "-c",
+                "i=0; while [ \$i -lt 3000 ]; do " +
+                    "echo 0123456789012345678901234567890123456789 1>&2; i=\$((i+1)); done; echo done-out",
+            ).start()
+
+        val result = GitService.runProcessBounded(process, 60L, arrayOf("test-flood"), null, capChars = 10_000)
+
+        assertEquals(0, result.exitCode, "child failed: ${result.error.take(200)}")
+        assertTrue(result.output.trim() == "done-out", "the small stdout must arrive complete: '${result.output}'")
+        // errDropped has no field on the result (nothing reads it); the
+        // observable half of the wiring is that the stderr BUFFER keeps the
+        // first capChars - 3000 x 40 = 120k, well past the 10k cap.
+        assertTrue(result.error.length >= 10_000, "stderr was not drained: ${result.error.length} chars")
+        assertTrue(
+            !result.truncated,
+            "a stderr overflow must not set the stdout truncation flag",
+        )
+    }
+
+    @Test
+    fun `a timeout of an index-write in a repo with a stranded index lock says so`(
         @TempDir tmp: File,
     ) {
         if (onWindows()) return
@@ -69,11 +99,32 @@ class GitProcessBoundedTest {
         File(tmp, ".git/index.lock").writeText("")
         val process = ProcessBuilder("/bin/sh", "-c", "sleep 60").start()
 
-        val result = GitService.runProcessBounded(process, 1L, arrayOf("test-lock"), tmp.absolutePath)
+        // "commit" is in INDEX_WRITE_SUBCOMMANDS, the gate the hint sits behind.
+        val result = GitService.runProcessBounded(process, 1L, arrayOf("commit"), tmp.absolutePath)
 
         assertTrue(
             "index.lock" in result.error,
             "the timeout error should mention the stranded lock: ${result.error}",
+        )
+    }
+
+    @Test
+    fun `a timeout of a read-only command does not blame the index lock`(
+        @TempDir tmp: File,
+    ) {
+        if (onWindows()) return
+        // A lock that some OTHER process legitimately holds, with a command that
+        // never takes one: the old code told the user to delete it, which is
+        // advice to break a live repo. The hint must stay silent.
+        File(tmp, ".git").mkdirs()
+        File(tmp, ".git/index.lock").writeText("")
+        val process = ProcessBuilder("/bin/sh", "-c", "sleep 60").start()
+
+        val result = GitService.runProcessBounded(process, 1L, arrayOf("diff"), tmp.absolutePath)
+
+        assertTrue(
+            "index.lock" !in result.error,
+            "a non-index-write timeout must not advise deleting the lock: ${result.error}",
         )
     }
 }

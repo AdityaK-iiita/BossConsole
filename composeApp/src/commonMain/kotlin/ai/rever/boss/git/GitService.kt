@@ -285,9 +285,14 @@ expect object GitService {
      * Get commit log (refreshes the commitLog StateFlow).
      *
      * @param limit Maximum number of commits to retrieve
+     * @param projectPathOverride The repo to read the log from (the caller's window's
+     * project); null falls back to the global current project
      * @return List of commits
      */
-    suspend fun getLog(limit: Int = 100): List<GitCommitInfo>
+    suspend fun getLog(
+        limit: Int = 100,
+        projectPathOverride: String? = null,
+    ): List<GitCommitInfo>
 
     /**
      * Cherry-pick a commit onto the current branch.

@@ -46,7 +46,10 @@ class ContentSearchService(
     // (tens of thousands per search on a real repo) to learn "no buffer" for all
     // but a handful. Null preserves the old ask-for-every-file behaviour, which is
     // the safe answer whenever the host cannot enumerate the open tabs.
-    private val openEditorPathsProvider: () -> Set<String>? = { null },
+    //
+    // The PROVIDER is nullable too: no provider means no Main hop at all, which
+    // is what unit tests and non-UI hosts (no Compose snapshot to snapshot) get.
+    private val openEditorPathsProvider: (() -> Set<String>?)? = null,
 ) : ProjectSearchProvider {
     private val logger = BossLogger.forComponent("ContentSearchService")
 
@@ -94,13 +97,7 @@ class ContentSearchService(
                     )
                     return emptyList()
                 }
-        // The open-tab set is Compose snapshot state (SplitView's _rootNode).
-        // Snapshot it on Main, where the snapshot lives, BEFORE the scan
-        // drops to IO: a background read can observe a different snapshot
-        // than the UI is showing (docs/THREADING.md is direct about which
-        // dispatcher owns UI state), and the set is computed once per search
-        // anyway. The canonicalise work stays on IO.
-        val rawOpenPaths = withContext(Dispatchers.Main) { openEditorPathsProvider() }
+        val rawOpenPaths = snapshotOpenEditorPaths()
         return withContext(Dispatchers.IO) {
             // The cancellation check the scan hands to the matcher: a caller-
             // supplied pattern can wedge a thread (see [InterruptibleText]), and
@@ -170,6 +167,18 @@ class ContentSearchService(
         }
     }
 
+    /**
+     * Replaces in an EXPLICIT file list - the search-side caps do not apply
+     * here, and that is deliberate: [searchInProject] bounds what the user SEES
+     * ([maxResults], [MAX_MATCHES_PER_FILE]) because a list is a view, while a
+     * half-transformed file is worse than an unhurried one, so
+     * [computeReplaced] applies every match.
+     *
+     * The consequence a consumer has to surface: a file whose matches were
+     * capped at 500 in the search view can have thousands replaced, so the
+     * [ReplaceSummary] counts are NOT the search counts. Never present the
+     * displayed match count as the applied count, or vice versa.
+     */
     override suspend fun replaceInProject(
         query: String,
         replacement: String,
@@ -219,6 +228,25 @@ class ContentSearchService(
         }
     }
 
+    /**
+     * The open-tab set as [Dispatchers.Main] sees it.
+     *
+     * It is Compose snapshot state (SplitView's _rootNode), so it is snapshotted
+     * on Main, where the snapshot lives, BEFORE the scan drops to IO: a
+     * background read can observe a different snapshot than the UI is showing
+     * (docs/THREADING.md is direct about which dispatcher owns UI state), and
+     * the set is computed once per search anyway. The canonicalise work stays
+     * on IO.
+     *
+     * Guarded: the provider is optional, and a caller that supplies none
+     * (unit tests, non-UI hosts) must not pay a hop to Main on every search -
+     * the set is null, so there is nothing to snapshot.
+     */
+    private suspend fun snapshotOpenEditorPaths(): Set<String>? {
+        val provider = openEditorPathsProvider ?: return null
+        return withContext(Dispatchers.Main) { provider() }
+    }
+
     // ===== Internals =====
 
     private fun buildRegex(
@@ -253,6 +281,14 @@ class ContentSearchService(
      *
      * Returns null when the path escapes; callers report that as a per-file error
      * rather than failing the whole batch.
+     *
+     * Known limit: a BROKEN symlink (target absent) does not resolve to a real
+     * path, so it falls back to the canonical check, which passes for a link
+     * inside the project. A write through it would materialise the file at the
+     * target, but creating such a link already requires writing inside the
+     * project, which a plugin holding `project.replace` can do with plain file
+     * I/O anyway - the confinement protects sloppy callers, not adversarial
+     * ones.
      */
     internal fun resolveFile(
         rawPath: String,
@@ -269,7 +305,20 @@ class ContentSearchService(
         val root = runCatching { File(projectPath).canonicalFile }.getOrNull() ?: return null
         val resolvedCanon = runCatching { candidate.canonicalFile }.getOrNull() ?: return null
         val rootPath = root.path.trimEnd(File.separatorChar) + File.separatorChar
-        val inside = resolvedCanon.path == root.path || resolvedCanon.path.startsWith(rootPath)
+        var inside = resolvedCanon.path == root.path || resolvedCanon.path.startsWith(rootPath)
+        // java.io.File's canonical path does NOT follow symlinks on Windows (NIO's
+        // realPath does, on every platform), so a link inside the project pointing
+        // outside passes the canonical check there. When both sides resolve to a
+        // real path, re-verify on those; both are real-pathed so a symlinked or
+        // junctioned project root stays consistent.
+        if (inside) {
+            val rootReal = runCatching { File(projectPath).toPath().toRealPath() }.getOrNull()
+            val candReal = runCatching { candidate.toPath().toRealPath() }.getOrNull()
+            if (rootReal != null && candReal != null) {
+                val realRootPath = rootReal.toString().trimEnd(File.separatorChar) + File.separatorChar
+                inside = candReal == rootReal || candReal.toString().startsWith(realRootPath)
+            }
+        }
         return if (inside) candidate else null
     }
 
@@ -617,6 +666,15 @@ class ContentSearchService(
      * but [replaceInProject] takes an explicit caller-supplied list, and a symlink
      * pointing inside the project passes [resolveFile] - so this is only reachable
      * that way, and a replacement there replaces the link, not its referent.
+     *
+     * The same trade-off is a TOCTOU window, and the two halves of it see
+     * DIFFERENT resolutions: [resolveFile] decides confinement on the canonical
+     * path, then deliberately returns the NON-canonical one (buffer keys match
+     * the tab's raw spelling, so that is the right call), and the write goes to
+     * the non-canonical path. A symlink swapped between check and write is not
+     * caught here; the window is bounded by the write running immediately after
+     * the check in the same call, and the exposure is the explicit-list path
+     * above.
      */
     private fun writeAtomically(
         file: File,

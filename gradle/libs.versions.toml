@@ -141,7 +141,7 @@ intellij-platform = "243.21565.199"
 # release means one number for every consumer to pin and no manifest drift.
 #
 # The host implements the new members in this branch: UnifiedDiffParser + git diff
-# plumbing, HunkApplier, the diff/composer tab types, the editor buffer API, and
+# plumbing, the diff/composer tab types, the editor buffer API, and
 # ContentSearchService. Same forced order as above: api first, then this.
 boss-plugin-api = "1.0.87"
 

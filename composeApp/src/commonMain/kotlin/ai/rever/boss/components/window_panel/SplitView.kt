@@ -593,12 +593,10 @@ class SplitViewState(
         }
     }
 
-    private fun findPanelWithNotebookTab(filePath: String): PanelTabMatch? {
-        val wanted = TabPaths.normalize(filePath)
-        return findPanelWithTabMatching { tab ->
-            tab is JupyterTabInfo && TabPaths.normalize(tab.filePath) == wanted
+    private fun findPanelWithNotebookTab(filePath: String): PanelTabMatch? =
+        findPanelWithTabMatching { tab ->
+            tab is JupyterTabInfo && TabPaths.pathsMatch(tab.filePath, filePath)
         }
-    }
 
     /** Find the first panel containing a tab that satisfies [predicate]. */
     private fun findPanelWithTabMatching(predicate: (TabInfo) -> Boolean): PanelTabMatch? {
@@ -1284,9 +1282,10 @@ class SplitViewState(
         // A blank path never matches: normalize("") is "", so a blank query
         // would focus the first Untitled editor tab.
         if (filePath.isBlank()) return null
-        val wanted = TabPaths.normalize(filePath)
+        // pathsMatch keeps the canonicalPath syscalls out of the common case
+        // (identical spellings), paying for them only on a lexical mismatch.
         return findPanelWithTabMatching { tab ->
-            tab is EditorTabInfo && TabPaths.normalize(tab.filePath) == wanted
+            tab is EditorTabInfo && TabPaths.pathsMatch(tab.filePath, filePath)
         }
     }
 

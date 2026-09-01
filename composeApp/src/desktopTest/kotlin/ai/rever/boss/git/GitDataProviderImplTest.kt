@@ -1,5 +1,6 @@
 package ai.rever.boss.git
 
+import ai.rever.boss.components.workspaces.CommandProcessor
 import ai.rever.boss.plugin.api.GitOperationResultData
 import ai.rever.boss.window.WindowGitState
 import kotlinx.coroutines.test.runTest
@@ -442,7 +443,7 @@ class GitDataProviderImplTest {
             assertTrue(GitService.isSafeRefName(name), "expected $name to pass the argv guard")
             if (!java.io.File("/bin/sh").exists()) continue // POSIX-shell round trip only
             val process =
-                ProcessBuilder("/bin/sh", "-c", "printf '%s' ${GitService.shellQuote(name)}")
+                ProcessBuilder("/bin/sh", "-c", "printf '%s' ${CommandProcessor.quotePath(name)}")
                     .redirectErrorStream(true)
                     .start()
             val out = process.inputStream.bufferedReader().readText()

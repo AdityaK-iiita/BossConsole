@@ -1,6 +1,7 @@
 package ai.rever.boss.git
 
 import ai.rever.boss.plugin.api.GitOperationResultData
+import ai.rever.boss.plugin.git.GitOperationResult
 import ai.rever.boss.window.WindowGitState
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
@@ -35,6 +36,10 @@ class GitProviderWritesToRepoTest {
         git(dir, "config", "user.email", "t@example.com")
         git(dir, "config", "user.name", "Test")
         git(dir, "config", "commit.gpgsign", "false")
+        // Windows CI runners default core.autocrlf=true, which would restore a
+        // committed "one\n" as "one\r\n" and fail every content assertion
+        // below for the wrong reason. Pin LF on this platform too.
+        git(dir, "config", "core.autocrlf", "false")
         File(dir, "tracked.txt").writeText("one\n")
         File(dir, "other.txt").writeText("a\n")
         git(dir, "add", ".")
@@ -303,25 +308,235 @@ class GitProviderWritesToRepoTest {
         // align and A's command, so a global-resolved `git restore` runs in B's
         // tree. The override travels with the call, so the interleaving cannot
         // redirect it - pinned here by pointing the global at the WRONG repo.
-        val repoA = repo(tmpA)
-        val repoB = repo(tmpB)
-        File(repoA, "tracked.txt").writeText("A-dirty\n")
-        File(repoB, "tracked.txt").writeText("B-dirty\n")
-        GitService.alignCurrentProjectPath(repoB.absolutePath)
+        val globalBefore = GitService.getCurrentProjectPath()
+        try {
+            val repoA = repo(tmpA)
+            val repoB = repo(tmpB)
+            File(repoA, "tracked.txt").writeText("A-dirty\n")
+            File(repoB, "tracked.txt").writeText("B-dirty\n")
+            GitService.alignCurrentProjectPath(repoB.absolutePath)
 
-        val result =
-            GitService.discardChanges(
-                "tracked.txt",
-                windowId = null,
-                projectPathOverride = repoA.absolutePath,
+            val result =
+                GitService.discardChanges(
+                    "tracked.txt",
+                    windowId = null,
+                    projectPathOverride = repoA.absolutePath,
+                )
+
+            assertTrue(result is ai.rever.boss.plugin.git.GitOperationResult.Success, "discard reported $result")
+            assertEquals("one\n", File(repoA, "tracked.txt").readText(), "the override's repo was not restored")
+            assertEquals(
+                "B-dirty\n",
+                File(repoB, "tracked.txt").readText(),
+                "the discard leaked into the repo the GLOBAL pointed at",
+            )
+        } finally {
+            // This test steers the GitService singleton; a later test (or this
+            // one under parallel execution) must not inherit a global pointing
+            // at a deleted @TempDir.
+            if (globalBefore == null) {
+                GitService.clearCurrentProjectPathForTests()
+            } else {
+                GitService.alignCurrentProjectPath(globalBefore)
+            }
+        }
+    }
+
+    @Test
+    fun unstageAllRefreshesTheStatusOfTheRepoThatWasWrittenNotTheGlobal(
+        @TempDir tmpA: File,
+        @TempDir tmpB: File,
+    ) = runTest {
+        // Finding 1 of the round-9 review: the verb's post-write refresh used
+        // the NO-ARG getStatus(), which resolves the GLOBAL project - so with
+        // two windows the write landed in A but the refresh ran in B, the repo
+        // nobody asked about. Both repos dirty in a distinguishable way; the
+        // global points at B.
+        val globalBefore = GitService.getCurrentProjectPath()
+        try {
+            val repoA = repo(tmpA)
+            val repoB = repo(tmpB)
+            File(repoA, "tracked.txt").writeText("A-two\n")
+            git(repoA, "add", "tracked.txt") // A: staged
+            File(repoB, "tracked.txt").writeText("B-two\n")
+            git(repoB, "add", "tracked.txt") // B: staged
+            GitService.alignCurrentProjectPath(repoB.absolutePath)
+            GitService.getStatus() // prime the global flow from B
+            assertTrue(
+                GitService.fileStatus.value
+                    .first { it.path == "tracked.txt" }
+                    .isStaged,
+                "precondition: the global flow holds B's staged change",
             )
 
-        assertTrue(result is ai.rever.boss.plugin.git.GitOperationResult.Success, "discard reported $result")
-        assertEquals("one\n", File(repoA, "tracked.txt").readText(), "the override's repo was not restored")
-        assertEquals(
-            "B-dirty\n",
-            File(repoB, "tracked.txt").readText(),
-            "the discard leaked into the repo the GLOBAL pointed at",
+            provider(repoA).unstageAll()
+
+            val globalEntry = GitService.fileStatus.value.first { it.path == "tracked.txt" }
+            assertTrue(
+                globalEntry.isUnstaged && !globalEntry.isStaged,
+                "the refresh ran in the global's repo (B), not the written one (A): " +
+                    "A's entry is ${globalEntry.isStaged}-staged, " +
+                    "and B's index was left staged: ${git(repoB, "status", "--porcelain=v1", "--", "tracked.txt")}",
+            )
+        } finally {
+            if (globalBefore == null) {
+                GitService.clearCurrentProjectPathForTests()
+            } else {
+                GitService.alignCurrentProjectPath(globalBefore)
+            }
+        }
+    }
+
+    @Test
+    fun discardChangesRefreshesTheStatusOfTheRepoThatWasWrittenNotTheGlobal(
+        @TempDir tmpA: File,
+        @TempDir tmpB: File,
+    ) = runTest {
+        // Same finding, same shape: after discarding in A the global flow must
+        // hold A's (now clean) status, not B's still-dirty one.
+        val globalBefore = GitService.getCurrentProjectPath()
+        try {
+            val repoA = repo(tmpA)
+            val repoB = repo(tmpB)
+            File(repoA, "tracked.txt").writeText("A-two\n") // A: unstaged change
+            File(repoB, "tracked.txt").writeText("B-two\n")
+            git(repoB, "add", "tracked.txt") // B: staged
+            GitService.alignCurrentProjectPath(repoB.absolutePath)
+            GitService.getStatus() // prime the global flow from B
+            assertTrue(GitService.fileStatus.value.any { it.path == "tracked.txt" })
+
+            provider(repoA).discardChanges("tracked.txt")
+
+            assertTrue(
+                GitService.fileStatus.value.none { it.path == "tracked.txt" },
+                "the refresh must come from A (clean after discard), not B (still dirty): " +
+                    "${GitService.fileStatus.value.map { it.path to (it.isStaged || it.isUnstaged) }}",
+            )
+        } finally {
+            if (globalBefore == null) {
+                GitService.clearCurrentProjectPathForTests()
+            } else {
+                GitService.alignCurrentProjectPath(globalBefore)
+            }
+        }
+    }
+
+    @Test
+    fun commitRefreshesTheLogOfTheRepoThatWasWrittenNotTheGlobal(
+        @TempDir tmpA: File,
+        @TempDir tmpB: File,
+    ) = runTest {
+        // Same finding for commit's getLog(): the global log flow must end on
+        // A's new commit, not on B's marker commit.
+        val globalBefore = GitService.getCurrentProjectPath()
+        try {
+            val repoA = repo(tmpA)
+            val repoB = repo(tmpB)
+            File(repoA, "tracked.txt").writeText("A-two\n")
+            git(repoA, "add", "tracked.txt")
+            git(repoB, "commit", "-q", "--allow-empty", "-m", "B-marker")
+            GitService.alignCurrentProjectPath(repoB.absolutePath)
+            GitService.getLog() // prime the global log flow from B
+            assertEquals(
+                "B-marker",
+                GitService.commitLog.value
+                    .first()
+                    .subject,
+            )
+
+            provider(repoA).commit("A-panel-commit")
+
+            assertEquals(
+                "A-panel-commit",
+                GitService.commitLog.value
+                    .first()
+                    .subject,
+                "the log refresh ran in the global's repo (B), not the committed one (A)",
+            )
+        } finally {
+            if (globalBefore == null) {
+                GitService.clearCurrentProjectPathForTests()
+            } else {
+                GitService.alignCurrentProjectPath(globalBefore)
+            }
+        }
+    }
+
+    @Test
+    fun anUnsafeRefIsRefusedByEveryRefTakingVerb(
+        @TempDir tmp: File,
+    ) = runTest {
+        // The guard is `isSafeRefName` in each verb, and each verb is its own
+        // copy of that line - so each verb is pinned against the name that
+        // would do the most damage if its copy were "simplified" away:
+        // `main;reboot` is shell metacharacters in the terminal-verbs' command
+        // string, and `-o/evil` is an OPTION to git in the argv verbs.
+        val dir = repo(tmp)
+        val baseBranch = git(dir, "rev-parse", "--abbrev-ref", "HEAD").trim()
+        val globalBefore = GitService.getCurrentProjectPath()
+        try {
+            val p = provider(dir)
+            // Option-shaped names are the argv danger: without the guard they
+            // would land as OPTIONS (checkout --force, branch --force ...),
+            // and git happily accepts them - a silent behaviour change, not
+            // an error. `main;reboot` is the SHELL danger and is only illegal
+            // for the terminal verbs: as a single argv element it is a legal
+            // git refname, so the argv verbs may accept it.
+            for (name in listOf("-o/evil", "--force", "-b")) {
+                val checkout = p.checkout(name)
+                assertTrue(checkout !is GitOperationResultData.Success, "checkout accepted $name")
+                val created = GitService.createBranch(name, checkout = false, projectPathOverride = dir.absolutePath)
+                assertTrue(created !is GitOperationResult.Success, "createBranch accepted $name")
+                val merged = GitService.merge(name, projectPathOverride = dir.absolutePath)
+                assertTrue(merged !is GitOperationResult.Success, "merge accepted $name")
+                val rebased = GitService.rebase(name, projectPathOverride = dir.absolutePath)
+                assertTrue(rebased !is GitOperationResult.Success, "rebase accepted $name")
+            }
+            // And nothing was created or checked out: the branch list is unchanged.
+            assertEquals(
+                git(dir, "branch", "--format=%(refname:short)"),
+                "$baseBranch\n",
+                "an unsafe ref must not leave a branch behind",
+            )
+        } finally {
+            if (globalBefore == null) {
+                GitService.clearCurrentProjectPathForTests()
+            } else {
+                GitService.alignCurrentProjectPath(globalBefore)
+            }
+        }
+    }
+
+    @Test
+    fun anUntrackedFileGetsAnAllAddedDiffNotABlankTab(
+        @TempDir tmp: File,
+    ) = runTest {
+        // The status panel lists untracked files individually
+        // (statusReportsUntrackedFilesIndividuallyNotAsADirectory), but the old
+        // getFileDiff ran `git diff -- <path>`, which emits nothing for a path
+        // git does not track - the diff tab opened blank, reading as "no
+        // changes". The fix diffs /dev/null against the file, so its rows
+        // arrive all-added, like a staged new file's do.
+        val dir = repo(tmp)
+        File(dir, "fresh.txt").writeText("hello\nworld\n")
+        val p = provider(dir)
+
+        val diff = p.diffFile("fresh.txt", staged = false)
+
+        assertTrue(diff.isNotEmpty(), "an untracked file must produce a diff: $diff")
+        val lines =
+            diff
+                .flatMap { it.hunks }
+                .flatMap { it.lines }
+                .map { it.kind }
+        assertTrue(lines.isNotEmpty(), "the diff has no lines")
+        assertTrue(lines.all { it == ai.rever.boss.plugin.api.DiffLineKind.ADDED }, "every line must be added: $lines")
+        assertTrue(diff.any { it.path == "fresh.txt" }, "the diff must be keyed on the file: $diff")
+        // A clean TRACKED file must still show no diff - the blank there means
+        // "no changes" and is correct.
+        assertTrue(
+            p.diffFile("tracked.txt", staged = false).isEmpty(),
+            "a clean tracked file must still diff empty",
         )
     }
 

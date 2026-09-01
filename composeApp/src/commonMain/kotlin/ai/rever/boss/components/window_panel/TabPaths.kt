@@ -19,6 +19,11 @@ internal object TabPaths {
      * Falls back to a lexical cleanup when the file cannot be resolved (it may
      * not exist yet, or be unreadable), so an unresolvable path still compares
      * consistently with itself.
+     *
+     * Cost note: [canonicalPath] is a system call per call, and the tab-match
+     * hot path used to pay it for every open event times every open tab.
+     * Callers comparing two paths should prefer [pathsMatch], which only pays
+     * this when the cheap lexical comparison disagrees.
      */
     fun normalize(path: String): String {
         if (path.isBlank()) return ""
@@ -28,6 +33,27 @@ internal object TabPaths {
         } catch (e: Exception) {
             lexical
         }
+    }
+
+    /**
+     * Whether two paths name the same file, without paying for [normalize] when
+     * the lexical forms already agree - which is the common case, since most
+     * openers pass one and the same absolute path. (Lexically equal strings
+     * canonicalise identically, so the fast answer is exact, not a shortcut.)
+     *
+     * Only when the lexical forms DISAGREE does it canonicalise both sides -
+     * the case this exists for: the same file spelled with a doubled
+     * separator is caught lexically, but a symlinked or renamed project root
+     * (`/tmp/proj` vs `/private/tmp/proj`) is caught only on the canonical
+     * form.
+     */
+    fun pathsMatch(
+        a: String,
+        b: String,
+    ): Boolean {
+        if (a.isBlank() || b.isBlank()) return a.isBlank() && b.isBlank()
+        val lexicalMatch = lexicalClean(a) == lexicalClean(b)
+        return lexicalMatch || normalize(a) == normalize(b)
     }
 
     /**
