@@ -149,7 +149,9 @@ class ContentSearchService(
     ): ReplaceSummary {
         val projectPath = projectPathProvider() ?: return ReplaceSummary(0, 0, emptyList(), dryRun)
         if (query.isEmpty() || files.isEmpty()) return ReplaceSummary(0, 0, emptyList(), dryRun)
-        val regex = buildRegex(query, isRegex, caseSensitive, wholeWord) ?: return ReplaceSummary(0, 0, emptyList(), dryRun)
+        val regex =
+            buildRegex(query, isRegex, caseSensitive, wholeWord)
+                ?: return ReplaceSummary(0, 0, emptyList(), dryRun)
 
         return withContext(Dispatchers.IO) {
             var total = 0
