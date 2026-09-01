@@ -251,6 +251,81 @@ class GitProviderWritesToRepoTest {
     }
 
     @Test
+    fun checkoutOfASlashedLocalBranchChecksOutThatBranchNotItsLastSegment(
+        @TempDir tmp: File,
+    ) = runTest {
+        val dir = repo(tmp)
+        val base = git(dir, "rev-parse", "--abbrev-ref", "HEAD").trim()
+        git(dir, "branch", "feature/x")
+        // A branch named like the stripped segment makes the old DWIM SUCCEED on
+        // the wrong branch rather than fail loudly - the worst variant.
+        git(dir, "branch", "x")
+
+        val result = provider(dir).checkout("feature/x")
+
+        assertTrue(result is GitOperationResultData.Success, "checkout reported $result")
+        assertEquals(
+            "feature/x",
+            git(dir, "rev-parse", "--abbrev-ref", "HEAD").trim(),
+            "the slashed LOCAL branch name was mangled (base was $base)",
+        )
+    }
+
+    @Test
+    fun aRemoteStyleNameStillDwimsToItsLocalTrackingBranch(
+        @TempDir tmp: File,
+    ) = runTest {
+        val dir = repo(tmp)
+        // Simulate a remote-tracking ref without a network: clone into a second
+        // worktree-free local clone whose origin is the first repo.
+        val cloneDir = File(tmp, "clone").apply { mkdirs() }
+        git(dir, "branch", "side")
+        git(cloneDir.parentFile, "clone", "-q", dir.absolutePath, cloneDir.absolutePath)
+        git(cloneDir, "config", "user.email", "t@example.com")
+        git(cloneDir, "config", "user.name", "Test")
+
+        val result = provider(cloneDir).checkout("origin/side")
+
+        assertTrue(result is GitOperationResultData.Success, "checkout reported $result")
+        assertEquals(
+            "side",
+            git(cloneDir, "rev-parse", "--abbrev-ref", "HEAD").trim(),
+            "origin/side should create and check out the local tracking branch",
+        )
+    }
+
+    @Test
+    fun aWriteHonoursItsProjectPathOverrideEvenWhenTheGlobalPointsAtAnotherRepo(
+        @TempDir tmpA: File,
+        @TempDir tmpB: File,
+    ) = runTest {
+        // The round-4 review scenario: window B's align lands between window A's
+        // align and A's command, so a global-resolved `git restore` runs in B's
+        // tree. The override travels with the call, so the interleaving cannot
+        // redirect it - pinned here by pointing the global at the WRONG repo.
+        val repoA = repo(tmpA)
+        val repoB = repo(tmpB)
+        File(repoA, "tracked.txt").writeText("A-dirty\n")
+        File(repoB, "tracked.txt").writeText("B-dirty\n")
+        GitService.alignCurrentProjectPath(repoB.absolutePath)
+
+        val result =
+            GitService.discardChanges(
+                "tracked.txt",
+                windowId = null,
+                projectPathOverride = repoA.absolutePath,
+            )
+
+        assertTrue(result is ai.rever.boss.plugin.git.GitOperationResult.Success, "discard reported $result")
+        assertEquals("one\n", File(repoA, "tracked.txt").readText(), "the override's repo was not restored")
+        assertEquals(
+            "B-dirty\n",
+            File(repoB, "tracked.txt").readText(),
+            "the discard leaked into the repo the GLOBAL pointed at",
+        )
+    }
+
+    @Test
     fun statusReportsUntrackedFilesIndividuallyNotAsADirectory(
         @TempDir tmp: File,
     ) = runTest {

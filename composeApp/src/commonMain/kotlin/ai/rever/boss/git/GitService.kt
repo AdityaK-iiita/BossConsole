@@ -79,11 +79,15 @@ expect object GitService {
      *
      * @param branchName The branch name to checkout
      * @param windowId Optional window ID to update window-specific state after operation
+     * @param projectPathOverride Repository to act on; null falls back to the global
+     *   current project path. Window-scoped callers pass their own (see the write-verbs
+     *   note below) - the global belongs to whichever window aligned it last.
      * @return Result indicating success or failure
      */
     suspend fun checkout(
         branchName: String,
         windowId: String? = null,
+        projectPathOverride: String? = null,
     ): GitOperationResult
 
     /**
@@ -164,9 +168,15 @@ expect object GitService {
      * @param windowId Optional window ID to update window-specific state after operation
      * @return Result indicating success or failure
      */
+    // The write verbs below all take a projectPathOverride: resolving the repo from
+    // the global current project path in a separate step leaves a window where
+    // another window's align lands in between, and the write runs in the wrong
+    // worktree. The override travels with the call, so nothing can redirect it.
+
     suspend fun stage(
         filePath: String,
         windowId: String? = null,
+        projectPathOverride: String? = null,
     ): GitOperationResult
 
     /**
@@ -175,7 +185,10 @@ expect object GitService {
      * @param windowId Optional window ID to update window-specific state after operation
      * @return Result indicating success or failure
      */
-    suspend fun stageAll(windowId: String? = null): GitOperationResult
+    suspend fun stageAll(
+        windowId: String? = null,
+        projectPathOverride: String? = null,
+    ): GitOperationResult
 
     /**
      * Unstage a file.
@@ -187,6 +200,7 @@ expect object GitService {
     suspend fun unstage(
         filePath: String,
         windowId: String? = null,
+        projectPathOverride: String? = null,
     ): GitOperationResult
 
     /**
@@ -195,7 +209,10 @@ expect object GitService {
      * @param windowId Optional window ID to update window-specific state after operation
      * @return Result indicating success or failure
      */
-    suspend fun unstageAll(windowId: String? = null): GitOperationResult
+    suspend fun unstageAll(
+        windowId: String? = null,
+        projectPathOverride: String? = null,
+    ): GitOperationResult
 
     /**
      * Discard changes to a file in the working tree.
@@ -207,6 +224,7 @@ expect object GitService {
     suspend fun discardChanges(
         filePath: String,
         windowId: String? = null,
+        projectPathOverride: String? = null,
     ): GitOperationResult
 
     // ===== Commit =====
@@ -223,6 +241,7 @@ expect object GitService {
         message: String,
         amend: Boolean = false,
         windowId: String? = null,
+        projectPathOverride: String? = null,
     ): GitOperationResult
 
     /**
@@ -251,17 +270,27 @@ expect object GitService {
      * Cherry-pick a commit onto the current branch.
      *
      * @param commitHash The commit hash to cherry-pick
+     * @param windowId Optional window ID to update window-specific state after operation
      * @return Result indicating success or failure
      */
-    suspend fun cherryPick(commitHash: String): GitOperationResult
+    suspend fun cherryPick(
+        commitHash: String,
+        windowId: String? = null,
+        projectPathOverride: String? = null,
+    ): GitOperationResult
 
     /**
      * Revert a commit.
      *
      * @param commitHash The commit hash to revert
+     * @param windowId Optional window ID to update window-specific state after operation
      * @return Result indicating success or failure
      */
-    suspend fun revert(commitHash: String): GitOperationResult
+    suspend fun revert(
+        commitHash: String,
+        windowId: String? = null,
+        projectPathOverride: String? = null,
+    ): GitOperationResult
 
     // ===== Stash =====
 
@@ -401,13 +430,13 @@ expect object GitService {
      * Point the global `currentProjectPath` at [projectPath] - a cheap assignment,
      * no git invocation.
      *
-     * The write verbs (stage/commit/discard/cherry-pick/revert) still resolve their
-     * repository from the global, and [refreshForWindow] - the only other writer of it -
-     * is gated behind a probe short-circuit, so once two windows on different worktrees
-     * have settled the global belonged to whichever refreshed last. A Discard in the
-     * other window then ran `git restore` in the wrong tree. Aligning here,
-     * unconditionally and before the gated probe, keeps the global tracking the window
-     * whose provider is being used.
+     * The window-scoped write verbs no longer depend on this - they carry their own
+     * projectPathOverride, because align-then-write is two steps and another window's
+     * align could land in between. This still matters for everything that reads the
+     * global with no override (merge/rebase/stash, the top-bar actions): once two
+     * windows on different worktrees have settled, the global belonged to whichever
+     * refreshed last. Aligning here, unconditionally and before the gated probe, keeps
+     * the global tracking the window whose provider is being used.
      */
     fun alignCurrentProjectPath(projectPath: String)
 

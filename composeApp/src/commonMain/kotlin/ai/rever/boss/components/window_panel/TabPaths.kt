@@ -30,8 +30,15 @@ internal object TabPaths {
         }
     }
 
-    /** Collapse repeated separators and drop a trailing one. */
-    private fun lexicalClean(path: String): String {
+    /**
+     * Collapse repeated separators and drop a trailing one.
+     *
+     * Internal so the two deliberate choices in here are pinnable: backslash is only
+     * a separator on Windows, and a leading `//` (UNC host) survives the collapse.
+     * On POSIX [normalize] reaches this only when canonicalPath throws, so the tests
+     * exercise it directly.
+     */
+    internal fun lexicalClean(path: String): String {
         // Backslash is a path separator on Windows but a LEGAL filename character on
         // macOS/Linux, so translating it unconditionally turned `a\b.kt` into `a/b.kt`
         // and could canonicalise onto a different real file (focusing the wrong tab).

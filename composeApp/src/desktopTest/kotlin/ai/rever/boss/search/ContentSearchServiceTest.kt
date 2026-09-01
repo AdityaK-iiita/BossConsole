@@ -423,4 +423,127 @@ class ContentSearchServiceTest {
 
         assertEquals("1:foo\n2:bar\n", f.readText())
     }
+
+    // ---- round-4 regressions ----
+
+    @Test
+    fun `replacing in an executable script keeps its executable bit`(
+        @TempDir dir: File,
+    ) = runBlocking {
+        // writeAtomically lands a fresh temp file on the target's inode, and
+        // createTempFile is owner-only 0600 - so a replace in a git hook or a
+        // build script silently cleared +x until the perms were carried across.
+        val script = File(dir, "hook.sh").apply { writeText("#!/bin/sh\necho needle\n") }
+        if (!script.setExecutable(true)) return@runBlocking // non-POSIX filesystem: nothing to pin
+        val service = ContentSearchService(projectPathProvider = { dir.absolutePath })
+
+        service.replaceInProject(
+            query = "needle",
+            replacement = "pin",
+            files = listOf("hook.sh"),
+            dryRun = false,
+        )
+
+        assertEquals("#!/bin/sh\necho pin\n", script.readText())
+        assertTrue(script.canExecute(), "the replace dropped the executable bit")
+    }
+
+    @Test
+    fun `a file with a name shorter than three chars can still be replaced`(
+        @TempDir dir: File,
+    ) = runBlocking {
+        // createTempFile throws "Prefix string too short" for a prefix under 3
+        // chars, which surfaced as an opaque per-file failure for a file named "a".
+        val f = File(dir, "a").apply { writeText("needle\n") }
+        val service = ContentSearchService(projectPathProvider = { dir.absolutePath })
+
+        val summary =
+            service.replaceInProject(
+                query = "needle",
+                replacement = "pin",
+                files = listOf("a"),
+                dryRun = false,
+            )
+
+        assertEquals(1, summary.totalReplacements, "replace failed: ${summary.files}")
+        assertEquals("pin\n", f.readText())
+    }
+
+    @Test
+    fun `an authoritative empty open-tab set skips the buffer bridge entirely`(
+        @TempDir dir: File,
+    ) = runBlocking {
+        tree(dir)
+        var bridgeCalls = 0
+        val countingBridge =
+            object : EditorBufferBridge {
+                override suspend fun readBuffer(path: String): ai.rever.boss.plugin.api.BufferSnapshot? {
+                    bridgeCalls++
+                    return null
+                }
+
+                override suspend fun applyEdit(
+                    path: String,
+                    startLine: Int,
+                    startCol: Int,
+                    endLine: Int,
+                    endCol: Int,
+                    newText: String,
+                    expectedVersion: Long,
+                ): ai.rever.boss.plugin.api.EditResult? = null
+            }
+        val service =
+            ContentSearchService(
+                projectPathProvider = { dir.absolutePath },
+                bufferBridge = countingBridge,
+                openEditorPathsProvider = { emptySet() },
+            )
+
+        val hits = service.searchInProject(query = "needle")
+
+        assertTrue(hits.isNotEmpty(), "the search itself must still work")
+        assertEquals(0, bridgeCalls, "no editor tab is open, so the bridge must not be asked per file")
+    }
+
+    @Test
+    fun `an open tab's buffer still overlays the disk when the open set is provided`(
+        @TempDir dir: File,
+    ) = runBlocking {
+        tree(dir)
+        val open = File(dir, "top.kt").absolutePath
+        val bridge =
+            object : EditorBufferBridge {
+                override suspend fun readBuffer(path: String): ai.rever.boss.plugin.api.BufferSnapshot? =
+                    if (path == open) {
+                        ai.rever.boss.plugin.api.BufferSnapshot(
+                            path = path,
+                            content = "val unsavedNeedle = 2\n",
+                            version = 1L,
+                            isModified = true,
+                        )
+                    } else {
+                        null
+                    }
+
+                override suspend fun applyEdit(
+                    path: String,
+                    startLine: Int,
+                    startCol: Int,
+                    endLine: Int,
+                    endCol: Int,
+                    newText: String,
+                    expectedVersion: Long,
+                ): ai.rever.boss.plugin.api.EditResult? = null
+            }
+        val service =
+            ContentSearchService(
+                projectPathProvider = { dir.absolutePath },
+                bufferBridge = bridge,
+                openEditorPathsProvider = { setOf(open) },
+            )
+
+        val paths = service.searchInProject(query = "unsavedNeedle").map { it.path }
+
+        assertEquals(listOf("top.kt"), paths, "the live buffer's content was not searched")
+    }
 }

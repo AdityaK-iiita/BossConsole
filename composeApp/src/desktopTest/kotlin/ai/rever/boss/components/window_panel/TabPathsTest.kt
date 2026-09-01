@@ -75,4 +75,24 @@ class TabPathsTest {
         assertEquals("", TabPaths.normalize(""))
         assertEquals("", TabPaths.normalize("   "))
     }
+
+    @Test
+    fun `a backslash is a filename character on POSIX, not a separator`() {
+        // Translating it unconditionally turned `a\bak.kt` into `a/bak.kt`, which can
+        // canonicalise onto a DIFFERENT real file and focus the wrong tab.
+        if (File.separatorChar == '\\') return // on Windows the translation is correct
+        assertNotEquals(
+            TabPaths.normalize("/x/a\\bak.kt"),
+            TabPaths.normalize("/x/a/bak.kt"),
+        )
+    }
+
+    @Test
+    fun `lexical cleanup keeps a UNC host prefix while collapsing inner separators`() {
+        // //server/share must not flatten to /server/share - two tabs on different
+        // servers would compare equal. Exercised directly: on POSIX normalize() only
+        // reaches the lexical path when canonicalPath throws.
+        assertEquals("//server/share/x", TabPaths.lexicalClean("//server/share//x"))
+        assertNotEquals(TabPaths.lexicalClean("//server/share"), TabPaths.lexicalClean("/server/share"))
+    }
 }

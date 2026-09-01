@@ -35,6 +35,13 @@ class ContentSearchService(
     // DefaultPlugin passes a bridge over its OWN (window-scoped) getPluginAPI; the
     // default keeps the old global behaviour for callers and tests that do not care.
     private val bufferBridge: EditorBufferBridge = GlobalEditorBufferBridge,
+    // The files with an editor tab open in this window, or null for "unknown".
+    // A buffer can only exist behind an open tab, so a search consults the bridge
+    // ONLY for these paths - without this it made one bridge call per walked file
+    // (tens of thousands per search on a real repo) to learn "no buffer" for all
+    // but a handful. Null preserves the old ask-for-every-file behaviour, which is
+    // the safe answer whenever the host cannot enumerate the open tabs.
+    private val openEditorPathsProvider: () -> Set<String>? = { null },
 ) : ProjectSearchProvider {
     // Access-ordered and self-evicting: at capacity the ELDEST entry is dropped, not
     // the whole map. The old wholesale clear() meant a project above the cap wiped the
@@ -79,6 +86,8 @@ class ContentSearchService(
         val regex = buildRegex(query, isRegex, caseSensitive, wholeWord) ?: return emptyList()
         return withContext(Dispatchers.IO) {
             val results = mutableListOf<FileMatch>()
+            // Snapshotted once per search, not per file - the whole point.
+            val openPaths = openBufferLookupSet(projectPath)
             for (file in walkProjectFiles(projectPath, pathPattern, excludePattern)) {
                 ensureActive()
                 if (results.size >= maxResults) break
@@ -86,8 +95,15 @@ class ContentSearchService(
                 // An open file is searched as the user sees it, not as the disk
                 // has it. Otherwise a replace into a live buffer - or any
                 // unsaved edit - leaves the results tree reporting matches the
-                // editor no longer shows.
-                val buffer = bufferBridge.readBuffer(file.absolutePath)
+                // editor no longer shows. The bridge is only asked for files that
+                // can actually have a buffer (an open editor tab); null means the
+                // open set is unknown and every file is asked, as before.
+                val buffer =
+                    if (openPaths == null || file.absolutePath in openPaths) {
+                        bufferBridge.readBuffer(file.absolutePath)
+                    } else {
+                        null
+                    }
                 val key =
                     cacheKey(projectPath, query, pathPattern, excludePattern, isRegex, caseSensitive, wholeWord, file.absolutePath) +
                         if (buffer != null) "|buf" else "|disk"
@@ -223,6 +239,34 @@ class ContentSearchService(
 
     /** Canonical path when resolvable, else the absolute one - identity for cycle detection. */
     private fun canonicalOrPath(f: File): String = runCatching { f.canonicalPath }.getOrDefault(f.absolutePath)
+
+    /**
+     * The open-tab paths expanded into every spelling the walk might produce, or null
+     * when the open set is unknown.
+     *
+     * The walk yields paths under the project root AS OPENED, while a tab can hold the
+     * canonical form or vice versa (a project under /tmp is really /private/tmp on
+     * macOS - the same mismatch resolveFile documents). Missing a live buffer here
+     * would silently search stale disk content, so each tab path is added raw,
+     * canonical, and re-expressed under the raw root when the roots differ. O(open
+     * tabs), so the cost is a handful of canonicalise calls per search.
+     */
+    private fun openBufferLookupSet(projectPath: String): Set<String>? {
+        val raw = openEditorPathsProvider() ?: return null
+        val root = File(projectPath).absolutePath.trimEnd(File.separatorChar)
+        val rootCanon = canonicalOrPath(File(projectPath)).trimEnd(File.separatorChar)
+        val out = HashSet<String>(raw.size * 3 + 1)
+        for (p in raw) {
+            val abs = if (File(p).isAbsolute) File(p).path else File(projectPath, p).path
+            out.add(abs)
+            val canon = canonicalOrPath(File(abs))
+            out.add(canon)
+            if (root != rootCanon && canon.startsWith(rootCanon + File.separatorChar)) {
+                out.add(root + canon.removePrefix(rootCanon))
+            }
+        }
+        return out
+    }
 
     private fun cacheKey(
         projectRoot: String,
@@ -506,7 +550,9 @@ class ContentSearchService(
                 java.nio.file.Files
                     .getPosixFilePermissions(file.toPath())
             }.getOrNull()
-        val tmp = File.createTempFile(file.name, ".tmp", file.parentFile)
+        // createTempFile requires a prefix of at least 3 chars; a file named "a" or
+        // "go" otherwise fails its replace with an opaque per-file error.
+        val tmp = File.createTempFile(file.name.padEnd(3, '_'), ".tmp", file.parentFile)
         try {
             tmp.writeText(text)
             java.nio.file.Files.move(

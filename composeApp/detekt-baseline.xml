@@ -12,7 +12,6 @@
     <ID>ComplexCondition:WorkspaceExtractor.kt$tab.filePath.isBlank() || tab.staged || tab.fromRef != null || tab.toRef != null</ID>
     <ID>CyclomaticComplexMethod:ContentSearchService.kt$ContentSearchService$override suspend fun searchInProject( query: String, pathPattern: String?, excludePattern: String?, isRegex: Boolean, caseSensitive: Boolean, wholeWord: Boolean, maxResults: Int, ): List&lt;FileMatch&gt;</ID>
     <ID>CyclomaticComplexMethod:UnifiedDiffParser.kt$UnifiedDiffParser$fun parse(input: String): List&lt;GitDiffData&gt;</ID>
-    <ID>CyclomaticComplexMethod:UnifiedDiffParser.kt$UnifiedDiffParser$private fun cUnquote(p: String): String</ID>
     <ID>CyclomaticComplexMethod:WorkspaceApplier.kt$internal fun createTabFromWorkspaceConfig( tabConfig: TabConfig, resolvedProjectPath: String, splitViewState: SplitViewState, ): TabInfo?</ID>
     <ID>LongMethod:WorkspaceApplier.kt$internal fun createTabFromWorkspaceConfig( tabConfig: TabConfig, resolvedProjectPath: String, splitViewState: SplitViewState, ): TabInfo?</ID>
     <ID>LongMethod:WorkspaceExtractor.kt$private fun extractTabConfig( tab: TabInfo, defaultWorkingDirectory: String, ): TabConfig?</ID>
@@ -33,8 +32,6 @@
     <ID>PackageNaming:TabPathsTest.kt$package ai.rever.boss.components.window_panel</ID>
     <ID>ReturnCount:ContentSearchService.kt$ContentSearchService$override suspend fun replaceInProject( query: String, replacement: String, files: List&lt;String&gt;, isRegex: Boolean, caseSensitive: Boolean, wholeWord: Boolean, dryRun: Boolean, ): ReplaceSummary</ID>
     <ID>ReturnCount:ContentSearchService.kt$ContentSearchService$override suspend fun searchInProject( query: String, pathPattern: String?, excludePattern: String?, isRegex: Boolean, caseSensitive: Boolean, wholeWord: Boolean, maxResults: Int, ): List&lt;FileMatch&gt;</ID>
-    <ID>ReturnCount:ContentSearchService.kt$ContentSearchService$private fun resolveFile( rawPath: String, projectPath: String, ): File?</ID>
-    <ID>ReturnCount:ContentSearchService.kt$ContentSearchService$private fun scanText( file: File, text: String, regex: Regex, ): List&lt;FileMatch&gt;?</ID>
     <ID>ReturnCount:ContentSearchService.kt$ContentSearchService$private suspend fun replaceInBuffer( file: File, text: String, version: Long, regex: Regex, replacement: String, isRegex: Boolean, dryRun: Boolean, ): FileReplaceResult</ID>
     <ID>ReturnCount:ContentSearchService.kt$ContentSearchService$private suspend fun replaceInOneFile( file: File, regex: Regex, replacement: String, isRegex: Boolean, dryRun: Boolean, ): FileReplaceResult</ID>
     <ID>ReturnCount:DesktopGitService.kt$GitService$internal fun isSafeRefName(ref: String): Boolean</ID>
@@ -1461,7 +1458,7 @@
     <ID>TooManyFunctions:FluckEngine.kt$FluckEngine</ID>
     <ID>TooManyFunctions:FontManager.kt$FontManager</ID>
     <ID>TooManyFunctions:FullscreenBrowserWindow.kt$FullscreenBrowserWindow</ID>
-    <ID>TooManyFunctions:GitDataProviderImpl.kt$GitDataProviderImpl : GitDataProvider</ID>
+    <ID>TooManyFunctions:GitDataProviderImpl.kt$GitDataProviderImpl : GitDataProviderDisposableProvider</ID>
     <ID>TooManyFunctions:GitService.kt$GitService</ID>
     <ID>TooManyFunctions:GitServiceBridge.kt$GitServiceBridge : GitServiceCoroutineImplBase</ID>
     <ID>TooManyFunctions:GlobalSearchDialog.kt$ai.rever.boss.components.dialogs.GlobalSearchDialog.kt</ID>

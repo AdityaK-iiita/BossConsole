@@ -1,6 +1,7 @@
 package ai.rever.boss.git
 
 import ai.rever.boss.components.events.FileEventBus
+import ai.rever.boss.components.plugin.providers.DisposableProvider
 import ai.rever.boss.plugin.api.GitBranchRefData
 import ai.rever.boss.plugin.api.GitCommitInfoData
 import ai.rever.boss.plugin.api.GitCommitNodeData
@@ -19,10 +20,9 @@ import ai.rever.boss.window.WindowGitState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
@@ -43,7 +43,8 @@ class GitDataProviderImpl(
     private val windowGitState: WindowGitState?,
     private val windowIdProvider: () -> String?,
     private val projectPathProvider: () -> String? = { null },
-) : GitDataProvider {
+) : GitDataProvider,
+    DisposableProvider {
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val logger = BossLogger.forComponent("GitDataProvider")
 
@@ -76,6 +77,15 @@ class GitDataProviderImpl(
             windowGitState?.isLoading?.value ?: false,
         )
     override val isLoading: StateFlow<Boolean> = _isLoading
+
+    /**
+     * Cancels the four collectors launched in init. DefaultPlugin is per window and
+     * builds this provider lazily; without this a closed window leaked all four,
+     * each holding its [WindowGitState] alive.
+     */
+    override fun dispose() {
+        scope.cancel()
+    }
 
     init {
         // Collect from WindowGitState and map to plugin API types
@@ -192,50 +202,60 @@ class GitDataProviderImpl(
     // "No project selected", so the button did nothing and said nothing useful.
     // Ordering between a panel's first read and its first write is not
     // something the panel should have to guarantee.
+    //
+    // And every write passes THIS window's path, like the diff reads: aligning
+    // the global in ensureRepoState and then reading it back is two steps, and
+    // another window's align (its status poll runs ensureRepoState too) landing
+    // in between redirected the write - with two worktrees of one repo open, a
+    // Discard ran `git restore` in the other window's tree. The override travels
+    // with the call, so no interleaving can redirect it; null (a provider with
+    // no window state) falls back to the global as before.
 
     override suspend fun commit(message: String): GitOperationResultData {
         ensureRepoState()
-        return GitService.commit(message, windowId = windowIdProvider()).toData()
+        return GitService
+            .commit(message, windowId = windowIdProvider(), projectPathOverride = windowProjectPath())
+            .toData()
     }
 
     override suspend fun stage(filePath: String): GitOperationResultData {
         ensureRepoState()
-        return GitService.stage(filePath, windowIdProvider()).toData()
+        return GitService.stage(filePath, windowIdProvider(), windowProjectPath()).toData()
     }
 
     override suspend fun unstage(filePath: String): GitOperationResultData {
         ensureRepoState()
-        return GitService.unstage(filePath, windowIdProvider()).toData()
+        return GitService.unstage(filePath, windowIdProvider(), windowProjectPath()).toData()
     }
 
     override suspend fun stageAll(): GitOperationResultData {
         ensureRepoState()
-        return GitService.stageAll(windowIdProvider()).toData()
+        return GitService.stageAll(windowIdProvider(), windowProjectPath()).toData()
     }
 
     override suspend fun unstageAll(): GitOperationResultData {
         ensureRepoState()
-        return GitService.unstageAll(windowIdProvider()).toData()
+        return GitService.unstageAll(windowIdProvider(), windowProjectPath()).toData()
     }
 
     override suspend fun discardChanges(filePath: String): GitOperationResultData {
         ensureRepoState()
-        return GitService.discardChanges(filePath, windowIdProvider()).toData()
+        return GitService.discardChanges(filePath, windowIdProvider(), windowProjectPath()).toData()
     }
 
     override suspend fun cherryPick(commitHash: String): GitOperationResultData {
         ensureRepoState()
-        return GitService.cherryPick(commitHash).toData()
+        return GitService.cherryPick(commitHash, windowIdProvider(), windowProjectPath()).toData()
     }
 
     override suspend fun revert(commitHash: String): GitOperationResultData {
         ensureRepoState()
-        return GitService.revert(commitHash).toData()
+        return GitService.revert(commitHash, windowIdProvider(), windowProjectPath()).toData()
     }
 
     override suspend fun checkout(ref: String): GitOperationResultData {
         ensureRepoState()
-        return GitService.checkout(ref, windowIdProvider()).toData()
+        return GitService.checkout(ref, windowIdProvider(), windowProjectPath()).toData()
     }
 
     override fun getCurrentProjectPath(): String? = GitService.getCurrentProjectPath()
@@ -273,12 +293,11 @@ class GitDataProviderImpl(
     }
 
     /**
-     * This window's project path, for the reads that must not use the global.
-     *
-     * `ensureRepoState()` only reseeds the global when THIS window's project
-     * changed, so once two windows have settled nothing re-aligns it - and the
-     * last window to refresh wins. Null falls back to the global, which is the
-     * right answer for a provider with no window.
+     * This window's project path, for the reads AND writes that must not use the
+     * global: the global belongs to whichever window aligned it last, and even with
+     * unconditional alignment another window's align can land between this window's
+     * align and its command. Null falls back to the global, which is the right
+     * answer for a provider with no window.
      */
     private fun windowProjectPath(): String? = windowGitState?.projectPath?.value
 

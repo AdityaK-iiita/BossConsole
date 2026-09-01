@@ -403,21 +403,25 @@ class DefaultPlugin(
     // folded into this same service — see BrowserConfig.profileName/ephemeralProfile/auth.
     override val browserService: BrowserService? = getBrowserServiceInstance(_windowId)
 
-    // Git data provider for plugins that display git information
-    override val gitDataProvider: GitDataProvider? by lazy {
-        if (windowGitState != null) {
-            GitDataProviderImpl(
-                windowGitState,
-                { _windowId },
-                // The window's own selected project: lets the provider bootstrap
-                // windowGitState.projectPath when the project was picked outside
-                // the top bar (e.g. the codebase panel's picker).
-                { windowProjectState?.selectedProject?.value?.path },
-            )
-        } else {
-            null
+    // Git data provider for plugins that display git information.
+    // Named delegate so dispose() can cancel its collectors without forcing the lazy
+    // (see logDataProviderDelegate for the same pattern).
+    private val gitDataProviderDelegate =
+        lazy {
+            if (windowGitState != null) {
+                GitDataProviderImpl(
+                    windowGitState,
+                    { _windowId },
+                    // The window's own selected project: lets the provider bootstrap
+                    // windowGitState.projectPath when the project was picked outside
+                    // the top bar (e.g. the codebase panel's picker).
+                    { windowProjectState?.selectedProject?.value?.path },
+                )
+            } else {
+                null
+            }
         }
-    }
+    override val gitDataProvider: GitDataProvider? by gitDataProviderDelegate
 
     // Window ID for window-scoped operations
     override val windowId: String?
@@ -454,8 +458,48 @@ class DefaultPlugin(
                         expectedVersion: Long,
                     ) = provider()?.applyEdit(path, startLine, startCol, endLine, endCol, newText, expectedVersion)
                 },
+            // The host knows which files have an editor tab open in this window, so the
+            // search asks the bridge about those alone instead of every walked file.
+            openEditorPathsProvider = { openEditorFilePaths() },
         )
     }
+
+    /**
+     * Absolute paths of every file with an editor tab open in THIS window, or null
+     * when the set cannot be trusted - null makes the search fall back to asking the
+     * editor about every file, which is correct, just slower. Untrusted means: no
+     * split view to enumerate, or an editor-typed tab whose class this host cannot
+     * read a path from (a plugin-constructed TabInfo, read by reflection like
+     * [ApiActiveTabsProviderAdapter] does for browser tabs).
+     */
+    private fun openEditorFilePaths(): Set<String>? =
+        runCatching {
+            val panels = splitViewState?.getAllPanels() ?: return@runCatching null
+            val paths = mutableSetOf<String>()
+            for (panel in panels) {
+                for (tab in panel.tabsComponent.tabsState.value.tabs) {
+                    when {
+                        tab is ai.rever.boss.plugin.tab.codeeditor.EditorTabInfo -> {
+                            // A blank path is an unsaved "Untitled" buffer: no file on
+                            // disk can be that tab, so it cannot affect the walk.
+                            if (tab.filePath.isNotBlank()) paths.add(tab.filePath)
+                        }
+
+                        tab.typeId.typeId == "editor" -> {
+                            val p =
+                                runCatching {
+                                    tab.javaClass.getMethod("getFilePath").invoke(tab) as? String
+                                }.getOrNull()
+                            // An editor tab whose path we cannot read means the set is
+                            // incomplete - claiming it complete would skip a live buffer.
+                            if (p.isNullOrBlank()) return@runCatching null
+                            paths.add(p)
+                        }
+                    }
+                }
+            }
+            paths
+        }.getOrNull()
 
     // Auth data provider for plugins that need authentication state
     override val authDataProvider: AuthDataProvider by lazy {
@@ -1050,6 +1094,9 @@ class DefaultPlugin(
         // actually built: see [logDataProviderDelegate].
         if (logDataProviderDelegate.isInitialized()) {
             (logDataProvider as? DisposableProvider)?.dispose()
+        }
+        if (gitDataProviderDelegate.isInitialized()) {
+            (gitDataProvider as? DisposableProvider)?.dispose()
         }
         pluginScope.cancel()
     }

@@ -114,5 +114,8 @@ __pycache__/
 .worktrees/
 
 # Eclipse/Kotlin-LSP build output. Regenerated on every IDE build; never tracked.
+# Deliberately UNANCHORED: the LSP writes a bin/ under the repo root AND under each
+# module (modules/*/bin/main/...), so an anchored /bin/ would un-ignore the per-module
+# output and leave a dozen untracked directories in git status.
 bin/
 .kotlin/
