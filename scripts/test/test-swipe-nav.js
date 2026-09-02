@@ -274,19 +274,21 @@ console.log('\na real swipe');
 {
   const p = newPage(js);
   p.swipe(12, -10);
-  eq('goes back once', p.navigated, ['back']);
   p.settle();
+  eq('goes back once', p.navigated, ['back']);
   check('leaves nothing showing', p.visibleOverlays() === 0, p.visibleOverlays());
   check('never calls preventDefault', p.preventedDefaults() === 0, p.preventedDefaults());
 }
 {
   const p = newPage(js);
   p.swipe(12, 10);
+  p.settle();
   eq('the other direction goes forward', p.navigated, ['forward']);
 }
 {
   const p = newPage(js);
   p.swipe(24, -10);
+  p.settle();
   eq('one continuous swipe navigates exactly once', p.navigated, ['back']);
 }
 {
@@ -294,7 +296,43 @@ console.log('\na real swipe');
   p.swipe(12, -10);
   p.advance(GAP_MS + 80);
   p.swipe(12, -10);
+  p.settle();
   eq('two swipes across a gap navigate twice', p.navigated, ['back', 'back']);
+}
+
+console.log('\nrelease, not the threshold, is what commits');
+{
+  // The bug this whole change fixes (boss-plugin-fluck-browser#36): crossing COMMIT_PX used to
+  // navigate on the spot, in the same wheel event, fingers still down. Held right at the commit
+  // distance with no further events, it must not navigate until the gesture actually ends.
+  const p = newPage(js);
+  p.swipe(9, -10);
+  eq('holding at the commit distance does not navigate yet', p.navigated, []);
+  check('the affordance is still up, filled in', p.visibleOverlays() === 1, p.visibleOverlays());
+  p.settle();
+  eq('and only fires once the gesture ends', p.navigated, ['back']);
+}
+{
+  // Same direction throughout - accumX never crosses back through zero, so this is NOT the
+  // reversal guard below, just letting go before release while short of the line again.
+  const p = newPage(js);
+  p.swipe(12, -10);
+  p.swipe(4, 10);
+  p.settle();
+  eq('easing back below the commit distance before release does not navigate', p.navigated, []);
+}
+{
+  const p = newPage(js);
+  p.swipe(12, -10);
+  p.swipe(1, -10);
+  p.settle();
+  eq('holding past the commit distance through release still navigates', p.navigated, ['back']);
+}
+{
+  const p = newPage(js);
+  p.swipe(12, -10);
+  p.pagehide();
+  eq('the page going away mid-swipe is not routed through a commit', p.navigated, []);
 }
 
 console.log('\ngestures that must not navigate');
@@ -310,6 +348,7 @@ console.log('\ngestures that must not navigate');
   const p = newPage(js);
   const carousel = p.element({ scrollWidth: 1200, clientWidth: 400, scrollLeft: 300, overflowX: 'auto' });
   p.swipe(12, -10, 0, carousel);
+  p.settle();
   eq('over something that can still scroll that way', p.navigated, []);
 }
 {
@@ -317,35 +356,41 @@ console.log('\ngestures that must not navigate');
   // Same element, already scrolled hard against the edge the swipe is pushing toward.
   const carousel = p.element({ scrollWidth: 1200, clientWidth: 400, scrollLeft: 0, overflowX: 'auto' });
   p.swipe(12, -10, 0, carousel);
+  p.settle();
   eq('but does navigate once that element is at its edge', p.navigated, ['back']);
 }
 {
   const p = newPage(js);
   const styled = p.element({ scrollWidth: 1200, clientWidth: 400, scrollLeft: 300, overflowX: 'hidden' });
   p.swipe(12, -10, 0, styled);
+  p.settle();
   eq('overflow:hidden is not a scroll chain', p.navigated, ['back']);
 }
 {
   const p = newPage(js);
   p.swipe(3, -MAX_STEP_PX);
+  p.settle();
   eq('a discrete mouse wheel, however far it travels', p.navigated, []);
 }
 {
   const p = newPage(js);
   p.wheelRaw({ deltaMode: 1, deltaX: -40, deltaY: 0, target: p.body, composedPath: () => [p.body] });
   p.swipe(12, -10);
+  p.settle();
   eq('anything that is not pixel-mode', p.navigated, []);
 }
 {
   // Diagonal: vertical travel outruns the floor immediately.
   const p = newPage(js);
   p.swipe(12, -10, -40);
+  p.settle();
   eq('a diagonal drag', p.navigated, []);
 }
 {
   const p = newPage(js);
   p.swipe(5, 0, -50);
   p.swipe(12, -10);
+  p.settle();
   eq('a vertical scroll that curls into a horizontal one', p.navigated, []);
 }
 {
@@ -355,17 +400,20 @@ console.log('\ngestures that must not navigate');
   // the guard is there or not.
   p.swipe(5, -10);
   p.swipe(15, 10);
+  p.settle();
   eq('a swipe reversed halfway', p.navigated, []);
 }
 {
   const p = newPage(js, { state: { back: false, forward: true } });
   p.swipe(12, -10);
+  p.settle();
   eq('a direction with no history entry', p.navigated, []);
   check('and shows no affordance for it', p.visibleOverlays() === 0, p.visibleOverlays());
 }
 {
   const p = newPage(js, { state: null });
   p.swipe(12, -10);
+  p.settle();
   eq('before the host has said what is navigable', p.navigated, []);
 }
 {
@@ -379,18 +427,21 @@ console.log("\nChrome's cancellation tiers (history_swiper.mm)");
   // it, and this is the shape of an ordinary slightly-sloped swipe.
   const p = newPage(js);
   p.swipe(14, -10, 6);
+  p.settle();
   eq('a swipe with honest slope is taken', p.navigated, ['back']);
 }
 {
   // Rule 1: yDelta > 2 * xDelta.
   const p = newPage(js);
   p.swipe(14, -10, -25);
+  p.settle();
   eq('strongly vertical is refused', p.navigated, []);
 }
 {
   // Rule 2: yDelta * 1.3 > xDelta, once vertical passes the low threshold. 8*1.3 = 10.4 > 10.
   const p = newPage(js);
   p.swipe(14, -10, 8);
+  p.settle();
   eq('vertical past about three quarters of horizontal is refused', p.navigated, []);
 }
 {
@@ -403,6 +454,7 @@ console.log("\nChrome's cancellation tiers (history_swiper.mm)");
   // the navigation threshold. It is a backstop for a gesture that wanders without committing.
   const p = newPage(js);
   for (let i = 0; i < 20; i++) p.wheel(-10, i % 2 === 0 ? 8 : -8);
+  p.settle();
   eq('vertical wobble that nets to zero is still refused', p.navigated, []);
 }
 {
@@ -410,6 +462,7 @@ console.log("\nChrome's cancellation tiers (history_swiper.mm)");
   // bug this asymmetry prevents.
   const p = newPage(js);
   p.swipe(14, -10, 0);
+  p.settle();
   eq('and a clean swipe still is not', p.navigated, ['back']);
 }
 
@@ -417,6 +470,7 @@ console.log('\nswitching it off while a page is open');
 {
   const p = newPage(js, { state: { enabled: false, back: true, forward: true } });
   p.swipe(12, -10);
+  p.settle();
   eq('a page told the gesture is off does nothing', p.navigated, []);
   check('and draws no chevron', p.visibleOverlays() === 0, p.visibleOverlays());
 }
@@ -425,6 +479,7 @@ console.log('\nswitching it off while a page is open');
   // has a state with no `enabled` key at all. Absent must mean on, not off.
   const p = newPage(js, { state: { back: true, forward: true } });
   p.swipe(12, -10);
+  p.settle();
   eq('a state without the flag still works', p.navigated, ['back']);
 }
 
@@ -437,6 +492,7 @@ console.log('\nthe root scroller');
     root: { scrollWidth: 4000, clientWidth: 800, scrollLeft: 0, overflowX: 'hidden' },
   });
   p.swipe(12, 10);
+  p.settle();
   eq('a root that cannot scroll does not block the swipe', p.navigated, ['forward']);
 }
 {
@@ -446,6 +502,7 @@ console.log('\nthe root scroller');
     root: { scrollWidth: 4000, clientWidth: 800, scrollLeft: 500, overflowX: 'visible' },
   });
   p.swipe(12, -10);
+  p.settle();
   eq('a root that can still scroll keeps the gesture', p.navigated, []);
 }
 
@@ -456,11 +513,13 @@ console.log('\na fast flick');
   const p = newPage(js);
   p.swipe(3, -8);
   p.swipe(6, -MAX_STEP_PX - 10, 0, undefined, 1_003);
+  p.settle();
   eq('a flick that accelerates still commits', p.navigated, ['back']);
 }
 {
   const p = newPage(js);
   p.swipe(4, -MAX_STEP_PX - 10);
+  p.settle();
   eq('but wheel-shaped from the first event is still refused', p.navigated, []);
 }
 
@@ -505,6 +564,7 @@ console.log('\nthe affordance');
 {
   const p = newPage(js, { noBody: true });
   p.swipe(12, -10);
+  p.settle();
   eq('a document with no body still navigates', p.navigated, ['back']);
 }
 

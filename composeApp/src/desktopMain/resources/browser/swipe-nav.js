@@ -67,8 +67,6 @@
     // Set once the gesture has been ruled out; stays set until the gesture ends, so a
     // rejected swipe cannot become an accepted one halfway through.
     var rejected = false;
-    // Set once the navigation has fired, so one continuous swipe navigates exactly once.
-    var committed = false;
     var direction = 0;
     // Ends the gesture when the fingers lift.
     //
@@ -289,7 +287,6 @@
         verticalPath = 0;
         eventCount = 0;
         rejected = false;
-        committed = false;
         direction = 0;
     }
 
@@ -313,22 +310,48 @@
         }
     }
 
+    // The one place "reached the commit distance" becomes an actual navigation.
+    //
+    // Called only when the gesture ENDS - the endTimer firing, which is the only signal a
+    // lifted finger gives us at all, since AWT does not surface NSEvent's scroll phases. Never
+    // called mid-swipe: reaching COMMIT_PX used to navigate on the spot, in the same wheel
+    // event that crossed it, which is boss-plugin-fluck-browser#36 - a swipe that brushed the
+    // threshold committed with the fingers still down, no way to see it coming and no way to
+    // back out. Read here, this is the same question a native trackpad swipe-back answers only
+    // on release: was the LAST position past the line, not "was any position ever past it".
+    //
+    // Rechecked against the live accumulators rather than a cached progress, so easing back
+    // below COMMIT_PX before release - same direction the whole time, no reversal - cancels
+    // exactly like letting go early on a real trackpad. A genuine reversal never reaches here at
+    // all: it flips `direction` inside onWheel and calls abandon() immediately, which is the
+    // existing, separate cancel-by-reversing path this does not duplicate.
+    function decide() {
+        if (rejected || direction === 0) {
+            return;
+        }
+        if (Math.abs(accumX) / COMMIT_PX >= 1) {
+            navigate(direction);
+        }
+    }
+
     function onWheel(event) {
         var now = Date.now();
         if (now - lastEventAt > GESTURE_GAP_MS) {
             reset();
         }
         lastEventAt = now;
-        // Kept armed for as long as events keep arriving; fires once they stop.
+        // Kept armed for as long as events keep arriving; fires once they stop - the moment
+        // this decides whether the gesture navigates, then resets to neutral either way.
         if (endTimer) {
             w.clearTimeout(endTimer);
         }
         endTimer = w.setTimeout(function () {
             endTimer = 0;
+            decide();
             reset();
         }, GESTURE_GAP_MS);
 
-        if (committed || rejected || switchedOff()) {
+        if (rejected || switchedOff()) {
             return;
         }
         // Line and page modes come from sources that are never a trackpad.
@@ -386,20 +409,20 @@
             return;
         }
 
+        // Progress is tracked all the way through the gesture now, never gated on whether it
+        // has reached the commit distance yet - see decide() for why crossing COMMIT_PX no
+        // longer does anything here beyond what trackAffordance already draws.
         var progress = Math.abs(accumX) / COMMIT_PX;
         showAffordance(direction);
         trackAffordance(direction, progress);
-
-        if (progress >= 1) {
-            committed = true;
-            hideAffordance(direction);
-            navigate(direction);
-        }
     }
 
     // Capture-phase and passive: the gesture only commits when nothing was going to scroll,
     // so there is never anything to preventDefault, and passive keeps this off Chromium's
     // scroll-blocking path.
     w.addEventListener('wheel', onWheel, { capture: true, passive: true });
+    // pagehide is NOT routed through decide() - the page is already unloading, so navigating
+    // it anywhere is moot at best; this only tears down the affordance so nothing outlives the
+    // document it was drawn into.
     w.addEventListener('pagehide', reset, { capture: true });
 })();
