@@ -274,7 +274,8 @@ private fun SourceListItem(
     val cachedFavicon = source.tabInfo?.let { rememberFaviconLoader(it) }
     val immediateFavicon = inMemoryFavicon ?: cachedFavicon
 
-    // Load HQ favicon (async from Google) - shows immediateFavicon while loading, then upgrades
+    // Resolve the row's own favicon, falling back to Google's guess about its host only if
+    // there is none. immediateFavicon shows until it lands.
     val loadedFavicon = rememberHighQualityFavicon(source.url, faviconCacheKey, immediateFavicon)
 
     // Determine fallback icon
@@ -407,8 +408,14 @@ private fun DialogFooter(
 }
 
 /**
- * Loads a high-quality favicon (128px from Google's service) asynchronously.
- * Returns the fallback immediately while HQ is loading, then upgrades to HQ when available.
+ * Resolves a row's favicon asynchronously, showing [fallback] until it arrives.
+ *
+ * **What replaces [fallback] is not a host-level guess unless nothing better exists.**
+ * `loadHighQualityFavicon` reads the page's own cached favicon first and only asks Google about
+ * the host when there is none, so a row whose icon is known cannot be downgraded to the icon of
+ * whatever parent domain Google resolves its host to. An earlier version of this deliberately
+ * "upgraded" to the guess, which for every `*.google.com` tab meant replacing the real icon with
+ * a generic "G".
  */
 @Composable
 private fun rememberHighQualityFavicon(
@@ -416,24 +423,22 @@ private fun rememberHighQualityFavicon(
     standardCacheKey: String?,
     fallback: ai.rever.boss.plugin.api.TabIcon.Image?,
 ): ai.rever.boss.plugin.api.TabIcon.Image? {
-    var hqFavicon by remember(url, standardCacheKey) { mutableStateOf<ai.rever.boss.plugin.api.TabIcon.Image?>(null) }
+    var resolved by remember(url, standardCacheKey) { mutableStateOf<ai.rever.boss.plugin.api.TabIcon.Image?>(null) }
 
     LaunchedEffect(url, standardCacheKey) {
-        if (url != null) {
-            hqFavicon =
-                try {
-                    loadHighQualityFavicon(url, standardCacheKey)
-                } catch (e: Exception) {
-                    logger.debug(
-                        LogCategory.BROWSER,
-                        "HQ favicon load failed - using fallback icon",
-                        mapOf("error" to e.toString()),
-                    )
-                    null
-                }
-        }
+        resolved =
+            try {
+                loadHighQualityFavicon(url, standardCacheKey)
+            } catch (e: Exception) {
+                logger.debug(
+                    LogCategory.BROWSER,
+                    "Favicon resolution failed - using fallback icon",
+                    mapOf("error" to e.toString()),
+                )
+                null
+            }
     }
 
-    // Return HQ if loaded, otherwise use fallback (in-memory or cached)
-    return hqFavicon ?: fallback
+    // Until it resolves, whatever was already to hand: in-memory or cached.
+    return resolved ?: fallback
 }

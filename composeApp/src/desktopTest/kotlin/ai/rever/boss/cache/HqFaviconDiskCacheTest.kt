@@ -1,0 +1,145 @@
+package ai.rever.boss.cache
+
+import kotlinx.coroutines.test.runTest
+import java.io.File
+import javax.imageio.ImageIO
+import kotlin.test.AfterTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+/**
+ * Tests for what [HqFaviconDiskCache] does to files, which is the part of this PR that *removes or
+ * retains user data* and was the only part with nothing pinning it.
+ *
+ * Uses the `internal` directory seam, the same one [FaviconCacheTest] uses - the default resolves
+ * through `BossDirectories` to the developer's real `~/.boss/cache`.
+ */
+class HqFaviconDiskCacheTest {
+    private val dir: File =
+        File.createTempFile("favicon-hq-cache-", "").let {
+            it.delete()
+            it.mkdirs()
+            it
+        }
+
+    @AfterTest
+    fun cleanUp() {
+        dir.deleteRecursively()
+    }
+
+    private fun entryFor(host: String) = File(dir, "${HqFaviconDiskCache.keyFor(host)}.png")
+
+    private fun writeEntry(
+        host: String,
+        ageMs: Long = 0,
+    ): File =
+        entryFor(host).also { file ->
+            ImageIO.write(sixteenPxIcon(), "PNG", file)
+            file.setLastModified(System.currentTimeMillis() - ageMs)
+        }
+
+    @Test
+    fun `a stored icon comes back with the time it was fetched`() =
+        runTest {
+            HqFaviconDiskCache.save(HqFaviconDiskCache.keyFor(HOST), sixteenPxIcon(), dir)
+
+            val entry = assertNotNull(HqFaviconDiskCache.load(HqFaviconDiskCache.keyFor(HOST), dir))
+            assertEquals(entryFor(HOST).lastModified(), entry.fetchedAtMs)
+        }
+
+    /**
+     * **The no-touch guarantee.** The mtime was bumped on every read to order an LRU, which made
+     * the age the TTL is measured from unknowable and pinned the most-shown entries - a wrong icon
+     * on a favourite tile among them - beyond eviction's reach. A regression to bumping would
+     * otherwise be invisible until someone's icons stopped expiring.
+     */
+    @Test
+    fun `a read does not touch the entry`() {
+        val file = writeEntry(HOST, ageMs = TEN_DAYS)
+        val before = file.lastModified()
+
+        assertNotNull(HqFaviconDiskCache.load(HqFaviconDiskCache.keyFor(HOST), dir))
+
+        assertEquals(before, file.lastModified(), "reading bumped the mtime the TTL is measured from")
+    }
+
+    /**
+     * **An expired entry is not destroyed before a replacement exists.** Deleting on read meant:
+     * delete the only copy, fetch fails (offline, Google blocked, rate-limited), letter - and a
+     * letter on every later launch too. Freshness is the caller's decision; this hands back the
+     * bytes and the date.
+     */
+    @Test
+    fun `an expired entry survives the read that finds it stale`() {
+        val file = writeEntry(HOST, ageMs = FaviconFreshness.MAX_CACHE_AGE_MS + TEN_DAYS)
+
+        val entry = assertNotNull(HqFaviconDiskCache.load(HqFaviconDiskCache.keyFor(HOST), dir))
+
+        assertTrue(FaviconFreshness.isEntryExpired(entry.fetchedAtMs, System.currentTimeMillis()))
+        assertTrue(file.exists(), "the only copy was deleted before anything could replace it")
+    }
+
+    @Test
+    fun `a missing or unreadable entry is a cache miss, not a throw`() {
+        assertNull(HqFaviconDiskCache.load(HqFaviconDiskCache.keyFor("never-fetched.test"), dir))
+
+        entryFor(HOST).writeText("not a png")
+        assertNull(HqFaviconDiskCache.load(HqFaviconDiskCache.keyFor(HOST), dir))
+    }
+
+    /**
+     * A write replaces the entry through a temp file and a move, so a concurrent reader never
+     * meets a half-written PNG - and nothing is left behind if it does not.
+     */
+    @Test
+    fun `a write replaces the entry and leaves no temp file`() =
+        runTest {
+            writeEntry(HOST, ageMs = FaviconFreshness.MAX_CACHE_AGE_MS + TEN_DAYS)
+            val key = HqFaviconDiskCache.keyFor(HOST)
+
+            HqFaviconDiskCache.save(key, sixteenPxIcon(), dir)
+
+            val entry = assertNotNull(HqFaviconDiskCache.load(key, dir))
+            assertTrue(!FaviconFreshness.isEntryExpired(entry.fetchedAtMs, System.currentTimeMillis()))
+            assertEquals(emptyList(), dir.listFiles()!!.filter { it.name.endsWith(".part") }.map { it.name })
+            assertEquals(1, HqFaviconDiskCache.stats(dir).first)
+        }
+
+    /**
+     * Eviction is oldest-*fetched* first now that reads leave the mtime alone. What it must not do
+     * is take the entry currently being written.
+     */
+    @Test
+    fun `a full cache evicts its oldest entries and keeps the new one`() =
+        runTest {
+            // One under the cap, aged so the oldest are unambiguous, then one more write to tip it.
+            repeat(MAX_ENTRIES) { index -> writeEntry("host-$index.test", ageMs = (MAX_ENTRIES - index) * 1000L) }
+            val newest = "just-fetched.test"
+
+            HqFaviconDiskCache.save(HqFaviconDiskCache.keyFor(newest), sixteenPxIcon(), dir)
+
+            assertEquals(MAX_ENTRIES - EVICTION_COUNT + 1, HqFaviconDiskCache.stats(dir).first)
+            assertNotNull(HqFaviconDiskCache.load(HqFaviconDiskCache.keyFor(newest), dir))
+            assertNull(HqFaviconDiskCache.load(HqFaviconDiskCache.keyFor("host-0.test"), dir), "oldest survived")
+            assertNotNull(HqFaviconDiskCache.load(HqFaviconDiskCache.keyFor("host-${MAX_ENTRIES - 1}.test"), dir))
+        }
+
+    @Test
+    fun `clear empties the cache`() {
+        writeEntry(HOST)
+        HqFaviconDiskCache.clear(dir)
+        assertEquals(0, HqFaviconDiskCache.stats(dir).first)
+    }
+
+    private companion object {
+        const val HOST = "example.test"
+        const val TEN_DAYS = 10L * 24 * 60 * 60 * 1000
+
+        /** Mirrors the service's own cap and batch size; a change to either should fail here. */
+        const val MAX_ENTRIES = 200
+        const val EVICTION_COUNT = 50
+    }
+}

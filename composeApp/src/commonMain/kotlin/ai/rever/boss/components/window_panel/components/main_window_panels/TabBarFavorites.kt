@@ -1,6 +1,5 @@
 package ai.rever.boss.components.window_panel.components.main_window_panels
 
-import ai.rever.boss.cache.loadFaviconFromCache
 import ai.rever.boss.cache.loadHighQualityFavicon
 import ai.rever.boss.components.model.TabDraggableComponent
 import ai.rever.boss.components.model.TabDropTarget
@@ -285,25 +284,20 @@ private fun FavoritesGrid(
 /**
  * One favourite: its favicon, its title as a tooltip, and a right-click menu to remove it.
  *
- * **The page's own favicon wins; the fetch is only a fallback.** Two sources disagree here, and
- * the order between them is the whole correctness of these tiles:
+ * **The icon comes from `loadHighQualityFavicon` and nothing else.** It resolves the page's own
+ * cached favicon FIRST and only asks Google about the host when there is none - the order that is
+ * the whole correctness of these tiles, and it lives in the service so the dashboard cards and
+ * the capture picker get it too. The earlier version of this tile fetched first, and a guess
+ * about a host overwrote a known-correct per-page icon: every Google-property favourite came out
+ * as the same "G", because Google resolves subdomains to their parent.
  *
- * - `loadFaviconFromCache(faviconCacheKey)` is keyed on the FULL page URL and holds what the tab
- *   itself served. Right by construction, and absent for a bookmark saved from something that
- *   was never a browser tab.
- * - `loadHighQualityFavicon(url, …)` derives a HOST and asks Google's service about it. It fills
- *   the gap the first source leaves, and it is a guess.
+ * Reading the standard cache here as well would undo the point twice over - once as a second read
+ * of what the service already tried, and once because `LaunchedEffect` does not leave the
+ * composition dispatcher, so the PNG decode would land on the UI thread. The service does its own
+ * work on an IO dispatcher.
  *
- * Fetching FIRST was the bug: a guess about a host overwrote a known-correct per-page icon.
- * Google resolves subdomains to their parent - `mail.google.com`, `docs.google.com` and
- * `accounts.google.com` all return the same 32px Google "G" - so every Google-property favourite
- * came out identical, and a bookmark on a `google.com/url?q=…` redirect link came out as Google
- * rather than as the site it opens. Neither is recoverable from a host; both were already sitting
- * correct in the standard cache.
- *
- * Loaded in a LaunchedEffect rather than inline, because it touches the disk and the network and
- * composition is the wrong thread for either. The letter shows until it resolves, so the grid has
- * its final shape on the first frame and does not reflow.
+ * The letter shows until the icon resolves, so the grid has its final shape on the first frame and
+ * does not reflow.
  */
 @Composable
 private fun FavoriteTile(
@@ -323,20 +317,9 @@ private fun FavoriteTile(
         mutableStateOf<TabIcon.Image?>(null)
     }
     LaunchedEffect(config.url, config.faviconCacheKey) {
-        val url = config.url
-        icon =
-            // The page's OWN favicon first. It is keyed on the full URL and was captured from the
-            // tab, so it is the icon the site actually serves; the HQ fetch only ever knows a
-            // host, and asks a third party to guess from that.
-            runCatching { loadFaviconFromCache(config.faviconCacheKey) }.getOrNull()
-                ?: url?.takeUnless { it.isBlank() }?.let { pageUrl ->
-                    // Nothing cached: a bookmark saved before its favicon was, or one whose key
-                    // has since been evicted. A host-level guess beats a letter here.
-                    //
-                    // Not a page at all - a terminal, a file - has no host to guess from, so the
-                    // tile keeps its letter.
-                    runCatching { loadHighQualityFavicon(pageUrl, config.faviconCacheKey) }.getOrNull()
-                }
+        // A bookmark on something that was never a page - a terminal, a file - has a null or blank
+        // url and so no host to guess from, which leaves it its cached icon or its letter.
+        icon = runCatching { loadHighQualityFavicon(config.url, config.faviconCacheKey) }.getOrNull()
     }
 
     HoverTooltipBox(

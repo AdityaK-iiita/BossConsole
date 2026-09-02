@@ -72,7 +72,9 @@ fun BrowserPageCard(
     val iconColor = getDomainColor(domain)
     val cardShape = RoundedCornerShape(12.dp)
 
-    // Load high-quality favicon (Google's service provides up to 128px icons)
+    // The page's own cached favicon, or Google's guess about its host when there is none -
+    // loadHighQualityFavicon settles that order. A 16px page icon is soft in this 36dp card;
+    // it is still the right site, which the 128px guess about a parent domain was not.
     var favicon by remember(page.url) { mutableStateOf<ai.rever.boss.plugin.api.TabIcon.Image?>(null) }
     LaunchedEffect(page.url, page.faviconCacheKey) {
         favicon =
