@@ -67,29 +67,36 @@ object HighQualityFaviconService {
     private const val MAX_CONCURRENT_FETCHES = 3
 
     /**
-     * A ceiling on what a reply may be worth reading.
+     * A ceiling on what a reply may be worth keeping. A 128px PNG is a few KB, so this is two
+     * orders of magnitude of headroom.
      *
-     * A 128px PNG is a few KB; this is two orders of magnitude of headroom and still the only
-     * thing between the network and a `ByteArray` on the heap. The request timeout bounds it in
-     * practice, which is not the same as bounding it.
+     * **It is not a streaming bound.** `readRawBytes()` materialises the body first, so a reply
+     * with no `Content-Length` is rejected only after it has been held in full; what actually
+     * bounds that case is the 2.5s timeout times the link speed. Acceptable here and nowhere else,
+     * because the host is always `www.google.com` rather than anything a caller supplies.
      */
     private const val MAX_RESPONSE_BYTES = 256L * 1024
 
     // Semaphore to limit concurrent network requests
     private val fetchSemaphore = Semaphore(MAX_CONCURRENT_FETCHES)
 
-    // Ktor HTTP client with connection pooling
-    private val httpClient by lazy {
-        HttpClient(CIO) {
-            engine {
-                requestTimeout = REQUEST_TIMEOUT_MS
-                endpoint {
-                    connectTimeout = REQUEST_TIMEOUT_MS
-                    socketTimeout = REQUEST_TIMEOUT_MS
+    // Ktor HTTP client with connection pooling. Held as the Lazy, not just its value, so close()
+    // can ask whether anything ever fetched rather than starting a CIO engine at shutdown to shut
+    // it down.
+    private val httpClientLazy =
+        lazy {
+            HttpClient(CIO) {
+                engine {
+                    requestTimeout = REQUEST_TIMEOUT_MS
+                    endpoint {
+                        connectTimeout = REQUEST_TIMEOUT_MS
+                        socketTimeout = REQUEST_TIMEOUT_MS
+                    }
                 }
             }
         }
-    }
+
+    private val httpClient by httpClientLazy
 
     /**
      * The icon for a page: its own cached favicon if there is one, else Google's guess about its
@@ -116,6 +123,8 @@ object HighQualityFaviconService {
         resolve(
             url = url,
             standardCacheKey = standardCacheKey,
+            // The two slots cannot be swapped by accident: `pageIcon` is not `suspend` and
+            // `hostGuess` is, so the compiler rejects the reversal a test would otherwise pin.
             pageIcon = ::loadStandardFavicon,
             hostGuess = { hostIcon(it) },
         )
@@ -204,8 +213,12 @@ object HighQualityFaviconService {
                 cached.icon
             }
 
+            // The entry was dropped when this miss was learned, so `cached` is normally null here.
+            // It is not null when that delete FAILED - a Windows lock, a permission problem - and
+            // then a usable icon is sitting right there; returning null would show a letter for
+            // six hours with the answer on disk.
             FaviconMissMemory.remembers(host, nowMs) -> {
-                null
+                cached?.icon
             }
 
             else -> {
@@ -350,9 +363,9 @@ object HighQualityFaviconService {
     }
 
     /**
-     * Cleanup resources when no longer needed.
+     * Cleanup resources when no longer needed. A session that never fetched has nothing to close.
      */
     fun close() {
-        httpClient.close()
+        if (httpClientLazy.isInitialized()) httpClientLazy.value.close()
     }
 }

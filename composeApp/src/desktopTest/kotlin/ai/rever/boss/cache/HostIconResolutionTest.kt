@@ -112,6 +112,22 @@ class HostIconResolutionTest {
             assertFalse(fetched, "a host known to have no favicon was asked about again")
         }
 
+    /**
+     * The state a FAILED delete leaves behind: the miss is remembered but the entry survives - a
+     * Windows lock, a permission problem. Returning null there would show a letter for six hours
+     * with a usable icon sitting on disk, and would repeat every six hours after that.
+     */
+    @Test
+    fun `an entry that outlived its delete still serves while the miss is remembered`() =
+        runTest {
+            writeEntry(ageMs = FaviconFreshness.MAX_CACHE_AGE_MS + DAY)
+            FaviconMissMemory.record(HOST, NOW)
+
+            val icon = HighQualityFaviconService.hostIcon(URL, NOW, dir) { _, _ -> FaviconFetch.NoAnswer }
+
+            assertNotNull(icon, "an icon that survived its own deletion was not used")
+        }
+
     /** The window is six hours, not forever: a host that adds a favicon gets asked again. */
     @Test
     fun `the request resumes once the miss window passes`() =

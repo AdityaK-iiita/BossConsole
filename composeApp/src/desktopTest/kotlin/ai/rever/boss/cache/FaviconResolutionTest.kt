@@ -270,6 +270,12 @@ class FaviconResolutionTest {
         assertFalse(FaviconFreshness.isEntryExpired(fetchedAt, fetchedAt + fortnight))
         assertTrue(FaviconFreshness.isEntryExpired(fetchedAt, fetchedAt + fortnight + 1))
         assertEquals(14L * 24 * 60 * 60 * 1000, fortnight)
+
+        // A file dated in the future - restored by `rsync -a` from a skewed machine, or a clock
+        // that stepped back. A negative age read as fresh would never be refetched at all, which
+        // is the permanence this TTL exists to remove.
+        assertTrue(FaviconFreshness.isEntryExpired(fetchedAt, fetchedAt - 1))
+        assertTrue(FaviconFreshness.isEntryExpired(fetchedAt, fetchedAt - fortnight))
     }
 
     // --------------------------------------------------------- miss memory

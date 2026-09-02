@@ -31,23 +31,28 @@ private val faviconLogger = BossLogger.forComponent("FaviconLoader")
  */
 @Composable
 fun rememberFaviconCacheKey(tabInfo: TabInfo): String? =
-    when (tabInfo) {
-        is FluckTabInfo -> {
-            tabInfo.faviconCacheKey
-        }
+    // Actually remembered, which the inline version this was extracted from was not: the else
+    // branch is kotlin-reflect over every member of the tab's class, and this runs once per tab in
+    // the tab bar and once per row in the capture picker, where hover and selection recompose.
+    remember(tabInfo) {
+        when (tabInfo) {
+            is FluckTabInfo -> {
+                tabInfo.faviconCacheKey
+            }
 
-        else -> {
-            // Try reflection for dynamic plugin tabs that have faviconCacheKey property
-            try {
-                val property = tabInfo::class.members.find { it.name == "faviconCacheKey" }
-                property?.call(tabInfo) as? String
-            } catch (e: Exception) {
-                faviconLogger.debug(
-                    LogCategory.BROWSER,
-                    "faviconCacheKey reflection probe failed - tab has no favicon",
-                    mapOf("error" to e.toString()),
-                )
-                null
+            else -> {
+                // Try reflection for dynamic plugin tabs that have faviconCacheKey property
+                try {
+                    val property = tabInfo::class.members.find { it.name == "faviconCacheKey" }
+                    property?.call(tabInfo) as? String
+                } catch (e: Exception) {
+                    faviconLogger.debug(
+                        LogCategory.BROWSER,
+                        "faviconCacheKey reflection probe failed - tab has no favicon",
+                        mapOf("error" to e.toString()),
+                    )
+                    null
+                }
             }
         }
     }

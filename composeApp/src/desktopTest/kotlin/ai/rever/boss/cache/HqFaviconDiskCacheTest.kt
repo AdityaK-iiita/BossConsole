@@ -1,6 +1,10 @@
 package ai.rever.boss.cache
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import java.io.File
 import javax.imageio.ImageIO
 import kotlin.test.AfterTest
@@ -145,6 +149,46 @@ class HqFaviconDiskCacheTest {
             assertEquals(before.toList(), existing.readBytes().toList())
         }
 
+    /**
+     * The whole reason the `.part` file, `atomicMoveFrom` and the shared mutex exist: the shelf,
+     * the dashboard and the picker can all resolve the same host at the same moment. Every writer
+     * gets its own temp file and the last move wins, so no reader meets a torn PNG and no temp
+     * file is left holding a name.
+     *
+     * On [Dispatchers.Default] rather than `runTest`'s scheduler, because virtual time would
+     * serialise exactly the overlap this is about.
+     */
+    @Test
+    fun `concurrent writes for one key leave one whole entry and no temp files`() =
+        runTest {
+            val key = HqFaviconDiskCache.keyFor(HOST)
+
+            withContext(Dispatchers.Default) {
+                List(WRITERS) { async { HqFaviconDiskCache.save(key, sixteenPxIcon(), dir) } }.awaitAll()
+            }
+
+            assertEquals(1, HqFaviconDiskCache.stats(dir).first)
+            assertEquals(emptyList(), dir.listFiles()!!.filter { it.name.endsWith(".part") }.map { it.name })
+            assertNotNull(HqFaviconDiskCache.load(key, dir), "the surviving entry does not decode")
+        }
+
+    /**
+     * `.part` files are excluded from the cache's own listing, which is load-bearing twice: a write
+     * in flight is neither counted towards the cap nor taken by the eviction that runs before it.
+     */
+    @Test
+    fun `a write in flight is neither counted nor evicted`() =
+        runTest {
+            val inFlight = File(dir, "hq-favicon_123.part").apply { writeBytes(ByteArray(64)) }
+            repeat(MAX_ENTRIES) { index -> writeEntry("host-$index.test", ageMs = (MAX_ENTRIES - index) * 1000L) }
+
+            assertEquals(MAX_ENTRIES, HqFaviconDiskCache.stats(dir).first, "a .part file was counted as an entry")
+
+            HqFaviconDiskCache.save(HqFaviconDiskCache.keyFor("just-fetched.test"), sixteenPxIcon(), dir)
+
+            assertTrue(inFlight.exists(), "eviction took a write that was still in flight")
+        }
+
     @Test
     fun `clear empties the cache`() =
         runTest {
@@ -163,5 +207,8 @@ class HqFaviconDiskCacheTest {
          */
         const val MAX_ENTRIES = 200
         const val EVICTION_COUNT = 50
+
+        /** Enough to overlap on any machine; the mutex makes the count irrelevant beyond that. */
+        const val WRITERS = 8
     }
 }

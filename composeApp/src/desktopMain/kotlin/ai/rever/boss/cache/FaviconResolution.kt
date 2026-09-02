@@ -42,6 +42,15 @@ internal sealed interface FaviconFetch {
  * - **The fragment.** `https://example.com#top` was sent verbatim for the same reason.
  * - **The port.** Google's service keys on host alone and has nothing for `localhost:3000`, so a
  *   dev server got no icon at all while plain `localhost` would have answered.
+ *
+ * A fourth, carried over from the old extraction and kept deliberately: a leading **`www.`** goes,
+ * so `www.example.com` and the apex share one cache entry and one miss-memory key. They serve the
+ * same favicon in practice, and the alternative is two requests and two entries for one site.
+ *
+ * What it does not cover: `https://user:pw` + `#@example.com/` extracts the host `user`, because
+ * the fragment is cut before the credentials are. That is a malformed URL Chromium rejects
+ * outright, so nothing reachable produces one - but it is the same class of leak the credential
+ * strip closes, and it is not closed.
  */
 internal object FaviconHost {
     /**
@@ -164,7 +173,14 @@ internal object FaviconFreshness {
     fun isEntryExpired(
         fetchedAtMs: Long,
         nowMs: Long,
-    ): Boolean = nowMs - fetchedAtMs > MAX_CACHE_AGE_MS
+    ): Boolean {
+        val age = nowMs - fetchedAtMs
+        // A NEGATIVE age is not fresh, it is nonsense - an entry restored by `rsync -a` from a
+        // clock-skewed machine, a filesystem timestamp nobody wrote, the clock stepping back.
+        // Read as fresh it would never be refetched again, which is exactly the permanence this
+        // TTL exists to remove, and it would fail silently.
+        return age < 0 || age > MAX_CACHE_AGE_MS
+    }
 }
 
 /**

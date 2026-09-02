@@ -144,7 +144,16 @@ internal object HqFaviconDiskCache {
         dir: File = defaultDir,
     ) {
         mutex.withLock {
-            File(dir, "$cacheKey.png").delete()
+            val cacheFile = File(dir, "$cacheKey.png")
+            // Absence is the postcondition, not the return value: delete() reports false both for
+            // "was not there" and for "could not remove it", and only the second is worth a line.
+            if (!cacheFile.delete() && cacheFile.exists()) {
+                logger.debug(
+                    LogCategory.FILE,
+                    "Could not drop the entry for a host with no favicon - it stays as a last resort",
+                    mapOf("file" to cacheFile.name),
+                )
+            }
         }
     }
 
