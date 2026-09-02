@@ -33,8 +33,11 @@ import ai.rever.boss.plugin.api.TabIcon
 import ai.rever.boss.plugin.api.TabInfo
 import ai.rever.boss.plugin.api.TabRegistry
 import ai.rever.boss.plugin.api.TabTypeId
+import ai.rever.boss.plugin.events.DiffOpenEvent
 import ai.rever.boss.plugin.tab.codeeditor.CodeEditorTabType
 import ai.rever.boss.plugin.tab.codeeditor.EditorTabInfo
+import ai.rever.boss.plugin.tab.diff.DiffTabInfo
+import ai.rever.boss.plugin.tab.diff.DiffTabType
 import ai.rever.boss.plugin.tab.fluck.FluckTabType
 import ai.rever.boss.plugin.tab.jupyter.JupyterTabInfo
 import ai.rever.boss.plugin.tab.terminal.TerminalTabInfo
@@ -591,7 +594,9 @@ class SplitViewState(
     }
 
     private fun findPanelWithNotebookTab(filePath: String): PanelTabMatch? =
-        findPanelWithTabMatching { tab -> tab is JupyterTabInfo && tab.filePath == filePath }
+        findPanelWithTabMatching { tab ->
+            tab is JupyterTabInfo && TabPaths.pathsMatch(tab.filePath, filePath)
+        }
 
     /** Find the first panel containing a tab that satisfies [predicate]. */
     private fun findPanelWithTabMatching(predicate: (TabInfo) -> Boolean): PanelTabMatch? {
@@ -648,6 +653,42 @@ class SplitViewState(
                 filePath = filePath,
             )
         activeComponent.addTab(editorTab).takeIf { it >= 0 }?.let {
+            activeComponent.selectTab(it)
+        }
+    }
+
+    /**
+     * Open a git diff in the active panel (from a [DiffOpenEvent], i.e. the
+     * git data provider's `openDiff` or a deep link). The diff tab type is
+     * registered by the editor-tab PLUGIN, not the host, so the gate is real:
+     * with that plugin absent or still starting, [requireTabTypeThen] waits for
+     * the type (or prompts) rather than dropping the open.
+     */
+    fun openDiffTabInActivePanel(event: DiffOpenEvent) {
+        requireTabTypeThen(DiffTabType.typeId, "Opening diff") {
+            openDiffTabNow(event)
+        }
+    }
+
+    private fun openDiffTabNow(event: DiffOpenEvent) {
+        val activeComponent = getActiveTabsComponent() ?: return
+
+        // Reuse an open diff of the same thing, like every other open path.
+        // Without this, clicking a changed file added a tab per click.
+        findPanelWithDiffTab(event)?.let { (panelId, component, tabIndex) ->
+            component.selectTab(tabIndex)
+            setActivePanel(panelId)
+            return
+        }
+
+        val diffTab =
+            DiffTabInfo.create(
+                filePath = event.filePath,
+                staged = event.staged,
+                fromRef = event.fromRef,
+                toRef = event.toRef,
+            )
+        activeComponent.addTab(diffTab).takeIf { it >= 0 }?.let {
             activeComponent.selectTab(it)
         }
     }
@@ -1227,11 +1268,26 @@ class SplitViewState(
     )
 
     /**
-     * Find the panel that contains an editor tab for the given file path.
-     * Unlike findPanelWithFile, this only matches EditorTabInfo (not browser tabs).
+     * An open diff of the same scope: same file, same side of the index, same
+     * refs. A staged diff and a working-tree diff of one file are different
+     * views and each gets its own tab, as in VS Code.
      */
-    private fun findPanelWithEditorTab(filePath: String): PanelTabMatch? =
-        findPanelWithTabMatching { tab -> tab is EditorTabInfo && tab.filePath == filePath }
+    private fun findPanelWithDiffTab(event: DiffOpenEvent): PanelTabMatch? =
+        findPanelWithTabMatching { tab ->
+            tab is DiffTabInfo &&
+                diffTabMatches(tab, event.filePath, event.staged, event.fromRef, event.toRef)
+        }
+
+    private fun findPanelWithEditorTab(filePath: String): PanelTabMatch? {
+        // A blank path never matches: normalize("") is "", so a blank query
+        // would focus the first Untitled editor tab.
+        if (filePath.isBlank()) return null
+        // pathsMatch keeps the canonicalPath syscalls out of the common case
+        // (identical spellings), paying for them only on a lexical mismatch.
+        return findPanelWithTabMatching { tab ->
+            tab is EditorTabInfo && TabPaths.pathsMatch(tab.filePath, filePath)
+        }
+    }
 
     /**
      * Find the panel that contains a tab with the given URL

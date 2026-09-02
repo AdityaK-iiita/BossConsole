@@ -91,6 +91,15 @@ internal fun BossAppEventBusEffects(state: BossAppState) {
             }.launchIn(this)
     }
 
+    // Listen for diff open events (git data provider's openDiff) - Issue #506 window filter
+    LaunchedEffect(splitViewState, windowId) {
+        FileEventBus.diffOpenEvents
+            .filter { event -> event.sourceWindowId == windowId }
+            .onEach { event ->
+                splitViewState.openDiffTabInActivePanel(event)
+            }.launchIn(this)
+    }
+
     // Listen for terminal open events - now handled by split state
     // Issue #506: Filter by window to prevent terminal opening in all windows
     LaunchedEffect(splitViewState, windowId) {

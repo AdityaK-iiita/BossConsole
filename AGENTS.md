@@ -593,6 +593,14 @@ restart. There is no Settings row and no per-site exclusion.
   `window.__bossInteractionStarted`. The sanitizers bound what can be *smuggled*
   through; nothing bounds a site lying about its own usage. Treat these as
   indicative, not as measurements, wherever a site has an incentive to lie.
+- **`PluginContext.projectSearchProvider` is the first UNGATED WRITE surface.**
+  Like the event bus it is available to every installed plugin, but where the
+  bus is a read, its `replaceInProject` rewrites file contents anywhere inside
+  the open project (the `project_replace` MCP tool sits behind a
+  `project.replace` permission on the *MCP* side, but the provider itself is
+  ungated). Confinement is to the open project only - `resolveFile` refuses
+  paths outside it, canonical and symlink-checked. A plugin that needs project
+  search should be vetted the same way one that subscribes to the bus is.
 
 ## Two-finger swipe navigation (macOS)
 
