@@ -20,30 +20,41 @@ private val faviconLogger = BossLogger.forComponent("FaviconLoader")
  * - Error handling with logging
  * - Efficient caching with remember
  */
-@Composable
-fun rememberFaviconLoader(tabInfo: TabInfo): ai.rever.boss.plugin.api.TabIcon.Image? {
-    // Extract faviconCacheKey - first check built-in FluckTabInfo, then try reflection for dynamic plugins
-    val faviconCacheKey =
-        when (tabInfo) {
-            is FluckTabInfo -> {
-                tabInfo.faviconCacheKey
-            }
 
-            else -> {
-                // Try reflection for dynamic plugin tabs that have faviconCacheKey property
-                try {
-                    val property = tabInfo::class.members.find { it.name == "faviconCacheKey" }
-                    property?.call(tabInfo) as? String
-                } catch (e: Exception) {
-                    faviconLogger.debug(
-                        LogCategory.BROWSER,
-                        "faviconCacheKey reflection probe failed - tab has no favicon",
-                        mapOf("error" to e.toString()),
-                    )
-                    null
-                }
+/**
+ * The standard-cache key for [tabInfo], or null when it has none.
+ *
+ * Separate from [rememberFaviconLoader] because a caller that resolves through
+ * `loadHighQualityFavicon` wants the key, not a second decode of the same file - and a plain
+ * `as? FluckTabInfo` is not the same answer: a dynamic plugin tab carries its key on a class this
+ * module cannot see, which is what the reflection branch is for.
+ */
+@Composable
+fun rememberFaviconCacheKey(tabInfo: TabInfo): String? =
+    when (tabInfo) {
+        is FluckTabInfo -> {
+            tabInfo.faviconCacheKey
+        }
+
+        else -> {
+            // Try reflection for dynamic plugin tabs that have faviconCacheKey property
+            try {
+                val property = tabInfo::class.members.find { it.name == "faviconCacheKey" }
+                property?.call(tabInfo) as? String
+            } catch (e: Exception) {
+                faviconLogger.debug(
+                    LogCategory.BROWSER,
+                    "faviconCacheKey reflection probe failed - tab has no favicon",
+                    mapOf("error" to e.toString()),
+                )
+                null
             }
         }
+    }
+
+@Composable
+fun rememberFaviconLoader(tabInfo: TabInfo): ai.rever.boss.plugin.api.TabIcon.Image? {
+    val faviconCacheKey = rememberFaviconCacheKey(tabInfo)
 
     // State to hold the loaded favicon
     var loadedFavicon by remember(faviconCacheKey) {

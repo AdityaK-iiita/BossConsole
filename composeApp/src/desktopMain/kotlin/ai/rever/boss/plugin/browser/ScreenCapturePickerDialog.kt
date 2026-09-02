@@ -1,8 +1,7 @@
 package ai.rever.boss.plugin.browser
 
 import ai.rever.boss.cache.loadHighQualityFavicon
-import ai.rever.boss.components.common.rememberFaviconLoader
-import ai.rever.boss.components.plugin.tab_types.fluck.FluckTabInfo
+import ai.rever.boss.components.common.rememberFaviconCacheKey
 import ai.rever.boss.plugin.api.TabIcon
 import ai.rever.boss.plugin.ui.BossDialog
 import ai.rever.boss.plugin.ui.BossTheme
@@ -262,19 +261,22 @@ private fun SourceListItem(
     val borderColor = if (isSelected) BossTheme.colors.signal else BossTheme.colors.line
     val isLoading = source.name == "Loading..."
 
-    // Get favicon cache key from FluckTabInfo
-    val faviconCacheKey = (source.tabInfo as? FluckTabInfo)?.faviconCacheKey
-
-    // Load immediate favicons first (synchronous or fast cache)
+    // The key, not a second decode of the file behind it: rememberFaviconLoader would read and
+    // decode exactly the PNG that resolution is about to read and decode, once per row. Using the
+    // key derivation rather than `as? FluckTabInfo` also keeps the dynamic-plugin tabs whose key
+    // only the reflection branch finds.
+    val faviconCacheKey = source.tabInfo?.let { rememberFaviconCacheKey(it) }
     val inMemoryFavicon = (source.tabInfo?.tabIcon as? ai.rever.boss.plugin.api.TabIcon.Image)
-    val cachedFavicon = source.tabInfo?.let { rememberFaviconLoader(it) }
 
-    // A live tab's own current favicon outranks anything on disk, so resolving could only
-    // substitute a cached copy of the same icon or an older one. Otherwise: the page's own cached
-    // favicon, and Google's guess about the host only if there is none. cachedFavicon shows until
-    // that lands.
     val loadedFavicon =
-        inMemoryFavicon ?: rememberHighQualityFavicon(source.url, faviconCacheKey, cachedFavicon)
+        if (inMemoryFavicon != null) {
+            // A live tab's CURRENT favicon. It outranks anything on disk, so resolving could only
+            // substitute a cached copy of the same icon or an older one - an if/else rather than
+            // an elvis because this skips the composable entirely rather than falling through it.
+            inMemoryFavicon
+        } else {
+            rememberResolvedFavicon(source.url, faviconCacheKey)
+        }
 
     // Determine fallback icon
     val (fallbackIcon, fallbackTint) =
@@ -406,20 +408,19 @@ private fun DialogFooter(
 }
 
 /**
- * Resolves a row's favicon asynchronously, showing [fallback] until it arrives.
+ * Resolves a row's favicon asynchronously; null until it arrives, and the row shows its category
+ * icon in the meantime.
  *
- * **What replaces [fallback] is not a host-level guess unless nothing better exists.**
- * `loadHighQualityFavicon` reads the page's own cached favicon first and only asks Google about
- * the host when there is none, so a row whose icon is known cannot be downgraded to the icon of
- * whatever parent domain Google resolves its host to. An earlier version of this deliberately
- * "upgraded" to the guess, which for every `*.google.com` tab meant replacing the real icon with
- * a generic "G".
+ * **The page's own icon comes first, not a host-level guess.** `loadHighQualityFavicon` reads the
+ * page's own cached favicon and only asks Google about the host when there is none, so a row whose
+ * icon is known cannot be downgraded to the icon of whatever parent domain Google resolves its
+ * host to. An earlier version of this deliberately "upgraded" to the guess, which for every
+ * `*.google.com` tab meant replacing the real icon with a generic "G".
  */
 @Composable
-private fun rememberHighQualityFavicon(
+private fun rememberResolvedFavicon(
     url: String?,
     standardCacheKey: String?,
-    fallback: ai.rever.boss.plugin.api.TabIcon.Image?,
 ): ai.rever.boss.plugin.api.TabIcon.Image? {
     var resolved by remember(url, standardCacheKey) { mutableStateOf<ai.rever.boss.plugin.api.TabIcon.Image?>(null) }
 
@@ -429,6 +430,5 @@ private fun rememberHighQualityFavicon(
         resolved = loadHighQualityFavicon(url, standardCacheKey)
     }
 
-    // Until it resolves, whatever was already to hand.
-    return resolved ?: fallback
+    return resolved
 }

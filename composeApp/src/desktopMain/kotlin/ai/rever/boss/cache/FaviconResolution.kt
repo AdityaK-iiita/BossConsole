@@ -14,7 +14,7 @@ import java.util.concurrent.ConcurrentHashMap
  * while no answer means the cached copy is the best thing anyone has.
  */
 internal sealed interface FaviconFetch {
-    class Icon(
+    data class Icon(
         val icon: TabIcon.Image,
     ) : FaviconFetch
 
@@ -57,6 +57,11 @@ internal object FaviconHost {
      * (`/Users/x`), an opaque scheme (`mailto:`, `javascript:`, `about:blank`,
      * `data:image/png;…`) and anything with a space in it, none of which have a host to ask
      * about, and all of which the old extraction sent.
+     *
+     * It does NOT reject a dotted filename: `index.js` and `notes.md` are shaped exactly like a
+     * host and are accepted as one. Nothing reaches here with a bare filename today, and the same
+     * hand-written bookmarks file that motivates this form could hold one, so the cost is stated
+     * rather than guarded: one request naming a filename, and six hours of remembered miss.
      */
     private val BARE_AUTHORITY =
         Regex(
@@ -65,7 +70,14 @@ internal object FaviconHost {
         )
 
     fun of(url: String?): String? {
-        val authority = authorityOf(url?.trim().orEmpty()) ?: return null
+        // A BACKSLASH is a slash here. WHATWG says so for special schemes, so Chromium - and
+        // therefore JxBrowser - navigates `https://example.com\@evil.com/` to example.com with the
+        // path `/@evil.com/`. Splitting only on `/` would have taken the userinfo strip literally
+        // and yielded `evil.com`: the wrong favicon on the tile, a request to Google naming a site
+        // the user never visited, and that name cached for a fortnight. Same shape as the
+        // credential leak below, from the other direction, and reachable by anyone who can put a
+        // URL in a bookmark file.
+        val authority = authorityOf(url?.trim()?.replace('\\', '/').orEmpty()) ?: return null
         return authority
             .substringBefore('/')
             .substringBefore('?')
@@ -168,8 +180,13 @@ internal object FaviconFreshness {
  * [FaviconFreshness.MAX_CACHE_AGE_MS].
  *
  * Only a definite answer is recorded. A timeout or an unreachable Google is not a miss - see
- * `HighQualityFaviconService.fetchFromGoogle` - because remembering one would suppress the retry
+ * `HighQualityFaviconService.acceptResponse` - because remembering one would suppress the retry
  * for hours after the network came back.
+ *
+ * **Process-wide state that tests mutate.** Every test class touching it calls [forget] in an
+ * `@AfterTest`, which is sufficient only because desktopTest runs one fork: raising
+ * `maxParallelForks` would let one class's 500 recorded hosts suppress another class's fetch,
+ * nondeterministically. Make the map injectable before that happens.
  */
 internal object FaviconMissMemory {
     const val MISS_MEMORY_MS = 6L * 60 * 60 * 1000

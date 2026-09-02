@@ -168,9 +168,16 @@ internal object HqFaviconDiskCache {
             }
     }
 
-    fun clear(dir: File = defaultDir) {
-        // Temp files go too - a crash mid-write can leave one behind.
-        dir.listFiles()?.forEach { it.delete() }
+    /**
+     * Empty the cache, `.part` files included - a crash mid-write can leave one behind.
+     *
+     * Under the same lock as [save] and [delete]: without it this could land between a write's
+     * temp file and its move and take one or the other with it.
+     */
+    suspend fun clear(dir: File = defaultDir) {
+        mutex.withLock {
+            dir.listFiles()?.forEach { it.delete() }
+        }
     }
 
     /** Entry count and total bytes on disk. */

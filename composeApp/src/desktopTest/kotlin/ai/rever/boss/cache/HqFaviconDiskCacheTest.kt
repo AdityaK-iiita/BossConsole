@@ -127,12 +127,31 @@ class HqFaviconDiskCacheTest {
             assertNotNull(HqFaviconDiskCache.load(HqFaviconDiskCache.keyFor("host-${MAX_ENTRIES - 1}.test"), dir))
         }
 
+    /**
+     * A write that cannot happen leaves nothing behind - no entry, and no `.part` file holding a
+     * name. The entry it would have replaced is untouched, which is the half that matters: a torn
+     * write must not cost the icon that was already there.
+     */
     @Test
-    fun `clear empties the cache`() {
-        writeEntry(HOST)
-        HqFaviconDiskCache.clear(dir)
-        assertEquals(0, HqFaviconDiskCache.stats(dir).first)
-    }
+    fun `a write that fails leaves the cache as it found it`() =
+        runTest {
+            val existing = writeEntry(HOST)
+            val before = existing.readBytes()
+            val gone = File(dir, "not-a-directory")
+
+            HqFaviconDiskCache.save(HqFaviconDiskCache.keyFor(HOST), sixteenPxIcon(), gone)
+
+            assertEquals(emptyList(), dir.listFiles()!!.filter { it.name.endsWith(".part") }.map { it.name })
+            assertEquals(before.toList(), existing.readBytes().toList())
+        }
+
+    @Test
+    fun `clear empties the cache`() =
+        runTest {
+            writeEntry(HOST)
+            HqFaviconDiskCache.clear(dir)
+            assertEquals(0, HqFaviconDiskCache.stats(dir).first)
+        }
 
     private companion object {
         const val HOST = "example.test"

@@ -66,6 +66,15 @@ object HighQualityFaviconService {
     private const val REQUEST_TIMEOUT_MS = 2500L
     private const val MAX_CONCURRENT_FETCHES = 3
 
+    /**
+     * A ceiling on what a reply may be worth reading.
+     *
+     * A 128px PNG is a few KB; this is two orders of magnitude of headroom and still the only
+     * thing between the network and a `ByteArray` on the heap. The request timeout bounds it in
+     * practice, which is not the same as bounding it.
+     */
+    private const val MAX_RESPONSE_BYTES = 256L * 1024
+
     // Semaphore to limit concurrent network requests
     private val fetchSemaphore = Semaphore(MAX_CONCURRENT_FETCHES)
 
@@ -127,21 +136,36 @@ object HighQualityFaviconService {
         hostGuess: suspend (String?) -> TabIcon.Image?,
     ): TabIcon.Image? =
         withContext(Dispatchers.IO) {
-            try {
-                pageIcon(standardCacheKey) ?: hostGuess(url)
-            } catch (e: Exception) {
-                // Ordinary disposal - the shelf collapsing, a picker dismissed, a url change -
-                // cancels the effect this runs in, and CancellationException IS an Exception.
-                // Logging that as a failure is a lie, and eating it is worse; ensureActive puts it
-                // back.
-                currentCoroutineContext().ensureActive()
-                logger.debug(
-                    LogCategory.BROWSER,
-                    "Favicon resolution failed - the caller shows its fallback",
-                    mapOf("error" to e.toString()),
-                )
-                null
-            }
+            // Each source is attempted separately, so a corrupt standard-cache entry cannot cost
+            // the host guess as well. `FaviconCache.loadFavicon` catches its own exceptions today,
+            // which makes this belt and braces - but "happens to be total" is not a guarantee this
+            // function should be spending on the caller's behalf.
+            sourceOrNull("the page's own icon") { pageIcon(standardCacheKey) }
+                ?: sourceOrNull("Google's guess about the host") { hostGuess(url) }
+        }
+
+    /**
+     * One favicon source, reduced to null if it fails.
+     *
+     * Cancellation is put back rather than logged: ordinary disposal - the shelf collapsing, a
+     * picker dismissed, a url change - cancels the effect this runs in, and CancellationException
+     * IS an Exception, so reporting it as a failed lookup would be a lie and eating it would be
+     * worse.
+     */
+    private suspend fun sourceOrNull(
+        name: String,
+        source: suspend () -> TabIcon.Image?,
+    ): TabIcon.Image? =
+        try {
+            source()
+        } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
+            logger.debug(
+                LogCategory.BROWSER,
+                "A favicon source failed - trying the next one, or the caller's fallback",
+                mapOf("source" to name, "error" to e.toString()),
+            )
+            null
         }
 
     /**
@@ -168,7 +192,7 @@ object HighQualityFaviconService {
         nowMs: Long = System.currentTimeMillis(),
         dir: File = HqFaviconDiskCache.defaultDir,
         fetch: suspend (String, String) -> FaviconFetch = { host, key ->
-            fetchSemaphore.withPermit { fetchFromGoogle(host, key, dir) }
+            fetchSemaphore.withPermit { fetchFromGoogle(host, key, dir, nowMs) }
         },
     ): TabIcon.Image? {
         val host = FaviconHost.of(url) ?: return null
@@ -217,7 +241,8 @@ object HighQualityFaviconService {
         host: String,
         cacheKey: String,
         dir: File,
-    ): FaviconFetch = requestIcon(host)?.let { acceptResponse(it, host, cacheKey, dir) } ?: FaviconFetch.NoAnswer
+        nowMs: Long,
+    ): FaviconFetch = requestIcon(host)?.let { acceptResponse(it, host, cacheKey, dir, nowMs) } ?: FaviconFetch.NoAnswer
 
     /**
      * What Google's reply means, and the entry it leaves behind.
@@ -231,6 +256,7 @@ object HighQualityFaviconService {
         host: String,
         cacheKey: String,
         dir: File = HqFaviconDiskCache.defaultDir,
+        nowMs: Long = System.currentTimeMillis(),
     ): FaviconFetch =
         when {
             GoogleNoIconPlaceholder.matches(bytes) -> {
@@ -239,7 +265,7 @@ object HighQualityFaviconService {
                     "Google has no favicon for host - declining its placeholder",
                     mapOf("host" to host),
                 )
-                FaviconMissMemory.record(host)
+                FaviconMissMemory.record(host, nowMs)
                 FaviconFetch.NoIcon
             }
 
@@ -289,7 +315,12 @@ object HighQualityFaviconService {
                         append(HttpHeaders.UserAgent, "Mozilla/5.0")
                     }
                 }
-            if (response.status == HttpStatusCode.OK) response.readRawBytes() else null
+            val declared = response.contentLength()
+            if (response.status == HttpStatusCode.OK && (declared == null || declared <= MAX_RESPONSE_BYTES)) {
+                response.readRawBytes().takeIf { it.size <= MAX_RESPONSE_BYTES }
+            } else {
+                null
+            }
         } catch (e: Exception) {
             // A cancelled effect is not a failed fetch - see resolve().
             currentCoroutineContext().ensureActive()
@@ -307,14 +338,16 @@ object HighQualityFaviconService {
         return FaviconCache.loadFavicon(cacheKey)
     }
 
-    /** Clear the HQ favicon cache, remembered misses included. */
-    fun clearCache() {
+    /**
+     * Clear the HQ favicon cache, remembered misses included.
+     *
+     * `suspend`, because it takes the same lock a write does - otherwise it could land between a
+     * write's temp file and its move and delete one or the other out from under it.
+     */
+    suspend fun clearCache() {
         HqFaviconDiskCache.clear()
         FaviconMissMemory.forget()
     }
-
-    /** Entry count and total bytes of the HQ cache. */
-    fun getCacheStats(): Pair<Int, Long> = HqFaviconDiskCache.stats()
 
     /**
      * Cleanup resources when no longer needed.

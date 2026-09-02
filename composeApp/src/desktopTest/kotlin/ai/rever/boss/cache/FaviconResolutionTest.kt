@@ -78,16 +78,30 @@ class FaviconResolutionTest {
             assertNull(HighQualityFaviconService.resolve(URL, null, pageIcon = { null }, hostGuess = { null }))
         }
 
-    /** Neither source may throw at the caller: the tile shows its letter instead. */
+    /**
+     * A source that throws costs only itself. One corrupt entry in the standard cache must not
+     * also suppress the host guess, and nothing may reach the caller: the tile shows its letter.
+     */
     @Test
-    fun `a source that throws costs the icon, not the tile`() =
+    fun `a source that throws costs itself, not the other source and not the tile`() =
         runTest {
+            val guessed = iconStub()
+
+            assertSame(
+                guessed,
+                HighQualityFaviconService.resolve(
+                    URL,
+                    CACHE_KEY,
+                    pageIcon = { error("cache is corrupt") },
+                    hostGuess = { guessed },
+                ),
+            )
             assertNull(
                 HighQualityFaviconService.resolve(
                     URL,
                     CACHE_KEY,
                     pageIcon = { error("cache is corrupt") },
-                    hostGuess = { iconStub() },
+                    hostGuess = { error("google is on fire") },
                 ),
             )
         }
@@ -116,6 +130,29 @@ class FaviconResolutionTest {
     @Test
     fun `credentials are not part of the host`() {
         assertEquals("example.com", FaviconHost.of("https://user:pw@example.com/x"))
+    }
+
+    /**
+     * A backslash ends the authority too. WHATWG says so for special schemes, so Chromium - and
+     * therefore JxBrowser - opens `https://example.com\@evil.com/` on **example.com**. Splitting
+     * on `/` alone would take the userinfo strip literally and hand Google `evil.com`: the wrong
+     * icon on the tile, a request naming a site nobody visited, and that name cached for a
+     * fortnight. Anyone who can put a URL in a bookmark file can reach it.
+     */
+    @Test
+    fun `a backslash cannot smuggle a different host past the credential strip`() {
+        assertEquals("example.com", FaviconHost.of("https://example.com\\@evil.com/"))
+        assertEquals("example.com", FaviconHost.of("https://example.com\\evil.com/x"))
+    }
+
+    /**
+     * An authority may carry an `&`. Interpolated into the query it appended attacker-shaped
+     * parameters to a request BOSS makes to Google; `parameter()` encodes it, and the host is
+     * extracted unchanged so the key it hashes to stays honest.
+     */
+    @Test
+    fun `an ampersand in the authority stays part of the host`() {
+        assertEquals("evil.com&x=1", FaviconHost.of("https://evil.com&x=1/"))
     }
 
     /** An IPv6 literal's colons are inside the brackets and are not a port. */
