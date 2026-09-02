@@ -1,0 +1,244 @@
+package ai.rever.boss.app
+
+import ai.rever.boss.components.buttons.ToolLauncherButton
+import ai.rever.boss.components.buttons.ToolboxButton
+import ai.rever.boss.components.plugin.PanelIds
+import ai.rever.boss.components.window_panel.PanelColumn
+import ai.rever.boss.plugin.api.Panel
+import ai.rever.boss.plugin.api.Panel.Companion.bottom
+import ai.rever.boss.plugin.api.Panel.Companion.left
+import ai.rever.boss.plugin.api.Panel.Companion.right
+import ai.rever.boss.plugin.api.SidebarItem
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import org.junit.Rule
+import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+/**
+ * Pins the two claims [PanelFooterHostActions] makes that the floating cluster could not: that it
+ * takes a row out of the panel's column rather than drawing over it, and that the row is the
+ * PANEL's width rather than the window's.
+ *
+ * The second is not cosmetic bookkeeping - it was the first version of this placement. A band
+ * across the whole content area also stops the cluster covering an open panel, and it looks like
+ * what it is: a strip of dead chrome the width of the screen holding four icons.
+ */
+class QuickActionsPanelFooterTest {
+    @get:Rule
+    val rule = createComposeRule()
+
+    /**
+     * The panel column, mounted through the REAL [PanelColumn] rather than a copy of its layout.
+     *
+     * That is what makes the carve-out assertions below mean anything: a test that rebuilds the
+     * structure it means to pin passes just as happily when the production wrapper loses its
+     * `weight(1f)` or draws the footer above the content.
+     */
+    private fun mountPanelColumn(
+        placement: FocusQuickActionsPlacement,
+        width: Dp = PANEL_WIDTH,
+        everyButton: Boolean = false,
+    ) {
+        rule.setContent {
+            val toolbox: (@Composable (Panel, Modifier) -> Unit)? =
+                if (!everyButton) {
+                    null
+                } else {
+                    { hint, mod ->
+                        ToolboxButton(item = toolboxItem(), onClick = {}, hintDirection = hint, modifier = mod)
+                    }
+                }
+            val launcher: (@Composable (Panel, Modifier) -> Unit)? =
+                if (!everyButton) {
+                    null
+                } else {
+                    { hint, mod -> ToolLauncherButton(onClick = {}, hintDirection = hint, modifier = mod) }
+                }
+            // clipToBounds mirrors the panel, which is what turns an overflow into a vanished
+            // button rather than one drawn outside its column.
+            Box(
+                modifier =
+                    Modifier
+                        .width(width)
+                        .height(400.dp)
+                        .clipToBounds()
+                        .testTag(COLUMN_TAG),
+            ) {
+                PanelColumn(
+                    footer = {
+                        PanelFooterHostActions(
+                            actions =
+                                focusQuickActionsPanelFooter(
+                                    placement = placement,
+                                    onShowSettings = {},
+                                    onShowSearch = {},
+                                    onSignOut = {},
+                                    toolbox = toolbox,
+                                    toolLauncher = launcher,
+                                ),
+                        )
+                    },
+                ) {
+                    // Stands in for SidePanel: the plugin's own content, which is what the
+                    // cluster used to be drawn over.
+                    Box(modifier = Modifier.fillMaxSize().testTag(PLUGIN_TAG))
+                }
+            }
+        }
+        rule.waitForIdle()
+    }
+
+    private fun toolboxItem() =
+        SidebarItem(
+            pluginContentId = PanelIds.PLUGIN_MANAGER,
+            icon = Icons.Outlined.Extension,
+            label = "Toolbox",
+        )
+
+    private fun bounds(tag: String): Rect = rule.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
+
+    @Test
+    fun `the row is carved out of the panel, not drawn over it`() {
+        mountPanelColumn(FocusQuickActionsPlacement.PANEL_FOOTER)
+
+        val plugin = bounds(PLUGIN_TAG)
+        val row = bounds(PANEL_FOOTER_HOST_ACTIONS_TAG)
+
+        assertTrue(row.height > 0f, "the row reserved no height at all")
+        assertTrue(
+            plugin.bottom <= row.top,
+            "the plugin ends at ${plugin.bottom} but the row starts at ${row.top} - they overlap",
+        )
+        assertEquals(
+            bounds(COLUMN_TAG).bottom,
+            row.bottom,
+            "the row belongs at the very bottom of the column",
+        )
+    }
+
+    @Test
+    fun `the row is the panel's width, not the window's`() {
+        // The whole point of moving it here from a content-area band. Asserted against the
+        // column it was given rather than a number, so a different panel width still pins it.
+        mountPanelColumn(FocusQuickActionsPlacement.PANEL_FOOTER)
+
+        val column = bounds(COLUMN_TAG)
+        val row = bounds(PANEL_FOOTER_HOST_ACTIONS_TAG)
+
+        assertEquals(column.left, row.left, "the row starts where its column does")
+        assertEquals(column.right, row.right, "and ends where its column does")
+    }
+
+    @Test
+    fun `every button sits inside the row it reserved`() {
+        mountPanelColumn(FocusQuickActionsPlacement.PANEL_FOOTER)
+
+        val row = bounds(PANEL_FOOTER_HOST_ACTIONS_TAG)
+        val expected = with(rule.density) { SIDEBAR_ICON_SIZE.toPx() }
+
+        // The Toolbox slot is null here, so it draws no icon of its own - see
+        // HostActionsContentTest, which mounts the real button.
+        listOf("Sign Out", "Settings", "Search").forEach { label ->
+            val icon = rule.onNodeWithContentDescription(label).fetchSemanticsNode().boundsInRoot
+            assertEquals(expected, icon.width, "$label is ${icon.width}px wide, expected $expected")
+            assertTrue(
+                icon.top >= row.top && icon.bottom <= row.bottom,
+                "$label spans ${icon.top}..${icon.bottom}, outside the row's ${row.top}..${row.bottom}",
+            )
+            assertTrue(
+                icon.left >= row.left && icon.right <= row.right,
+                "$label spans ${icon.left}..${icon.right}, outside the row's ${row.left}..${row.right}",
+            )
+        }
+    }
+
+    @Test
+    fun `every action survives a panel dragged to its floor`() {
+        // BossResizablePanel floors a side panel at max(2% of the window, 20dp) - narrower than
+        // ONE 32dp icon. The row wraps rather than clipping, and that claim is only worth making
+        // if it holds at the narrowest width a drag can reach, carrying the widest content it
+        // ever has: five buttons, which is a TOP tab bar with both icon strips switched off.
+        mountPanelColumn(FocusQuickActionsPlacement.PANEL_FOOTER, width = FLOOR_WIDTH, everyButton = true)
+
+        val column = bounds(COLUMN_TAG)
+        val expected = with(rule.density) { SIDEBAR_ICON_SIZE.toPx() }
+        listOf("Sign Out", "Settings", "Toolbox", "Tools", "Search").forEach { label ->
+            val icon = rule.onNodeWithContentDescription(label).fetchSemanticsNode().boundsInRoot
+            // SIZE, not just bounds: a row that cannot fit its children hands the last one a 0x0
+            // rect at the origin, which sits inside every bounds check ever written.
+            assertEquals(expected, icon.height, "$label is ${icon.height}px tall, expected $expected")
+            assertTrue(
+                icon.top >= column.top && icon.bottom <= column.bottom,
+                "$label spans ${icon.top}..${icon.bottom}, outside the column's ${column.top}..${column.bottom}",
+            )
+        }
+    }
+
+    @Test
+    fun `any other placement leaves the panel exactly as it was`() {
+        // The zero-cost half of the design: a window with nothing open gets the overlay, and no
+        // panel anywhere should quietly grow a row of chrome in the meantime.
+        mountPanelColumn(FocusQuickActionsPlacement.FLOATING)
+
+        rule.onAllNodesWithTag(PANEL_FOOTER_HOST_ACTIONS_TAG).assertCountEquals(0)
+        assertEquals(
+            bounds(COLUMN_TAG).height,
+            bounds(PLUGIN_TAG).height,
+            "the plugin must still fill the whole column",
+        )
+    }
+}
+
+/**
+ * Pins which column hosts the row, which is also the answer to "is there a panel foot at all".
+ *
+ * One function for both, because two expressions could disagree - and the way that fails is the
+ * row rendered into a column nothing is composing: Sign Out on screen nowhere.
+ */
+class HostActionsPanelEdgeTest {
+    @Test
+    fun `the right column wins, being where the cluster sat`() {
+        assertEquals(right, hostActionsPanelEdge(rightOpen = true, leftOpen = true, bottomOpen = true))
+    }
+
+    @Test
+    fun `then the left column`() {
+        assertEquals(left, hostActionsPanelEdge(rightOpen = false, leftOpen = true, bottomOpen = true))
+    }
+
+    @Test
+    fun `the bottom panel is last, since its foot is the whole window's width`() {
+        assertEquals(bottom, hostActionsPanelEdge(rightOpen = false, leftOpen = false, bottomOpen = true))
+    }
+
+    @Test
+    fun `nothing open means no column, which is what sends them back to the corner`() {
+        assertNull(hostActionsPanelEdge(rightOpen = false, leftOpen = false, bottomOpen = false))
+    }
+}
+
+private val PANEL_WIDTH = 250.dp
+
+/** `BossResizablePanel`'s floor for a side panel - narrower than one 32dp icon. */
+private val FLOOR_WIDTH = 20.dp
+private const val COLUMN_TAG = "panel-footer-test-column"
+private const val PLUGIN_TAG = "panel-footer-test-plugin"

@@ -12,6 +12,7 @@ import ai.rever.boss.components.home.LocalPanelRegistry
 import ai.rever.boss.components.home.LocalPluginStates
 import ai.rever.boss.components.home.LocalRegistryAccess
 import ai.rever.boss.components.home.LocalTabRegistry
+import ai.rever.boss.components.model.BossDraggableComponent
 import ai.rever.boss.components.overlays.DraggingItemOverlay
 import ai.rever.boss.components.overlays.OverlayCorner
 import ai.rever.boss.components.overlays.TabDraggingOverlay
@@ -51,6 +52,7 @@ import ai.rever.boss.plugin.api.LocalWorkspaceDataProvider
 import ai.rever.boss.plugin.api.Panel
 import ai.rever.boss.plugin.api.Panel.Companion.bottom
 import ai.rever.boss.plugin.api.Panel.Companion.left
+import ai.rever.boss.plugin.api.Panel.Companion.right
 import ai.rever.boss.plugin.sandbox.notification.PluginToastHost
 import ai.rever.boss.plugin.sandbox.notification.PluginToastState
 import ai.rever.boss.plugin.ui.BossTheme
@@ -81,6 +83,7 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -288,31 +291,43 @@ internal fun BossAppScaffold(
     // window is too narrow for a full one, and nothing in the settings says so.
     var barRailed by remember { mutableStateOf(appearance.tabBarCollapsed) }
 
+    // Read before the placement, which asks whether any panel is open; before the rule, which
+    // counts an open left panel as a column; and before the offsets, which need to know whether
+    // the panel or the bar is the one behind the strip.
+    val leftPanelOpen = state.draggablePanelComponent.isVisible(left)
+
+    // Whether ANY plugin panel is open in the content area. It decides whether the host's actions
+    // get a reserved row or an overlay, in a window with no vertical bar to put them in - see
+    // `focusQuickActionsPlacement`.
+    //
+    // Read here, in the scaffold body, so the state subscription lands in a restart scope rather
+    // than inside an inline content lambda. One question answers both halves: whether these
+    // actions land in a panel foot at all, and which column draws it - see hostActionsPanelEdge.
+    val panelFooterEdge = state.draggablePanelComponent.hostActionsPanelColumn()
+    val pluginPanelOpen = panelFooterEdge != null
+
     // Where Settings / Search / Sign Out go while focus mode holds the top bar that owns them.
-    // One decision, two mutually exclusive renderings: the bottom of the right rail when that rail
-    // is on screen, a floating corner cluster when it is not. Read once here so the two call sites
-    // below cannot disagree about it and briefly show both.
+    // One decision, five mutually exclusive renderings - every piece of chrome the window already
+    // draws before the overlay is considered at all. Read once here so the call sites below cannot
+    // disagree about it and briefly show two of them.
     val quickActionsPlacement =
         focusQuickActionsPlacement(
             settings = focusModeSettings,
             topBarHidden = !appearance.showTopBar,
             rightStripHidden = !appearance.showRightStrip,
             showTopBar = reveal.showTopBar,
-            // Not merely "the bar is on the left". A COLLAPSED bar draws its rail and nothing
-            // else, so its foot does not exist and these four would render nowhere - they float
-            // instead. Hovering the rail opens the drawer, which IS a foot, so they go back into
-            // it for as long as it is up.
-            //
-            // The cost, stated because the neighbouring KDoc warns against exactly this: the
-            // floating overlay is a native always-on-top window, so it is torn down and rebuilt on
-            // each hover reveal rather than sitting there. Accepted deliberately - the alternative
-            // is a cluster in the corner while a bar with room for it is open on the left.
-            verticalTabBar =
-                verticalBarHasFoot(
+            // Three answers, not "is the bar on the left". A COLLAPSED bar has no foot under its
+            // split map, but it still has the bottom of its rail, which is where these go now;
+            // hovering it opens the drawer, which IS a full bar, so they move up into its foot for
+            // as long as it is up. Only TOP position leaves nothing at all.
+            verticalBar =
+                verticalBarHost(
                     tabBarOnLeft = appearance.tabBarPosition == TabBarPosition.LEFT,
                     barCollapsed = barRailed,
                     drawerVisible = drawerVisible,
                 ),
+            // Only consulted once the bar has offered nothing, i.e. in TOP position.
+            pluginPanelOpen = pluginPanelOpen,
         )
 
     // Where the way into the plugins goes, when a strip that would normally hold their icons is
@@ -341,10 +356,6 @@ internal fun BossAppScaffold(
     val bannerVisible by remember(updateHandle) {
         updateHandle.updateState.map { it.drawsBanner() }.distinctUntilChanged()
     }.collectAsState(initial = false)
-
-    // Read before the rule, which counts it as a column, and before the offsets, which need to
-    // know whether the panel or the bar is the one behind the strip.
-    val leftPanelOpen = state.draggablePanelComponent.isVisible(left)
 
     val trafficLights =
         macTrafficLightInset(
@@ -669,12 +680,45 @@ internal fun BossAppScaffold(
                             // The panel itself is second when it is open, so the clearance moves
                             // onto it - this is what the lights were landing on.
                             leftPanelTopInset = trafficLights.columnInset(columns.panel),
+                            // Settings / Search / Sign Out at the foot of an open panel's column,
+                            // for a TOP tab bar with no bar of its own to hold them. Empty - and
+                            // so no row at all - for every other placement.
+                            panelFooterEdge = panelFooterEdge,
+                            panelFooter = {
+                                PanelFooterHostActions(
+                                    actions =
+                                        focusQuickActionsPanelFooter(
+                                            placement = quickActionsPlacement,
+                                            onShowSettings = { state.settingsWindow.open() },
+                                            toolbox = hostToolbox,
+                                            onShowSearch = { state.showGlobalSearchDialog = true },
+                                            onSignOut = { state.showLogoutDialog = true },
+                                            toolLauncher = hostToolLauncher,
+                                        ),
+                                )
+                            },
                             onDrawerVisibleChange = { visible -> drawerVisible = visible },
                             onBarRailedChange = { railed -> barRailed = railed },
                             verticalBarBelowMap = {
                                 VerticalBarHostActions(
                                     actions =
                                         focusQuickActionsFooter(
+                                            placement = quickActionsPlacement,
+                                            onShowSettings = { state.settingsWindow.open() },
+                                            toolbox = hostToolbox,
+                                            onShowSearch = { state.showGlobalSearchDialog = true },
+                                            onSignOut = { state.showLogoutDialog = true },
+                                            toolLauncher = hostToolLauncher,
+                                        ),
+                                )
+                            },
+                            // The rail's own layout for the same actions, in its OWN slot: the
+                            // rail and the hover drawer are on screen together, so a slot handed
+                            // to both drew these twice - see `WindowVerticalTabBar.belowTabs`.
+                            verticalBarRailActions = {
+                                VerticalBarRailActions(
+                                    actions =
+                                        focusQuickActionsTabRail(
                                             placement = quickActionsPlacement,
                                             onShowSettings = { state.settingsWindow.open() },
                                             toolbox = hostToolbox,
@@ -835,3 +879,22 @@ internal fun BossAppScaffold(
         }
     }
 }
+
+/**
+ * Which plugin panel column takes the host's actions, or null when no panel is open.
+ *
+ * The reads; [hostActionsPanelEdge] is the table. All three edges, not just the left one the
+ * traffic-light rule asks about: the floating cluster sits in the content area's bottom-right
+ * corner, which a right panel owns outright and a bottom panel owns the whole width of.
+ *
+ * A plain function rather than a `@Composable`: it only reads snapshot state, so called during
+ * composition it subscribes its caller exactly as an inline chain would. Named at all because
+ * this composable is at detekt's cyclomatic ceiling, and three `isVisible` calls in a `when` put
+ * it over.
+ */
+private fun BossDraggableComponent.hostActionsPanelColumn(): Panel? =
+    hostActionsPanelEdge(
+        rightOpen = isVisible(right),
+        leftOpen = isVisible(left),
+        bottomOpen = isVisible(bottom),
+    )
