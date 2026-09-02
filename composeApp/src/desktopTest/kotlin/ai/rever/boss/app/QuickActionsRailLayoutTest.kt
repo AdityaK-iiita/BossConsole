@@ -242,9 +242,10 @@ private val RAIL_FIXED_CHROME = 94.dp
  * itself, and still 17dp clear of the 283dp that [RAIL_FIXED_CHROME] plus five actions costs.
  *
  * Deliberately NOT a height where the actions lose: below about 283dp they do, because they are
- * measured last. That is a real edge and it is reachable by dragging a window very short; it is
- * out of this PR because fixing it means giving the rail a scroll or a drop rule of its own, and
- * the number is written down here so the next person has it.
+ * measured last, and they vanish rather than clip. That is a real edge, reachable by dragging a
+ * window short - the 600dp floor in `DisplayUtils.calculateMainWindowSize` is an initial size and
+ * not a constraint. Tracked in issue #320, with the numbers and the shape of the fix; the panel
+ * foot's `panelFooterFitsColumn` + `onColumnFitsChange` is the machinery it should reuse.
  */
 private val SHORT_RAIL_HEIGHT = 300.dp
 

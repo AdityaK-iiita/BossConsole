@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertCountEquals
@@ -300,14 +301,20 @@ class QuickActionsPanelFooterTest {
         rule.waitForIdle()
 
         val row = rule.onNodeWithTag(PANEL_FOOTER_HOST_ACTIONS_TAG).captureToImage().toPixelMap()
-        // Two pixels in from the row's start edge, halfway down it. The buttons are centred in a
-        // 250dp column and take about 140dp of it, so this lands on background and not on a glyph
-        // - and the row is a flat fill, so there is nothing to antialias against.
-        val painted = row[2, row.height / 2]
+        // 2dp in from the row's start edge, halfway down it - converted through the test density
+        // rather than passed as a raw pixel index, because the captured image scales with it and
+        // an implicit 1x assumption has no business in the one test whose point is to be exact.
+        // The buttons are centred in a 250dp column and take about 140dp of it, so this lands on
+        // background and not on a glyph, and the fill is flat, so there is nothing to antialias.
+        val inset = with(rule.density) { 2.dp.roundToPx() }
+        val painted = row[inset, row.height / 2]
 
+        // Compared as ARGB, not as Color: a Color carries its colour space, and toPixelMap hands
+        // back whatever space the captured bitmap is in. Comparing the values themselves keeps a
+        // difference nobody can see from failing the test.
         assertEquals(
-            expected,
-            painted,
+            expected.toArgb(),
+            painted.toArgb(),
             "the row came back $painted, not the panel fill - an unpainted strip shows the white window surface",
         )
     }
@@ -349,6 +356,15 @@ class HostActionsPanelEdgeTest {
     fun `a shut right panel means no column, which is what sends them back to the corner`() {
         // Whatever else is open. A left or bottom panel does not host these - see the KDoc.
         assertNull(hostActionsPanelEdge(rightOpen = false))
+    }
+
+    @Test
+    fun `actions that are not homeless name no column at all`() {
+        // The gate that keeps the measurement's cost proportional to the feature: naming a column
+        // is what makes BossWindow compose the subcomposition that measures it, so a window whose
+        // top bar still owns these must not name one however many panels are open.
+        assertNull(hostActionsPanelEdge(rightOpen = true, needsAHome = false))
+        assertEquals(right, hostActionsPanelEdge(rightOpen = true, needsAHome = true))
     }
 }
 

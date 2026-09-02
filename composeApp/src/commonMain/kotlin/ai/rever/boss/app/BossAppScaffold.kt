@@ -304,7 +304,30 @@ internal fun BossAppScaffold(
     // Read here, in the scaffold body, so the state subscription lands in a restart scope rather
     // than inside an inline content lambda. One question answers both halves: whether these
     // actions land in a panel foot at all, and which column draws it - see hostActionsPanelEdge.
-    val panelFooterEdge = state.draggablePanelComponent.hostActionsPanelColumn()
+    // What the bar can offer, read before the placement because the panel measurement below is
+    // gated on it: a bar that can host these means no panel is ever asked to.
+    val verticalBar =
+        verticalBarHost(
+            tabBarOnLeft = appearance.tabBarPosition == TabBarPosition.LEFT,
+            barCollapsed = barRailed,
+            drawerVisible = drawerVisible,
+        )
+
+    // Gated, so the measurement costs nothing in the configuration that will never use it. With
+    // the top bar up - the default, focus mode off - these actions are not homeless, and without
+    // this a right-panel drag would subcompose `PanelFooterHostActions` once per frame to answer
+    // a question whose answer is discarded. Nothing here reads `panelFootFits`, so gating it
+    // cannot close a loop.
+    val panelFooterEdge =
+        state.draggablePanelComponent.hostActionsPanelColumn(
+            needsAHome =
+                hostActionsNeedAPanel(
+                    settings = focusModeSettings,
+                    topBarHidden = !appearance.showTopBar,
+                    showTopBar = reveal.showTopBar,
+                    verticalBar = verticalBar,
+                ),
+        )
 
     // Whether that column is big enough to hold the row, reported back out of layout by
     // `PanelFooterHostActions` - the same shape `onBarRailedChange` has, and for the same reason:
@@ -335,12 +358,7 @@ internal fun BossAppScaffold(
             // split map, but it still has the bottom of its rail, which is where these go now;
             // hovering it opens the drawer, which IS a full bar, so they move up into its foot for
             // as long as it is up. Only TOP position leaves nothing at all.
-            verticalBar =
-                verticalBarHost(
-                    tabBarOnLeft = appearance.tabBarPosition == TabBarPosition.LEFT,
-                    barCollapsed = barRailed,
-                    drawerVisible = drawerVisible,
-                ),
+            verticalBar = verticalBar,
             // Only consulted once the bar has offered nothing, i.e. in TOP position.
             panelFootAvailable = panelFootAvailable(panelFooterEdge, panelFootFits),
         )
@@ -706,7 +724,11 @@ internal fun BossAppScaffold(
                                     // puts it in. Counted as `focusQuickActionsRailRows` counts
                                     // the rail's reserve: the four, plus the launcher when both
                                     // strips are off and this group is where it landed.
-                                    actionCount = hostActionsRowSize(hasLauncher = hostToolLauncher != null),
+                                    actionCount =
+                                        hostActionsRowSize(
+                                            hasToolbox = hostToolbox != null,
+                                            hasLauncher = hostToolLauncher != null,
+                                        ),
                                     actions =
                                         focusQuickActionsPanelFooter(
                                             placement = quickActionsPlacement,
@@ -921,7 +943,25 @@ internal fun BossAppScaffold(
  * composition it subscribes its caller exactly as an inline chain would. Named at all because
  * this composable is at detekt's cyclomatic ceiling.
  */
-private fun BossDraggableComponent.hostActionsPanelColumn(): Panel? = hostActionsPanelEdge(rightOpen = isVisible(right))
+private fun BossDraggableComponent.hostActionsPanelColumn(needsAHome: Boolean): Panel? =
+    hostActionsPanelEdge(rightOpen = isVisible(right), needsAHome = needsAHome)
+
+/**
+ * Whether the host's actions are looking for a panel to live in at all.
+ *
+ * Both halves of "nothing above the panel can take them": focus mode has actually cleared the top
+ * bar that owns them, AND there is no vertical bar, which is the only host ahead of the panel in
+ * the ladder. See `focusQuickActionsPlacement` for the ladder itself.
+ *
+ * Deliberately reads none of the measured state. It gates the panel MEASUREMENT, so a term here
+ * that depended on what that measurement reports would be a cycle rather than a gate.
+ */
+private fun hostActionsNeedAPanel(
+    settings: FocusModeSettings,
+    topBarHidden: Boolean,
+    showTopBar: Boolean,
+    verticalBar: VerticalBarHost,
+): Boolean = focusQuickActionsVisible(settings, topBarHidden, showTopBar) && verticalBar == VerticalBarHost.NONE
 
 /**
  * Whether the host's actions have a panel foot to go in: there is a column, and it can hold the row.
@@ -945,9 +985,17 @@ private fun panelFootAvailable(
  * What `PanelFooterHostActions` measures its column against, and it has to be answerable while
  * the list itself is empty - which is the state a "does not fit" answer puts that row in.
  *
- * Counted the way `focusQuickActionsRailRows` counts the rail's reserve: the four, Toolbox
- * included, plus the tools launcher when both icon strips are off and it landed in this group.
+ * EXACT, which is where this parts company with `focusQuickActionsRailRows`. That function
+ * over-counts on purpose: its number is a height reserve, and a reserve that tracked the rendered
+ * list would move the icons above it on every hover. This one answers a one-shot geometry
+ * question with no stability to protect, and over-counting only means a column that would have
+ * held the real row falls back to the overlay - `PanelFooterFitTest` shows the band where one
+ * button decides it. So `listOfNotNull` dropping an unregistered Toolbox has to be counted too.
+ *
  * Named rather than inlined because [BossAppScaffold] is at detekt's cyclomatic ceiling and one
  * more `if` in its body puts it over.
  */
-private fun hostActionsRowSize(hasLauncher: Boolean): Int = FOCUS_QUICK_ACTION_COUNT + if (hasLauncher) 1 else 0
+private fun hostActionsRowSize(
+    hasToolbox: Boolean,
+    hasLauncher: Boolean,
+): Int = FOCUS_QUICK_ACTION_COUNT - (if (hasToolbox) 0 else 1) + (if (hasLauncher) 1 else 0)

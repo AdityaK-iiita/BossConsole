@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.Divider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -48,8 +50,18 @@ import kotlin.math.ceil
  * Takes the root's visibility rather than the component, so the table is testable without a plugin
  * host. `isVisible(right)` folds in its own top and bottom halves, so one flag covers both right
  * panels.
+ *
+ * [needsAHome] is what keeps the cost of this proportional to the feature. Naming a column makes
+ * `BossWindow` compose [PanelFooterHostActions], which is a subcomposition that re-measures on
+ * every constraint change - so in the default configuration, top bar up and these actions not
+ * homeless at all, a right-panel drag-resize would pay for one per frame to answer a question
+ * nothing reads. It is decided from settings and the bar alone, never from what that measurement
+ * reports, so it is a gate and not a cycle.
  */
-internal fun hostActionsPanelEdge(rightOpen: Boolean): Panel? = if (rightOpen) right else null
+internal fun hostActionsPanelEdge(
+    rightOpen: Boolean,
+    needsAHome: Boolean = true,
+): Panel? = if (rightOpen && needsAHome) right else null
 
 /**
  * The host's own actions as a row at the foot of the open right panel's column.
@@ -68,8 +80,9 @@ internal fun hostActionsPanelEdge(rightOpen: Boolean): Panel? = if (rightOpen) r
  *
  * **Only when the column can afford it.** A panel is resizable down to a floor of about 20dp, and
  * a row that wraps rather than clips turns width pressure into height pressure: at that floor the
- * five buttons stack one per line into 188dp of chrome, and the plugin - measured second, since
- * [PanelColumn] gives it the weight - gets whatever is left. Measured at 20x400 that is 211dp of
+ * five buttons - the four plus the tools launcher - stack one per line into 188dp of chrome, and
+ * the plugin, measured second since [PanelColumn] gives it the weight, gets whatever is left at
+ * all. Measured at 20x400 that is 211dp of
  * plugin behind 188dp of icons, each of them 4dp WIDE, because `Modifier.size` coerces to the
  * incoming constraint on that axis too. So this measures its column first and reports the answer
  * back to the scaffold through [onColumnFitsChange]; when the column cannot afford the row the
@@ -83,6 +96,12 @@ internal fun hostActionsPanelEdge(rightOpen: Boolean): Panel? = if (rightOpen) r
  * The measuring shell composes whether or not there is a row, which is what makes the fallback
  * reversible: a column that reports "no" renders nothing, and would have no way to report "yes
  * again" once the user widens it if the measurement lived behind the same guard as the row.
+ *
+ * The scaffold's state starts at "fits", so a panel opened AT a sliver width draws this row for
+ * one frame before the report takes it away. That direction is the deliberate one: the other
+ * default flickers the cluster's native window open and shut on every right-panel open at the
+ * 250dp width almost everyone uses, and a frame of an over-tall row is cheaper than a frame of
+ * window churn.
  *
  * Renders nothing at all when [actions] is empty, rule included, so a panel in a window that keeps
  * these somewhere else is exactly the panel that existed before this.
@@ -111,7 +130,12 @@ internal fun PanelFooterHostActions(
         // Through an effect, not straight out of composition: this writes state the scaffold reads
         // to pick the placement, and a write during composition to something a parent has already
         // read is the recomposition-loop trap `drawerVisible` documents on the other slot.
-        LaunchedEffect(fits) { onColumnFitsChange(fits) }
+        //
+        // The effect keys on the ANSWER, so it fires once per change of it rather than once per
+        // recomposition - which means it would otherwise capture whichever callback was current
+        // when the answer last changed. `rememberUpdatedState` is what keeps it the current one.
+        val report by rememberUpdatedState(onColumnFitsChange)
+        LaunchedEffect(fits) { report(fits) }
 
         if (actions.isEmpty()) return@BoxWithConstraints
 
