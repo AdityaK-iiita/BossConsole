@@ -95,10 +95,23 @@ internal fun parseSwipeNavDirection(raw: String?): SwipeNavDirection? =
 /**
  * Whether a swipe arriving at [nowMs] should navigate, given when the last one did.
  *
- * The debounce is longer than the 100ms the aux mouse buttons use. A button click is a discrete
- * act; a swipe is a continuous one that a trackpad can re-trigger from the tail of the same finger
- * movement, and going back two pages when the user meant one is not obviously recoverable - the
- * forward entry may not survive the intervening page's redirect.
+ * **The rationale this originally shipped with no longer applies, and the value changed with
+ * it.** `swipe-nav.js` used to call [navigate] the instant a gesture crossed the commit
+ * distance, mid-swipe - so the tail of ONE continuous finger movement really could look like a
+ * second gesture and re-fire. Since `swipe-nav.js`'s `decide()` (boss-plugin-fluck-browser#36)
+ * now calls this at most once per gesture END, that case is structurally impossible: there is
+ * nothing left in the page's own state machine that can produce two calls for one swipe.
+ *
+ * What is left to guard against is narrower - a genuine double-fire *bug* in this bridge or its
+ * caller, not a real second gesture - and the value was still tuned for the old case. Two
+ * distinct 90px swipes, timed as a deliberate long hold followed by a quick flick, can now land
+ * as little as roughly `GESTURE_GAP_MS` (120ms, `swipe-nav.js`) plus the second gesture's own
+ * duration apart - a fast trackpad flick clears the script's `MIN_EVENTS` in well under 100ms -
+ * so the old 400ms window silently dropped a legitimate second swipe the user could see they had
+ * just made. 100ms sits below `GESTURE_GAP_MS` itself (400ms did not), which is a hard floor on
+ * every real gesture's END regardless of how short the gesture that produced it was - so this
+ * can never reject a genuinely separate swipe - while still exceeding a same-tick or same-frame
+ * double-dispatch, which is the actual failure shape a bridge-level bug would take.
  *
  * Pure, so the window is pinned by a test rather than by trying to swipe twice quickly by hand.
  */
@@ -107,4 +120,4 @@ internal fun shouldAcceptSwipeNav(
     lastNavigationMs: Long,
 ): Boolean = nowMs - lastNavigationMs > SWIPE_NAV_DEBOUNCE_MS
 
-internal const val SWIPE_NAV_DEBOUNCE_MS = 400L
+internal const val SWIPE_NAV_DEBOUNCE_MS = 100L

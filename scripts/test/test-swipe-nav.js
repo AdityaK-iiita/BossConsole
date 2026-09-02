@@ -334,6 +334,30 @@ console.log('\nrelease, not the threshold, is what commits');
   p.pagehide();
   eq('the page going away mid-swipe is not routed through a commit', p.navigated, []);
 }
+{
+  // A second review round caught this: decide() runs from the endTimer regardless of how few
+  // events the gesture had, so without its own MIN_EVENTS check, two deltas of 50px each - each
+  // one under MAX_STEP_PX, so neither is caught by the wheel-shape guard on its own - total
+  // 100px, clear COMMIT_PX (90), and never reach the eventCount that would have shown any
+  // affordance at all. That must not navigate.
+  const p = newPage(js);
+  p.swipe(2, -50);
+  p.settle();
+  eq('two events under MIN_EVENTS must not navigate however far they travel', p.navigated, []);
+  check('and no affordance was ever shown for it', p.liveOverlays() === 0, p.liveOverlays());
+}
+{
+  // The setting can flip WHILE a gesture is in flight. switchedOff() is checked inside onWheel
+  // already, so this specifically exercises decide() on the timer path, after the last onWheel
+  // call already latched a direction and distance. `state` is passed by reference and mutated
+  // directly - the same object the host pushes the flag onto in production.
+  const state = { back: true, forward: true };
+  const p = newPage(js, { state });
+  p.swipe(12, -10);
+  state.enabled = false;
+  p.settle();
+  eq('switching the gesture off mid-swipe stops it committing on release too', p.navigated, []);
+}
 
 console.log('\ngestures that must not navigate');
 {

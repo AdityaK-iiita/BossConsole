@@ -111,12 +111,14 @@ class BrowserSwipeNavTest {
     }
 
     /**
-     * Longer than the 100ms the aux mouse buttons use, and deliberately so: a click is discrete,
-     * a swipe is one continuous finger movement whose tail can look like a second gesture.
+     * The window's only remaining job (see [shouldAcceptSwipeNav]'s KDoc for why) is catching a
+     * genuine double-fire bug, not a real second gesture - so it must sit comfortably BELOW the
+     * structural floor between two real gestures, not above some other feature's window. 120 is
+     * `swipe-nav.js`'s own GESTURE_GAP_MS - the minimum possible gap between two gesture ends.
      */
     @Test
-    fun `the window is longer than the mouse-button one`() {
-        assertTrue(SWIPE_NAV_DEBOUNCE_MS > 100)
+    fun `the window sits below the structural floor between two real gestures`() {
+        assertTrue(SWIPE_NAV_DEBOUNCE_MS < 120, "must not be able to reject a genuinely separate swipe")
     }
 
     // --- What the host pushes into the page --------------------------------------------------
