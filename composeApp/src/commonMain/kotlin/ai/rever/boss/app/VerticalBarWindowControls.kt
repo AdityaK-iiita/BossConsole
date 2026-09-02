@@ -164,8 +164,8 @@ internal const val VERTICAL_BAR_HOST_ACTIONS_TAG = "vertical-bar-host-actions"
 @Composable
 internal fun HostActionsFlowRow(
     tag: String,
-    modifier: Modifier = Modifier,
     actions: List<@Composable () -> Unit>,
+    modifier: Modifier = Modifier,
 ) {
     FlowRow(
         modifier =

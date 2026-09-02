@@ -8,7 +8,7 @@ import kotlin.test.assertEquals
  * Pins the precedence between the five renderings of Settings / Search / Sign Out.
  *
  * The order is the right rail, the tab bar's foot, that bar's collapsed rail, a reserved row at
- * the foot of the content area, and only then the floating cluster - and each step is a choice
+ * the foot of the open right panel, and only then the floating cluster - and each step is a choice
  * rather than an accident. The cluster is a native always-on-top window with no click-through, so
  * it is the most intrusive of the five and goes last; every one before it is chrome the app draws
  * anyway, or layout it can carve out.
@@ -22,14 +22,14 @@ class QuickActionsFooterPlacementTest {
     private fun placement(
         rightStripHidden: Boolean,
         verticalBar: VerticalBarHost,
-        pluginPanelOpen: Boolean = false,
+        rightPanelOpen: Boolean = false,
     ) = focusQuickActionsPlacement(
         settings = focusOff,
         topBarHidden = true,
         rightStripHidden = rightStripHidden,
         showTopBar = false,
         verticalBar = verticalBar,
-        pluginPanelOpen = pluginPanelOpen,
+        rightPanelOpen = rightPanelOpen,
     )
 
     @Test
@@ -61,16 +61,16 @@ class QuickActionsFooterPlacementTest {
     }
 
     @Test
-    fun `a collapsed bar keeps the rail even with a plugin panel open`() {
+    fun `a collapsed bar keeps the rail even with the right panel open`() {
         // The panel only decides between its own foot and the overlay, and neither is reached
         // while a bar - full or railed - can hold these itself.
         assertEquals(
             FocusQuickActionsPlacement.TAB_BAR_RAIL,
-            placement(rightStripHidden = true, verticalBar = VerticalBarHost.RAIL, pluginPanelOpen = true),
+            placement(rightStripHidden = true, verticalBar = VerticalBarHost.RAIL, rightPanelOpen = true),
         )
         assertEquals(
             FocusQuickActionsPlacement.TAB_BAR_FOOTER,
-            placement(rightStripHidden = true, verticalBar = VerticalBarHost.FOOT, pluginPanelOpen = true),
+            placement(rightStripHidden = true, verticalBar = VerticalBarHost.FOOT, rightPanelOpen = true),
         )
     }
 
@@ -85,10 +85,10 @@ class QuickActionsFooterPlacementTest {
             placement(rightStripHidden = true, verticalBar = tabsOnTop),
         )
 
-        // With a plugin panel open, the same window reserves a row instead of covering it.
+        // With the right panel open, the same window reserves a row instead of covering it.
         assertEquals(
             FocusQuickActionsPlacement.PANEL_FOOTER,
-            placement(rightStripHidden = true, verticalBar = tabsOnTop, pluginPanelOpen = true),
+            placement(rightStripHidden = true, verticalBar = tabsOnTop, rightPanelOpen = true),
         )
 
         // A collapsed bar on the left reaches its own rail by the other route.
@@ -116,7 +116,7 @@ class QuickActionsFooterPlacementTest {
                 rightStripHidden = true,
                 showTopBar = true,
                 verticalBar = VerticalBarHost.FOOT,
-                pluginPanelOpen = true,
+                rightPanelOpen = true,
             ),
             "the top bar owns these whenever it is on screen",
         )
@@ -216,7 +216,7 @@ class QuickActionsFooterPlacementTest {
                     placement(
                         rightStripHidden = true,
                         verticalBar = bar,
-                        pluginPanelOpen = open,
+                        rightPanelOpen = open,
                     ) == FocusQuickActionsPlacement.FLOATING
                 }
 

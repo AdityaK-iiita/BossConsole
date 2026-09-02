@@ -1,8 +1,6 @@
 package ai.rever.boss.app
 
 import ai.rever.boss.plugin.api.Panel
-import ai.rever.boss.plugin.api.Panel.Companion.bottom
-import ai.rever.boss.plugin.api.Panel.Companion.left
 import ai.rever.boss.plugin.api.Panel.Companion.right
 import ai.rever.boss.plugin.api.Panel.Companion.top
 import ai.rever.boss.plugin.ui.BossTheme
@@ -12,39 +10,45 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 
 /**
- * Which open plugin panel's column takes the host's actions, or null when none is open.
+ * Which open plugin panel's column takes the host's actions, or null when none of them does.
  *
- * **Right first, then left, then bottom.** The right column ends where the floating cluster used
- * to sit, so a user who has learned that corner finds them within an inch of it; the left column
- * is the same shape one edge over; the bottom panel is last because its foot spans the whole
- * window, which is the look this placement exists to avoid.
+ * **The right column, and only the right column.** The floating cluster this displaces sits in
+ * the content area's bottom-RIGHT corner, so a right panel is the one an open panel actually
+ * collides with. The other two were in an earlier revision of this and are deliberately out:
  *
- * One function for both halves of the decision - whether these get a panel foot at all
- * ([FocusQuickActionsPlacement.PANEL_FOOTER] against [FocusQuickActionsPlacement.FLOATING]) and
- * which column draws it. Two expressions could disagree, and the way that fails is a row rendered
- * into a column nothing is composing: Sign Out on screen nowhere.
+ * - **Left.** There is no collision to fix. A left panel is the width of the window away from the
+ *   cluster, so hosting these there would move Sign Out across the window to dodge an overlap
+ *   that is not happening - and move it back, disposing and re-creating the overlay's native
+ *   window, when the panel closes.
+ * - **Bottom.** The collision is real, but the fix contradicts the reason this placement exists:
+ *   a bottom panel spans the whole window, so its foot IS the full-width band this rejected in
+ *   favour of chrome at the scale of the thing it belongs to. It is also the one column that
+ *   cannot yield - `BossResizablePanel` floors a panel at `max(2% of the axis, 20.dp)`, and the
+ *   scarce axis for a bottom panel is the one the row needs about 45dp of, so at its floor the
+ *   plugin gets no height and `Modifier.size` shrinks the icons to fit rather than overflowing.
+ *   A right panel's scarce axis is width, where the row wraps - which is pinned at 20dp.
  *
- * Takes the three roots rather than a component, so the table is testable without a plugin host.
- * `isVisible(left)` and `isVisible(right)` each fold in their own top and bottom halves, so these
- * three cover all five panels.
+ * So a TOP-bar window with only a left or bottom panel open keeps the cluster it has today. That
+ * is the behaviour this change found, not one it introduces.
+ *
+ * Still a `Panel?` rather than a Boolean: `BossWindow` gates three columns on
+ * `panelFooterEdge == panel`, so the answer has to name one. One function for both halves of the
+ * decision - whether these get a panel foot at all ([FocusQuickActionsPlacement.PANEL_FOOTER]
+ * against [FocusQuickActionsPlacement.FLOATING]) and which column draws it. Two expressions could
+ * disagree, and the way that fails is a row rendered into a column nothing is composing: Sign Out
+ * on screen nowhere.
+ *
+ * Takes the root's visibility rather than the component, so the table is testable without a plugin
+ * host. `isVisible(right)` folds in its own top and bottom halves, so one flag covers both right
+ * panels.
  */
-internal fun hostActionsPanelEdge(
-    rightOpen: Boolean,
-    leftOpen: Boolean,
-    bottomOpen: Boolean,
-): Panel? =
-    when {
-        rightOpen -> right
-        leftOpen -> left
-        bottomOpen -> bottom
-        else -> null
-    }
+internal fun hostActionsPanelEdge(rightOpen: Boolean): Panel? = if (rightOpen) right else null
 
 /**
- * The host's own actions as a row at the foot of an open plugin panel's column.
+ * The host's own actions as a row at the foot of the open right panel's column.
  *
  * The [FocusQuickActionsPlacement.PANEL_FOOTER] rendering, for a window in TOP tab-bar position -
- * no rail, no vertical bar, nothing else left to hold these - with a plugin panel open.
+ * no rail, no vertical bar, nothing else left to hold these - with the right panel open.
  *
  * **A row inside the panel, not a band across the content area.** The floating cluster it replaces
  * has no click-through on either path, so with a panel open it parks a dead region over the corner
@@ -77,8 +81,8 @@ internal fun PanelFooterHostActions(actions: List<@Composable () -> Unit>) {
     // bottom of it.
     HostActionsFlowRow(
         tag = PANEL_FOOTER_HOST_ACTIONS_TAG,
-        modifier = Modifier.background(BossTheme.colors.panel),
         actions = actions,
+        modifier = Modifier.background(BossTheme.colors.panel),
     )
 }
 

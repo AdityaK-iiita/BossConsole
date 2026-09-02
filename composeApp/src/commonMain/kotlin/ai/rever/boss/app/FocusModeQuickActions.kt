@@ -148,18 +148,20 @@ internal enum class FocusQuickActionsPlacement {
     TAB_BAR_RAIL,
 
     /**
-     * A row at the foot of an open plugin panel's own column - see [hostActionsPanelEdge] for
-     * which column that is.
+     * A row at the foot of the open RIGHT plugin panel's own column - see [hostActionsPanelEdge],
+     * which names that column and rules the other two out.
      *
      * Reached only in TOP tab-bar position, which has no vertical bar to put anything in, and only
-     * while a plugin panel is open. The cluster is an overlay that swallows clicks in the region it
-     * covers, and a panel the user has just opened is the last thing that should be under it - so
-     * in that configuration the actions move into that panel's chrome and cover nothing.
+     * while the right panel is open. The cluster is an overlay that swallows clicks in the region
+     * it covers, it sits in the content area's bottom-right corner, and that corner belongs to the
+     * right panel whenever there is one - so in that configuration the actions move into that
+     * panel's chrome and cover nothing.
      *
      * **The panel's foot, not a band across the content area.** A full-width row also fixes the
      * collision, and it looks like one: the window grows a strip of dead chrome the width of the
      * screen to hold four icons. Inside the panel they read as what they are, at the scale of the
-     * thing they sit in - the same shape the vertical bar's foot has.
+     * thing they sit in - the same shape the vertical bar's foot has. That is also why a BOTTOM
+     * panel does not host these: its column is the whole window's width, so its foot is that band.
      *
      * Deliberately NOT the answer for a bare TOP window as well. With no panel open the corner is
      * empty content, where the overlay costs nothing, and there is no panel to put a foot on.
@@ -176,13 +178,13 @@ internal enum class FocusQuickActionsPlacement {
  *
  * **Every piece of chrome the window already draws - or layout it can carve out of a panel -
  * is tried before the overlay is.** In order:
- * the right rail, the vertical tab bar's foot, that bar's collapsed rail, an open plugin panel's
+ * the right rail, the vertical tab bar's foot, that bar's collapsed rail, the open right panel's
  * foot, and only then the floating cluster. The cluster is an overlay over
  * live content - on the heavyweight path a native always-on-top window with no click-through - so
  * it is by some distance the most intrusive of them, and it is now reached only by a window with
- * no rail, no vertical bar and nothing open to collide with. Where the right sidebar is on screen
- * there is already a strip of icon chrome at the window's end edge with empty space at the bottom
- * of it, and four more icons there cost nothing and look like what they are.
+ * no rail, no vertical bar and nothing in the corner for it to cover. Where the right sidebar is
+ * on screen there is already a strip of icon chrome at the window's end edge with empty space at
+ * the bottom of it, and four more icons there cost nothing and look like what they are.
  *
  * That is not a rare case, it is the **default one on Windows**: `defaultHidesSidebars` leaves both
  * sidebars up there precisely because hover-reveal cannot fire over a browser tab, while the top
@@ -223,15 +225,18 @@ internal fun focusQuickActionsPlacement(
      */
     verticalBar: VerticalBarHost = VerticalBarHost.NONE,
     /**
-     * Whether any plugin panel is open in the content area - left, right or bottom.
+     * Whether the RIGHT plugin panel is open.
      *
      * The one input that is about the window's CONTENT rather than its chrome, and it is here for
      * one reason: the floating cluster has no click-through, so wherever it sits it takes that
-     * corner away from whatever is under it. An open panel is something the user asked for and is
-     * looking at, and it comes with a foot to put these in; empty content in the corner of a bare
-     * window is neither. Answered by [hostActionsPanelEdge], which also picks that column.
+     * corner away from whatever is under it. A right panel is what the bottom-right corner sits
+     * on top of, it is something the user asked for and is looking at, and it comes with a foot
+     * to put these in; empty content in the corner of a bare window is none of the three.
+     *
+     * The right panel and not "any panel" - see [hostActionsPanelEdge], which is where the left
+     * and bottom columns are ruled out and why, and which also picks the column.
      */
-    pluginPanelOpen: Boolean = false,
+    rightPanelOpen: Boolean = false,
 ): FocusQuickActionsPlacement =
     when {
         !focusQuickActionsVisible(settings, topBarHidden, showTopBar) -> FocusQuickActionsPlacement.NONE
@@ -249,10 +254,10 @@ internal fun focusQuickActionsPlacement(
         // overlay in the content.
         verticalBar == VerticalBarHost.RAIL -> FocusQuickActionsPlacement.TAB_BAR_RAIL
 
-        // No vertical bar at all, so nothing above can host them. An open plugin panel's foot
-        // while there is one, the corner of the content when there is not. See the two enum
-        // entries for why that split rather than one answer for both.
-        pluginPanelOpen -> FocusQuickActionsPlacement.PANEL_FOOTER
+        // No vertical bar at all, so nothing above can host them. The right panel's foot while
+        // that panel is open, the corner of the content when it is not. See the two enum entries
+        // for why that split rather than one answer for both.
+        rightPanelOpen -> FocusQuickActionsPlacement.PANEL_FOOTER
 
         else -> FocusQuickActionsPlacement.FLOATING
     }

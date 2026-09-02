@@ -67,14 +67,19 @@ fun BossDraggableComponent.BossWindow(
      * whether those actions are in a panel foot at all, and two answers could disagree - which
      * would render the row into a column nothing is composing. Compared by root, so it names a
      * column (`left`) rather than one of its two halves.
+     *
+     * All three columns ask, though today only `right` is ever named - `hostActionsPanelEdge` has
+     * the reasons the other two are out. Asking uniformly is what lets that stay one decision in
+     * one place, and an unfilled [PanelColumn] is a `Column` around one `weight(1f)` child, which
+     * lays out exactly as the bare panel did.
      */
     panelFooterEdge: Panel? = null,
     /**
      * Window chrome for the very bottom of that column, under whichever panel is lowest in it.
      *
      * Today the host's own actions - Sign Out, Settings, Tools, Search - when a TOP tab bar leaves
-     * no bar to hold them and a panel is open in front of where the floating cluster would park.
-     * See `focusQuickActionsPlacement`. Renders nothing when there is nothing to put there.
+     * no bar to hold them and the right panel is open in front of where the floating cluster would
+     * park. See `focusQuickActionsPlacement`. Renders nothing when there is nothing to put there.
      */
     panelFooter: @Composable () -> Unit = {},
 ) {

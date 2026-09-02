@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import org.junit.Rule
 import org.junit.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 /**
  * Pins the wiring between the placement decision and the hosts that draw it.
@@ -153,37 +154,50 @@ class HostActionsWiringTest {
     fun `the footer lands in exactly one panel column, the one the edge names`() {
         // `hostActionsPanelEdge` names a column and BossWindow gates on `panelFooterEdge == panel`
         // in each of the three. Panel is an open class whose subclasses carry a nullable child, so
-        // this pins that the roots do not collide - and that no combination lights two columns.
-        listOf(
-            Triple(true, true, true) to right,
-            Triple(false, true, true) to left,
-            Triple(false, false, true) to bottom,
-        ).forEach { (open, expected) ->
-            val (rightOpen, leftOpen, bottomOpen) = open
-            val edge = hostActionsPanelEdge(rightOpen, leftOpen, bottomOpen)
-            assertEquals(expected, edge, "the premise: the edge for $open")
-
-            rule.setContent {
-                // The three columns BossWindow composes, each gating the shared footer the same
-                // way it does. Only the open ones get one, exactly as in the real window.
-                Column {
-                    listOf(right to rightOpen, left to leftOpen, bottom to bottomOpen)
-                        .filter { (_, isOpen) -> isOpen }
-                        .forEach { (column, _) ->
-                            PanelColumn(footer = { if (edge == column) FooterProbe(column) }) {
-                                Box(modifier = Modifier.fillMaxSize())
-                            }
+        // this pins that the roots do not collide - and, since only the right column is a
+        // candidate, that a left or bottom panel does NOT quietly grow a foot of its own.
+        //
+        // One setContent driven by a state, not one per case: `setContent` is documented as once
+        // per test, and the drawer test above already has the shape.
+        val rightOpen = mutableStateOf(true)
+        rule.setContent {
+            val edge = hostActionsPanelEdge(rightOpen = rightOpen.value)
+            // The three columns BossWindow composes, each gating the shared footer the same way
+            // it does. Left and bottom are held OPEN throughout: they are what would light up if
+            // the table ever grew back to them by accident.
+            Column {
+                listOf(right to rightOpen.value, left to true, bottom to true)
+                    .filter { (_, isOpen) -> isOpen }
+                    .forEach { (column, _) ->
+                        PanelColumn(footer = { if (edge == column) FooterProbe(column) }) {
+                            Box(modifier = Modifier.fillMaxSize())
                         }
-                }
+                    }
             }
-            rule.waitForIdle()
+        }
+        rule.waitForIdle()
 
-            rule.onAllNodesWithTag(probeTagFor(expected)).assertCountEquals(1)
-            listOf(right, left, bottom)
-                .filter { column -> column != expected }
-                .forEach { column ->
-                    rule.onAllNodesWithTag(probeTagFor(column)).assertCountEquals(0)
-                }
+        assertEquals(right, hostActionsPanelEdge(rightOpen = true), "the premise: the right column")
+        assertOnlyFooterIn(right)
+
+        // Shut the right panel with the other two still open: the edge is null, so no column
+        // draws a foot and the actions go back to the floating cluster.
+        rightOpen.value = false
+        rule.waitForIdle()
+
+        assertNull(hostActionsPanelEdge(rightOpen = false), "the premise: no column without it")
+        assertOnlyFooterIn(null)
+    }
+
+    /** A footer in [expected] and in neither of the other two columns; none at all when null. */
+    private fun assertOnlyFooterIn(expected: Panel?) {
+        listOf(right, left, bottom).forEach { column ->
+            val found = rule.onAllNodesWithTag(probeTagFor(column)).fetchSemanticsNodes().size
+            assertEquals(
+                if (column == expected) 1 else 0,
+                found,
+                "footers in the ${column::class.simpleName} column, with $expected expected to hold it",
+            )
         }
     }
 }

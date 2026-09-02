@@ -296,15 +296,16 @@ internal fun BossAppScaffold(
     // the panel or the bar is the one behind the strip.
     val leftPanelOpen = state.draggablePanelComponent.isVisible(left)
 
-    // Whether ANY plugin panel is open in the content area. It decides whether the host's actions
-    // get a reserved row or an overlay, in a window with no vertical bar to put them in - see
-    // `focusQuickActionsPlacement`.
+    // Whether the RIGHT plugin panel is open - the one column whose foot can take the host's
+    // actions, and the one an overlay in the bottom-right corner actually collides with. It
+    // decides whether those actions get a reserved row or that overlay, in a window with no
+    // vertical bar to put them in - see `focusQuickActionsPlacement`.
     //
     // Read here, in the scaffold body, so the state subscription lands in a restart scope rather
     // than inside an inline content lambda. One question answers both halves: whether these
     // actions land in a panel foot at all, and which column draws it - see hostActionsPanelEdge.
     val panelFooterEdge = state.draggablePanelComponent.hostActionsPanelColumn()
-    val pluginPanelOpen = panelFooterEdge != null
+    val rightPanelOpen = panelFooterEdge != null
 
     // Where Settings / Search / Sign Out go while focus mode holds the top bar that owns them.
     // One decision, five mutually exclusive renderings - every piece of chrome the window already
@@ -327,7 +328,7 @@ internal fun BossAppScaffold(
                     drawerVisible = drawerVisible,
                 ),
             // Only consulted once the bar has offered nothing, i.e. in TOP position.
-            pluginPanelOpen = pluginPanelOpen,
+            rightPanelOpen = rightPanelOpen,
         )
 
     // Where the way into the plugins goes, when a strip that would normally hold their icons is
@@ -881,20 +882,16 @@ internal fun BossAppScaffold(
 }
 
 /**
- * Which plugin panel column takes the host's actions, or null when no panel is open.
+ * Which plugin panel column takes the host's actions, or null when the right one is shut.
  *
- * The reads; [hostActionsPanelEdge] is the table. All three edges, not just the left one the
- * traffic-light rule asks about: the floating cluster sits in the content area's bottom-right
- * corner, which a right panel owns outright and a bottom panel owns the whole width of.
+ * The read; [hostActionsPanelEdge] is the rule, including why the left and bottom columns are not
+ * candidates. One state subscription added to this composable's restart scope, on top of the
+ * `isVisible(left)` the traffic-light rule already reads - so a right-panel toggle now recomposes
+ * the scaffold. That is a user-scale event, and it is the same mechanism behind the overlay
+ * teardown this placement already documents.
  *
  * A plain function rather than a `@Composable`: it only reads snapshot state, so called during
  * composition it subscribes its caller exactly as an inline chain would. Named at all because
- * this composable is at detekt's cyclomatic ceiling, and three `isVisible` calls in a `when` put
- * it over.
+ * this composable is at detekt's cyclomatic ceiling.
  */
-private fun BossDraggableComponent.hostActionsPanelColumn(): Panel? =
-    hostActionsPanelEdge(
-        rightOpen = isVisible(right),
-        leftOpen = isVisible(left),
-        bottomOpen = isVisible(bottom),
-    )
+private fun BossDraggableComponent.hostActionsPanelColumn(): Panel? = hostActionsPanelEdge(rightOpen = isVisible(right))

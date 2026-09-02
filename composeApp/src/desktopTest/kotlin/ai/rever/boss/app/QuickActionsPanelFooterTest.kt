@@ -5,10 +5,9 @@ import ai.rever.boss.components.buttons.ToolboxButton
 import ai.rever.boss.components.plugin.PanelIds
 import ai.rever.boss.components.window_panel.PanelColumn
 import ai.rever.boss.plugin.api.Panel
-import ai.rever.boss.plugin.api.Panel.Companion.bottom
-import ai.rever.boss.plugin.api.Panel.Companion.left
 import ai.rever.boss.plugin.api.Panel.Companion.right
 import ai.rever.boss.plugin.api.SidebarItem
+import ai.rever.boss.plugin.ui.BossTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
@@ -19,8 +18,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -194,6 +196,51 @@ class QuickActionsPanelFooterTest {
     }
 
     @Test
+    fun `the row paints its own background`() {
+        // The one regression in this placement that no bounds assertion can see: the row is a
+        // strip of column nothing else draws - SidePanel fills itself and stops where its content
+        // does - and nothing is not the background. The raw native window surface shows through,
+        // which is WHITE, and these are near-white icons.
+        //
+        // So this reads a PIXEL. Compose's semantics tree carries no colour, and every other test
+        // in this file passes just as happily against an unpainted row.
+        var expected: Color? = null
+        rule.setContent {
+            expected = BossTheme.colors.panel
+            Box(modifier = Modifier.width(PANEL_WIDTH).height(400.dp).testTag(COLUMN_TAG)) {
+                PanelColumn(
+                    footer = {
+                        PanelFooterHostActions(
+                            actions =
+                                focusQuickActionsPanelFooter(
+                                    placement = FocusQuickActionsPlacement.PANEL_FOOTER,
+                                    onShowSettings = {},
+                                    onShowSearch = {},
+                                    onSignOut = {},
+                                ),
+                        )
+                    },
+                ) {
+                    Box(modifier = Modifier.fillMaxSize().testTag(PLUGIN_TAG))
+                }
+            }
+        }
+        rule.waitForIdle()
+
+        val row = rule.onNodeWithTag(PANEL_FOOTER_HOST_ACTIONS_TAG).captureToImage().toPixelMap()
+        // Two pixels in from the row's start edge, halfway down it. The buttons are centred in a
+        // 250dp column and take about 140dp of it, so this lands on background and not on a glyph
+        // - and the row is a flat fill, so there is nothing to antialias against.
+        val painted = row[2, row.height / 2]
+
+        assertEquals(
+            expected,
+            painted,
+            "the row came back $painted, not the panel fill - an unpainted strip shows the white window surface",
+        )
+    }
+
+    @Test
     fun `any other placement leaves the panel exactly as it was`() {
         // The zero-cost half of the design: a window with nothing open gets the overlay, and no
         // panel anywhere should quietly grow a row of chrome in the meantime.
@@ -213,26 +260,23 @@ class QuickActionsPanelFooterTest {
  *
  * One function for both, because two expressions could disagree - and the way that fails is the
  * row rendered into a column nothing is composing: Sign Out on screen nowhere.
+ *
+ * The left and bottom columns are the interesting half now: both were candidates in an earlier
+ * revision, and both were dropped on purpose - left because the cluster is nowhere near it, bottom
+ * because its foot is the full-window band this placement exists to avoid AND because it is the
+ * one column with no axis that can yield at its floor. A test rather than a comment, so growing
+ * the table back is a decision someone makes rather than one that lands quietly.
  */
 class HostActionsPanelEdgeTest {
     @Test
-    fun `the right column wins, being where the cluster sat`() {
-        assertEquals(right, hostActionsPanelEdge(rightOpen = true, leftOpen = true, bottomOpen = true))
+    fun `the right column takes them, being the one the cluster sat on`() {
+        assertEquals(right, hostActionsPanelEdge(rightOpen = true))
     }
 
     @Test
-    fun `then the left column`() {
-        assertEquals(left, hostActionsPanelEdge(rightOpen = false, leftOpen = true, bottomOpen = true))
-    }
-
-    @Test
-    fun `the bottom panel is last, since its foot is the whole window's width`() {
-        assertEquals(bottom, hostActionsPanelEdge(rightOpen = false, leftOpen = false, bottomOpen = true))
-    }
-
-    @Test
-    fun `nothing open means no column, which is what sends them back to the corner`() {
-        assertNull(hostActionsPanelEdge(rightOpen = false, leftOpen = false, bottomOpen = false))
+    fun `a shut right panel means no column, which is what sends them back to the corner`() {
+        // Whatever else is open. A left or bottom panel does not host these - see the KDoc.
+        assertNull(hostActionsPanelEdge(rightOpen = false))
     }
 }
 

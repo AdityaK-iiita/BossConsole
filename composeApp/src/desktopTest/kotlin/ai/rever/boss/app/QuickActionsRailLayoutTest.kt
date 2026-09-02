@@ -2,12 +2,17 @@ package ai.rever.boss.app
 
 import ai.rever.boss.components.buttons.TOOL_LAUNCHER_TAG
 import ai.rever.boss.components.buttons.ToolLauncherButton
+import ai.rever.boss.components.buttons.ToolboxButton
+import ai.rever.boss.components.plugin.PanelIds
 import ai.rever.boss.layout.ChromeDimens
+import ai.rever.boss.plugin.api.SidebarItem
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Rect
@@ -64,6 +69,13 @@ class QuickActionsRailLayoutTest {
         }
         rule.waitForIdle()
     }
+
+    private fun toolboxItem() =
+        SidebarItem(
+            pluginContentId = PanelIds.PLUGIN_MANAGER,
+            icon = Icons.Outlined.Extension,
+            label = "Toolbox",
+        )
 
     private fun railBounds(): Rect = rule.onNodeWithTag(RAIL_TAG).fetchSemanticsNode().boundsInRoot
 
@@ -143,8 +155,16 @@ class QuickActionsRailLayoutTest {
                         onShowSettings = {},
                         onShowSearch = {},
                         onSignOut = {},
+                        // The REAL Toolbox button, not a second launcher. A copy of the slot
+                        // below it mounts two nodes carrying "Tools" and TOOL_LAUNCHER_TAG, and
+                        // leaves the one button this slot exists to cover untested in a rail.
                         toolbox = { hintDirection, modifier ->
-                            ToolLauncherButton(onClick = {}, hintDirection = hintDirection, modifier = modifier)
+                            ToolboxButton(
+                                item = toolboxItem(),
+                                onClick = {},
+                                hintDirection = hintDirection,
+                                modifier = modifier,
+                            )
                         },
                         toolLauncher = { hintDirection, modifier ->
                             ToolLauncherButton(onClick = {}, hintDirection = hintDirection, modifier = modifier)
@@ -157,7 +177,10 @@ class QuickActionsRailLayoutTest {
 
         val rail = railBounds()
         val expected = with(rule.density) { SIDEBAR_ICON_SIZE.toPx() }
-        listOf("Sign Out", "Settings", "Search").forEach { label ->
+        // All five, Toolbox and Tools included: they are the two that only appear in this
+        // configuration, and a list that names only the other three is a list that would pass
+        // with either of them missing.
+        listOf("Sign Out", "Settings", "Toolbox", "Tools", "Search").forEach { label ->
             val icon = iconBounds(label)
             assertEquals(expected, icon.height, "$label is ${icon.height}px tall, expected $expected")
             assertTrue(icon.bottom <= rail.bottom, "$label ends at ${icon.bottom}, past the rail's ${rail.bottom}")
