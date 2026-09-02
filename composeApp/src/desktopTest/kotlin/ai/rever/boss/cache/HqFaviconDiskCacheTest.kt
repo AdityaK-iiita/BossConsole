@@ -138,7 +138,10 @@ class HqFaviconDiskCacheTest {
         const val HOST = "example.test"
         const val TEN_DAYS = 10L * 24 * 60 * 60 * 1000
 
-        /** Mirrors the service's own cap and batch size; a change to either should fail here. */
+        /**
+         * Mirrors the cache's own cap and batch size. The eviction test asserts the count
+         * `MAX_ENTRIES - EVICTION_COUNT + 1`, so changing either without changing these fails it.
+         */
         const val MAX_ENTRIES = 200
         const val EVICTION_COUNT = 50
     }

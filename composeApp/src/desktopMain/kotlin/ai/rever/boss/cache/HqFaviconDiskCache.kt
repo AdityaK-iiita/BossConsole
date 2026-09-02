@@ -11,7 +11,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.awt.image.BufferedImage
 import java.io.File
-import java.io.IOException
 import java.security.MessageDigest
 import javax.imageio.ImageIO
 
@@ -74,14 +73,19 @@ internal object HqFaviconDiskCache {
         val cacheFile = File(dir, "$cacheKey.png")
         if (!cacheFile.exists()) return null
 
-        return try {
+        // Broad on purpose, and not enumerable: JDK image readers throw UNCHECKED on malformed
+        // data - ArrayIndexOutOfBoundsException, NegativeArraySizeException - not only
+        // IIOException. A torn or truncated PNG has to be a cache miss rather than take the
+        // caller's icon down with it, which is why the sibling FaviconCache.loadFavicon is broad
+        // too.
+        return runCatching {
             ImageIO.read(cacheFile)?.let { image ->
                 CachedFavicon(
                     icon = TabIcon.Image(BitmapPainter(image.toComposeImageBitmap())),
                     fetchedAtMs = cacheFile.lastModified(),
                 )
             }
-        } catch (e: IOException) {
+        }.getOrElse { e ->
             logger.debug(
                 LogCategory.BROWSER,
                 "Failed to read cached HQ favicon - treating as cache miss",
@@ -107,20 +111,40 @@ internal object HqFaviconDiskCache {
         mutex.withLock {
             evictOldestIfFull(dir)
             var temp: File? = null
-            try {
+            runCatching {
                 temp = File.createTempFile("hq-favicon_", PARTIAL_SUFFIX, dir)
-                ImageIO.write(image, "PNG", temp)
+                // write() returns FALSE rather than throwing when no writer accepts the image, and
+                // the move would then promote a zero-byte PNG over a perfectly good entry - which
+                // load() reads as a permanent miss while it still occupies one of the 200 slots.
+                // Failing loudly here costs one uncached icon instead.
+                check(ImageIO.write(image, "PNG", temp)) { "no PNG writer accepted the icon" }
                 File(dir, "$cacheKey.png").atomicMoveFrom(temp)
-            } catch (e: IOException) {
+            }.onFailure { e ->
                 logger.debug(
                     LogCategory.FILE,
                     "Failed to write HQ favicon cache entry - the icon still shows, it is just not cached",
                     mapOf("error" to e.toString()),
                 )
-            } finally {
-                // No-op once the move took it away; cleans up every failure path.
-                temp?.delete()
             }
+            // No-op once the move took it away; cleans up every failure path.
+            temp?.delete()
+        }
+    }
+
+    /**
+     * Forget the entry under [cacheKey].
+     *
+     * The one thing that removes an entry short of eviction, and it is called for exactly one
+     * reason: Google answered *definitely* that the host has no favicon, so the cached copy is a
+     * picture of an icon the site no longer serves. A TTL alone cannot do this - expiry only means
+     * "prefer a refetch", and the refetch is what discovers the icon is gone.
+     */
+    suspend fun delete(
+        cacheKey: String,
+        dir: File = defaultDir,
+    ) {
+        mutex.withLock {
+            File(dir, "$cacheKey.png").delete()
         }
     }
 

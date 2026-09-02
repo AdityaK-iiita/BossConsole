@@ -6,8 +6,6 @@ import ai.rever.boss.components.plugin.tab_types.fluck.FluckTabInfo
 import ai.rever.boss.plugin.api.TabIcon
 import ai.rever.boss.plugin.ui.BossDialog
 import ai.rever.boss.plugin.ui.BossTheme
-import ai.rever.boss.utils.logging.BossLogger
-import ai.rever.boss.utils.logging.LogCategory
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -36,8 +34,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
 import com.teamdev.jxbrowser.capture.AudioCaptureMode
-
-private val logger = BossLogger.forComponent("ScreenCapturePickerDialog")
 
 /**
  * Screen capture picker dialog with Tab/Window/Screen tabs.
@@ -272,11 +268,13 @@ private fun SourceListItem(
     // Load immediate favicons first (synchronous or fast cache)
     val inMemoryFavicon = (source.tabInfo?.tabIcon as? ai.rever.boss.plugin.api.TabIcon.Image)
     val cachedFavicon = source.tabInfo?.let { rememberFaviconLoader(it) }
-    val immediateFavicon = inMemoryFavicon ?: cachedFavicon
 
-    // Resolve the row's own favicon, falling back to Google's guess about its host only if
-    // there is none. immediateFavicon shows until it lands.
-    val loadedFavicon = rememberHighQualityFavicon(source.url, faviconCacheKey, immediateFavicon)
+    // A live tab's own current favicon outranks anything on disk, so resolving could only
+    // substitute a cached copy of the same icon or an older one. Otherwise: the page's own cached
+    // favicon, and Google's guess about the host only if there is none. cachedFavicon shows until
+    // that lands.
+    val loadedFavicon =
+        inMemoryFavicon ?: rememberHighQualityFavicon(source.url, faviconCacheKey, cachedFavicon)
 
     // Determine fallback icon
     val (fallbackIcon, fallbackTint) =
@@ -425,20 +423,12 @@ private fun rememberHighQualityFavicon(
 ): ai.rever.boss.plugin.api.TabIcon.Image? {
     var resolved by remember(url, standardCacheKey) { mutableStateOf<ai.rever.boss.plugin.api.TabIcon.Image?>(null) }
 
+    // Unguarded: loadHighQualityFavicon does not throw, and a catch here would swallow the
+    // cancellation a dismissed dialog raises.
     LaunchedEffect(url, standardCacheKey) {
-        resolved =
-            try {
-                loadHighQualityFavicon(url, standardCacheKey)
-            } catch (e: Exception) {
-                logger.debug(
-                    LogCategory.BROWSER,
-                    "Favicon resolution failed - using fallback icon",
-                    mapOf("error" to e.toString()),
-                )
-                null
-            }
+        resolved = loadHighQualityFavicon(url, standardCacheKey)
     }
 
-    // Until it resolves, whatever was already to hand: in-memory or cached.
+    // Until it resolves, whatever was already to hand.
     return resolved ?: fallback
 }

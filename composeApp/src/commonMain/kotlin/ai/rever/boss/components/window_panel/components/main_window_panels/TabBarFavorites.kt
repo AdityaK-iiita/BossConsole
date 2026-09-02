@@ -319,7 +319,10 @@ private fun FavoriteTile(
     LaunchedEffect(config.url, config.faviconCacheKey) {
         // A bookmark on something that was never a page - a terminal, a file - has a null or blank
         // url and so no host to guess from, which leaves it its cached icon or its letter.
-        icon = runCatching { loadHighQualityFavicon(config.url, config.faviconCacheKey) }.getOrNull()
+        //
+        // Unguarded on purpose: loadHighQualityFavicon does not throw, and a runCatching here
+        // would swallow the cancellation this effect's disposal raises.
+        icon = loadHighQualityFavicon(config.url, config.faviconCacheKey)
     }
 
     HoverTooltipBox(

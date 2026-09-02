@@ -122,6 +122,9 @@ class FaviconResolutionTest {
     @Test
     fun `ipv6 literal survives port stripping`() {
         assertEquals("[::1]", FaviconHost.of("http://[::1]:8080/"))
+        // Unterminated, i.e. malformed. Nothing to strip and nothing to guess; pass it through
+        // rather than truncate at a colon that is not a port separator.
+        assertEquals("[::1", FaviconHost.of("http://[::1/"))
     }
 
     /**
@@ -160,6 +163,8 @@ class FaviconResolutionTest {
         assertEquals("example.com", FaviconHost.of("example.com/x"))
         assertEquals("example.com", FaviconHost.of("www.example.com"))
         assertEquals("localhost", FaviconHost.of("localhost:3000/app"))
+        // A dotted quad is a host too, and the `://` branch already accepted one.
+        assertEquals("192.168.1.10", FaviconHost.of("192.168.1.10:3000/app"))
     }
 
     @Test
@@ -267,8 +272,6 @@ class FaviconResolutionTest {
         const val CACHE_KEY = "cache-key"
     }
 
-    private fun iconStub(): TabIcon.Image = TabIcon.Image(BitmapPainter(sixteenPxIcon().toComposeImageBitmap()))
-
     private fun placeholderBytes(): ByteArray =
         checkNotNull(javaClass.getResourceAsStream("/google-no-icon-placeholder.png")) {
             "fixture missing from the test resources"
@@ -284,6 +287,9 @@ internal fun sixteenPxIcon(): BufferedImage =
             }
         }
     }
+
+/** A decoded icon, for the tests that only care about identity. */
+internal fun iconStub(): TabIcon.Image = TabIcon.Image(BitmapPainter(sixteenPxIcon().toComposeImageBitmap()))
 
 /** [image] as the PNG bytes a fetch would hand the service. */
 internal fun pngBytes(image: BufferedImage): ByteArray =

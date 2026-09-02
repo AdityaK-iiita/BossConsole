@@ -11,12 +11,13 @@ import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
-import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
-import java.io.IOException
+import java.io.File
 import javax.imageio.ImageIO
 
 /**
@@ -44,7 +45,7 @@ import javax.imageio.ImageIO
  *
  * **What that costs, stated plainly:** the dashboard draws its result at 36dp, so a page whose
  * own favicon is 16px is now softer there than Google's 128px guess about its host was. Right
- * site over sharp icon, the same trade as dropping the 32px floor in [decodeUsableIcon].
+ * site over sharp icon, the same trade as dropping the 32px floor in [acceptResponse].
  *
  * A page whose icon this resolves from cache no longer tells Google which site it is at all,
  * which on the most-used surfaces is most of the requests this service used to make.
@@ -89,6 +90,11 @@ object HighQualityFaviconService {
      * does not move you off the composition dispatcher, so a caller that read the standard cache
      * itself would decode a PNG per tile on the UI thread.
      *
+     * **Never throws**, except to propagate cancellation - a corrupt cache file, an unreachable
+     * Google and a payload that will not decode are all just null. Callers do not need a
+     * `try`/`catch` or a `runCatching`, and should not have one: wrapping this swallows the
+     * cancellation an ordinary `LaunchedEffect` disposal raises.
+     *
      * @param url the page URL, or null for a tab that is not a page - a terminal, a file. There is
      *   no host to guess from, so such a tab gets its cached icon or nothing.
      * @param standardCacheKey the key into the standard favicon cache, i.e. the page's own icon
@@ -124,6 +130,11 @@ object HighQualityFaviconService {
             try {
                 pageIcon(standardCacheKey) ?: hostGuess(url)
             } catch (e: Exception) {
+                // Ordinary disposal - the shelf collapsing, a picker dismissed, a url change -
+                // cancels the effect this runs in, and CancellationException IS an Exception.
+                // Logging that as a failure is a lie, and eating it is worse; ensureActive puts it
+                // back.
+                currentCoroutineContext().ensureActive()
                 logger.debug(
                     LogCategory.BROWSER,
                     "Favicon resolution failed - the caller shows its fallback",
@@ -136,49 +147,128 @@ object HighQualityFaviconService {
     /**
      * Google's guess about the host behind [url], from cache when it is fresh.
      *
-     * A stale entry is offered last rather than discarded: being offline should cost sharpness,
-     * not the icon. It still gets replaced the moment a fetch succeeds.
+     * Four interactions live here, and the fetch outcome decides three of them:
+     *
+     * - **Fresh entry**: served, no request, and the miss memory is not even consulted.
+     * - **[FaviconFetch.NoAnswer]** - a timeout, an unreachable Google, a rate-limit page where an
+     *   image should be: an expired entry is served anyway. Being offline should cost sharpness,
+     *   not the icon, and it must not be irreversible.
+     * - **[FaviconFetch.NoIcon]** - Google answered, definitively, that this host has nothing: the
+     *   entry is DROPPED. Serving it would keep showing an icon the site has removed, and since
+     *   expiry does not delete, it would keep showing it until 200 entries forced an eviction.
+     *   This is the one path that removes an entry on purpose.
+     * - **A remembered miss**: no request, and no stale entry either - the entry was dropped when
+     *   the miss was learned, and the answer has not changed in the six hours since.
+     *
+     * [nowMs], [dir] and [fetch] are injectable for the tests that pin those four; the defaults are
+     * the real clock, the real cache and the real service.
      */
-    private suspend fun hostIcon(url: String?): TabIcon.Image? {
+    internal suspend fun hostIcon(
+        url: String?,
+        nowMs: Long = System.currentTimeMillis(),
+        dir: File = HqFaviconDiskCache.defaultDir,
+        fetch: suspend (String, String) -> FaviconFetch = { host, key ->
+            fetchSemaphore.withPermit { fetchFromGoogle(host, key, dir) }
+        },
+    ): TabIcon.Image? {
         val host = FaviconHost.of(url) ?: return null
         val cacheKey = HqFaviconDiskCache.keyFor(host)
-        val cached = HqFaviconDiskCache.load(cacheKey)
-        val now = System.currentTimeMillis()
-        val fresh = cached?.takeUnless { FaviconFreshness.isEntryExpired(it.fetchedAtMs, now) }
+        val cached = HqFaviconDiskCache.load(cacheKey, dir)
 
-        val fetched =
-            if (fresh != null || FaviconMissMemory.remembers(host, now)) {
-                null
-            } else {
-                fetchSemaphore.withPermit { fetchFromGoogle(host, cacheKey) }
+        return when {
+            cached != null && !FaviconFreshness.isEntryExpired(cached.fetchedAtMs, nowMs) -> {
+                cached.icon
             }
 
-        return fresh?.icon ?: fetched ?: cached?.icon
+            FaviconMissMemory.remembers(host, nowMs) -> {
+                null
+            }
+
+            else -> {
+                when (val outcome = fetch(host, cacheKey)) {
+                    is FaviconFetch.Icon -> {
+                        outcome.icon
+                    }
+
+                    FaviconFetch.NoIcon -> {
+                        HqFaviconDiskCache.delete(cacheKey, dir)
+                        null
+                    }
+
+                    FaviconFetch.NoAnswer -> {
+                        cached?.icon
+                    }
+                }
+            }
+        }
     }
 
     /**
      * Fetch from Google's service and cache what comes back.
      *
-     * A *definite* "no icon" - the placeholder, or a payload that will not decode - is recorded in
-     * [FaviconMissMemory]. A transient one is not: [requestIcon] returns null for a timeout, an
-     * unreachable Google or a rate-limit, and remembering those would suppress the retry for
-     * hours after the network came back.
+     * **Only the placeholder is a definite "no icon".** It is the one response that means Google
+     * looked and found nothing, so it is the only one recorded in [FaviconMissMemory]. A payload
+     * that will not decode is NOT: HTTP 200 with something that is not an image is what a
+     * rate-limit interstitial or a proxy-truncated body looks like, and remembering that would
+     * suppress the retry for six hours over a transient hiccup. Same for whatever [requestIcon]
+     * could not get at all.
      */
     private suspend fun fetchFromGoogle(
         host: String,
         cacheKey: String,
-    ): TabIcon.Image? {
-        val bytes = requestIcon(host) ?: return null
-        val image = decodeUsableIcon(bytes, host)
+        dir: File,
+    ): FaviconFetch = requestIcon(host)?.let { acceptResponse(it, host, cacheKey, dir) } ?: FaviconFetch.NoAnswer
 
-        return if (image == null) {
-            FaviconMissMemory.record(host)
-            null
-        } else {
-            HqFaviconDiskCache.save(cacheKey, image)
-            TabIcon.Image(BitmapPainter(image.toComposeImageBitmap()))
+    /**
+     * What Google's reply means, and the entry it leaves behind.
+     *
+     * Split from the request so the distinction can be pinned without the network: it is the whole
+     * point of [FaviconMissMemory], and getting it wrong in either direction is a bug that only
+     * shows up hours later. Takes [dir] for the same reason.
+     */
+    internal suspend fun acceptResponse(
+        bytes: ByteArray,
+        host: String,
+        cacheKey: String,
+        dir: File = HqFaviconDiskCache.defaultDir,
+    ): FaviconFetch =
+        when {
+            GoogleNoIconPlaceholder.matches(bytes) -> {
+                logger.debug(
+                    LogCategory.NETWORK,
+                    "Google has no favicon for host - declining its placeholder",
+                    mapOf("host" to host),
+                )
+                FaviconMissMemory.record(host)
+                FaviconFetch.NoIcon
+            }
+
+            else -> {
+                // **No minimum size.** The floor was 32px, which rejected every genuine 16px
+                // favicon and left the host showing a letter while the real icon sat unused. A
+                // 16px icon is soft in a 22dp shelf tile and softer in the dashboard's 36dp card;
+                // it is still the right site.
+                //
+                // Broad catch on purpose: JDK image readers throw unchecked on malformed data, not
+                // only IIOException, and every one of them means the same thing here.
+                val image =
+                    try {
+                        ImageIO.read(ByteArrayInputStream(bytes))
+                    } catch (e: Exception) {
+                        logger.debug(
+                            LogCategory.NETWORK,
+                            "Google's favicon response would not decode - treating it as no answer",
+                            mapOf("host" to host, "error" to e.toString()),
+                        )
+                        null
+                    }
+
+                image?.let {
+                    HqFaviconDiskCache.save(cacheKey, it, dir)
+                    FaviconFetch.Icon(TabIcon.Image(BitmapPainter(it.toComposeImageBitmap())))
+                } ?: FaviconFetch.NoAnswer
+            }
         }
-    }
 
     /**
      * The bytes Google served for [host], or null when it did not answer.
@@ -188,13 +278,21 @@ object HighQualityFaviconService {
     private suspend fun requestIcon(host: String): ByteArray? =
         try {
             val response =
-                httpClient.get("https://www.google.com/s2/favicons?domain=$host&sz=$ICON_SIZE") {
+                httpClient.get("https://www.google.com/s2/favicons") {
+                    // parameter(), not interpolation. An authority may contain an `&` -
+                    // `https://evil.com&x=1/` extracts as the host `evil.com&x=1` - which
+                    // interpolated would append attacker-shaped parameters to a request BOSS makes
+                    // to Google, and hash into a junk cache key besides.
+                    parameter("domain", host)
+                    parameter("sz", ICON_SIZE)
                     headers {
                         append(HttpHeaders.UserAgent, "Mozilla/5.0")
                     }
                 }
             if (response.status == HttpStatusCode.OK) response.readRawBytes() else null
         } catch (e: Exception) {
+            // A cancelled effect is not a failed fetch - see resolve().
+            currentCoroutineContext().ensureActive()
             logger.debug(
                 LogCategory.NETWORK,
                 "HQ favicon fetch from Google failed - falling back",
@@ -202,43 +300,6 @@ object HighQualityFaviconService {
             )
             null
         }
-
-    /**
-     * The icon in [bytes], or null when Google's answer is not one.
-     *
-     * Two ways it is not. Its placeholder globe, which it serves with HTTP 200 for any host it
-     * knows nothing about, so the payload is the only thing that says "miss" - declining it is
-     * the useful answer, because the caller then keeps the page's own favicon or the tile's
-     * letter, either of which identifies the site better than a globe every stranger shares. And
-     * a payload ImageIO cannot decode.
-     *
-     * **No minimum size.** The floor was 32px, which rejected every genuine 16px favicon and left
-     * the host showing a letter while the real icon sat unused.
-     */
-    private fun decodeUsableIcon(
-        bytes: ByteArray,
-        host: String,
-    ): BufferedImage? {
-        if (GoogleNoIconPlaceholder.matches(bytes)) {
-            logger.debug(
-                LogCategory.NETWORK,
-                "Google has no favicon for host - declining its placeholder",
-                mapOf("host" to host),
-            )
-            return null
-        }
-
-        return try {
-            ImageIO.read(ByteArrayInputStream(bytes))
-        } catch (e: IOException) {
-            logger.debug(
-                LogCategory.NETWORK,
-                "Google's favicon response would not decode",
-                mapOf("host" to host, "error" to e.toString()),
-            )
-            null
-        }
-    }
 
     /** The page's own favicon, captured from the tab that served it. */
     private fun loadStandardFavicon(cacheKey: String?): TabIcon.Image? {

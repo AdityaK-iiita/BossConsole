@@ -1,7 +1,29 @@
 package ai.rever.boss.cache
 
+import ai.rever.boss.plugin.api.TabIcon
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * What a fetch from Google learned - which is not the same question as "did we get an icon".
+ *
+ * [NoIcon] is Google answering *definitely*: it has nothing for this host. [NoAnswer] is Google
+ * not answering - a timeout, an unreachable host, a rate-limit interstitial where an image should
+ * be. The two must not be conflated, because they imply opposite things about the entry already
+ * on disk: a definite miss means a site dropped its favicon and the cached copy is now wrong,
+ * while no answer means the cached copy is the best thing anyone has.
+ */
+internal sealed interface FaviconFetch {
+    class Icon(
+        val icon: TabIcon.Image,
+    ) : FaviconFetch
+
+    /** Google has no favicon for this host. */
+    data object NoIcon : FaviconFetch
+
+    /** Google did not answer, or answered with something that is not an image. */
+    data object NoAnswer : FaviconFetch
+}
 
 /**
  * The host [HighQualityFaviconService] should ask Google about, or null when there is nothing to
@@ -30,14 +52,15 @@ internal object FaviconHost {
      * third-party bookmark file can carry one. The old extraction resolved them by accident of
      * stripping a prefix that was not there.
      *
-     * Deliberately narrow - a dotted name or `localhost`, an optional numeric port, then a `/`,
-     * `?`, `#` or the end of the string. That rejects a path (`/Users/x`), an opaque scheme
-     * (`mailto:`, `javascript:`, `about:blank`, `data:image/png;…`) and anything with a space in
-     * it, none of which have a host to ask about, and all of which the old extraction sent.
+     * Deliberately narrow - a dotted name, a dotted-quad address or `localhost`, an optional
+     * numeric port, then a `/`, `?`, `#` or the end of the string. That rejects a path
+     * (`/Users/x`), an opaque scheme (`mailto:`, `javascript:`, `about:blank`,
+     * `data:image/png;…`) and anything with a space in it, none of which have a host to ask
+     * about, and all of which the old extraction sent.
      */
     private val BARE_AUTHORITY =
         Regex(
-            """^(?:localhost|(?:[\w-]+\.)+[a-z]{2,})(?::\d+)?(?![^/?#])""",
+            """^(?:localhost|(?:\d{1,3}\.){3}\d{1,3}|(?:[\w-]+\.)+[a-z]{2,})(?::\d+)?(?![^/?#])""",
             RegexOption.IGNORE_CASE,
         )
 
@@ -109,9 +132,19 @@ internal object GoogleNoIconPlaceholder {
  * nothing ever refetched, so a site that had no icon on the day it was first opened kept whatever
  * Google said then for as long as the entry survived eviction.
  *
- * Note `FaviconCache.cleanupStaleEntries` ages the standard cache out after 30 days, so the two
- * favicon caches now expire on different clocks. Deliberate: the standard cache holds what a page
- * actually served, which does not go stale by being a guess.
+ * Note this is NOT a cleanup schedule. An expired entry is not deleted; it stops counting as
+ * fresh, which means the next resolution refetches and either replaces it or - if Google says the
+ * host has no favicon at all - drops it. Only eviction removes an entry nobody asks about.
+ *
+ * `FaviconCache.cleanupStaleEntries` ages the standard cache out after 30 days, so the two favicon
+ * caches now expire on different clocks. Deliberate: the standard cache holds what a page actually
+ * served, which does not go stale by being a guess.
+ *
+ * Not addressed here, and worth knowing: nothing memoises a *resolved* icon, so every composition
+ * that misses `remember` costs a disk read and a PNG decode on all three surfaces. Preferring the
+ * standard cache moved that cost onto the common path. A small in-memory LRU keyed on
+ * `(url, standardCacheKey)` in the service would collapse it for every caller, and is the natural
+ * home for [FaviconMissMemory] too.
  */
 internal object FaviconFreshness {
     const val MAX_CACHE_AGE_MS = 14L * 24 * 60 * 60 * 1000
@@ -142,7 +175,7 @@ internal object FaviconMissMemory {
     const val MISS_MEMORY_MS = 6L * 60 * 60 * 1000
 
     /** Bounded so a long session browsing icon-less hosts cannot grow this without limit. */
-    private const val MAX_REMEMBERED = 500
+    const val MAX_REMEMBERED = 500
 
     private val misses = ConcurrentHashMap<String, Long>()
 
