@@ -277,15 +277,15 @@
     // End of gesture: everything goes back to neutral. Never to abandon a gesture in flight -
     // clearing `rejected` mid-gesture would let a swipe this code already ruled out come back.
     //
-    // Three call sites, and only one of them decides first: the endTimer callback calls decide()
-    // immediately before this; the gap check at the top of onWheel (a NEXT event arriving after
-    // GESTURE_GAP_MS of quiet) and pagehide call this alone. The gap check dropping a decision in
-    // practice would need a wheel event to land between the timer firing and this running - the
-    // timer is scheduled at exactly GESTURE_GAP_MS and the gap check fires only strictly after,
-    // so the timer task is queued first on a JS event loop with no true concurrency. That is an
-    // argument from task ordering, not a guarantee against every future change, and a decision
-    // dropped there would be a silently lost navigation. pagehide deliberately does NOT decide -
-    // see decide()'s KDoc for why navigating a page that is already unloading is moot.
+    // Both signals that a gesture ended call decide() immediately before this: the endTimer
+    // callback, and the gap check at the top of onWheel (a NEXT event arriving after
+    // GESTURE_GAP_MS of quiet). Whichever of the two gets there first, the other's decide() is a
+    // no-op, because this already put `direction` and `accumX` back to zero. Neither may be the
+    // only decider: Chromium dispatches input on a higher-priority task queue than timers, so a
+    // wheel event can run ahead of an already-due timer task, and a completed gesture that got
+    // reset without deciding is a navigation the user made and silently did not get.
+    //
+    // pagehide is the one reset() that deliberately does NOT decide - see decide().
     function reset() {
         if (endTimer) {
             w.clearTimeout(endTimer);
@@ -321,43 +321,42 @@
 
     // The one place "reached the commit distance" becomes an actual navigation.
     //
-    // Called only when the gesture ENDS - the endTimer firing, which is the only signal a
-    // lifted finger gives us at all, since AWT does not surface NSEvent's scroll phases. Never
-    // called mid-swipe: reaching COMMIT_PX used to navigate on the spot, in the same wheel
-    // event that crossed it, which is boss-plugin-fluck-browser#36 - a swipe that brushed the
-    // threshold committed with the fingers still down, no way to see it coming and no way to
-    // back out. Read here, this is the same question a native trackpad swipe-back answers only
-    // on release: was the LAST position past the line, not "was any position ever past it".
+    // Called only when the gesture ENDS, never mid-swipe. That is the same question a native
+    // trackpad swipe-back answers on release: was the LAST position past the line, not "was any
+    // position ever past it". Reaching COMMIT_PX used to navigate on the spot, in the same wheel
+    // event that crossed it (boss-plugin-fluck-browser#36) - fingers still down, no chance to see
+    // it coming and no way to back out.
     //
-    // Rechecked against the live accumulators rather than a cached progress, so easing back
-    // below COMMIT_PX before release - same direction the whole time, no reversal - cancels
-    // exactly like letting go early on a real trackpad. A genuine reversal never reaches here at
-    // all: it flips `direction` inside onWheel and calls abandon() immediately, which is the
-    // existing, separate cancel-by-reversing path this does not duplicate.
+    // Read against the live accumulators rather than a cached progress, so easing back below
+    // COMMIT_PX before release - same direction the whole time, no reversal - cancels exactly like
+    // letting go early on a real trackpad. A genuine reversal never reaches here at all: it flips
+    // `direction` inside onWheel and abandons there, which is the separate, pre-existing
+    // cancel-by-reversing path this does not duplicate.
     //
-    // Both extra guards below matter specifically BECAUSE this runs from a timer, not from
-    // onWheel: onWheel's own early returns (the eventCount gate, switchedOff()) stop updating
-    // state the moment they fire, but the timer that calls this keeps firing regardless of how
-    // onWheel's LAST call actually ended - a second review round caught both as real:
+    // Both guards past `rejected` matter specifically BECAUSE this runs at gesture end and not
+    // from onWheel: onWheel's early returns stop updating state the moment they fire, but the
+    // gesture still ends, and this still runs on whatever the last onWheel call left behind.
     //
-    // - eventCount < MIN_EVENTS: onWheel never even reaches COMMIT_PX/showAffordance below that
-    //   count, but accumX and direction are still live by then. Two shift-modified mouse-wheel
-    //   notches (or two big trackpad deltas) can each land under MAX_STEP_PX - so neither is
-    //   caught by the wheel-shape guard - and together clear COMMIT_PX before a third event ever
-    //   arrives. Without this, that pair navigates on the timer with no affordance ever shown.
-    // - switchedOff(): the setting can flip WHILE a gesture is in flight - the file's own comment
-    //   above says the detector "stops here rather than staying live until the next navigation",
-    //   which this timer path is the one way to violate silently otherwise.
+    // - eventCount < MIN_EVENTS: below that count onWheel draws no affordance, yet accumX and
+    //   direction are already live. Two shift-modified mouse-wheel notches (or two big trackpad
+    //   deltas) can each land under MAX_STEP_PX - so neither trips the wheel-shape guard alone -
+    //   and together clear COMMIT_PX before a third event ever arrives. Without this, that pair
+    //   navigates with no chevron ever drawn.
+    // - available(direction): asked again here rather than reusing the answer latched in onWheel,
+    //   because the host can push new state during the gesture and throughout the GESTURE_GAP_MS
+    //   after it. It subsumes switchedOff() - the setting can flip mid-gesture, and the comment on
+    //   switchedOff() promises the detector stops when it does - and additionally fails closed if
+    //   the direction lost its history entry, or if state went away entirely.
     //
-    // Not verified against macOS momentum-phase scroll events specifically: if Chromium delivers
-    // those as further `wheel` events after the fingers lift, they would keep re-arming endTimer
-    // through onWheel and this would not run - and therefore not navigate - until the momentum
-    // scroll itself dies down, not at the moment of release. Same direction throughout a momentum
-    // tail, so it could not flip a commit into a cancel, but it could add real, unmeasured latency
-    // to a fast flick. Flagged rather than assumed away, since the whole design rests on the
-    // timer standing in for "the fingers lifted."
+    // MOMENTUM is the open question in this design, and the numbers behind it are in AGENTS.md:
+    // macOS emits momentum-phase scroll for 180-870ms after the fingers lift, measured on this
+    // hardware. Whether Chromium forwards those to the renderer as `wheel` events is not yet
+    // confirmed. If it does, each one re-arms endTimer through onWheel and a flick commits at
+    // end-of-momentum rather than at release. That cannot turn a commit into a cancel, since a
+    // momentum tail runs the flick's own direction; it is latency, on the gesture that should
+    // feel fastest.
     function decide() {
-        if (rejected || direction === 0 || eventCount < MIN_EVENTS || switchedOff()) {
+        if (rejected || direction === 0 || eventCount < MIN_EVENTS || !available(direction)) {
             return;
         }
         if (Math.abs(accumX) >= COMMIT_PX) {
@@ -368,11 +367,19 @@
     function onWheel(event) {
         var now = Date.now();
         if (now - lastEventAt > GESTURE_GAP_MS) {
+            // This much quiet means the PREVIOUS gesture ended, and this event belongs to a new
+            // one - so the old gesture gets decided here, not silently discarded. See reset().
+            decide();
             reset();
         }
         lastEventAt = now;
-        // Kept armed for as long as events keep arriving; fires once they stop - the moment
-        // this decides whether the gesture navigates, then resets to neutral either way.
+        // Kept armed for as long as events keep arriving; fires once they stop - the other of the
+        // two places a gesture is decided and then reset to neutral either way.
+        //
+        // Armed before the early returns below on purpose: a gesture that is rejected or switched
+        // off partway still has to end, and this timer is the only thing that ends one. The cost
+        // is a clearTimeout/setTimeout pair on every wheel event, even with the gesture switched
+        // off, on the hottest path in a browser.
         if (endTimer) {
             w.clearTimeout(endTimer);
         }

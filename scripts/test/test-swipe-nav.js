@@ -208,6 +208,17 @@ function newPage(js, options = {}) {
       clockMs += ms;
       fireDue();
     },
+    // Move the clock WITHOUT running anything that came due. Models the one ordering the script
+    // cannot control: Chromium dispatches input on a higher-priority task queue than timers, so a
+    // wheel event can run while the end-of-gesture timer is due but has not fired yet.
+    jump: (ms) => {
+      clockMs += ms;
+    },
+    // Replace the state object the host pushes, mid-gesture. Assigning a whole new value (or
+    // taking it away) is what the host actually does; mutating the existing one is a separate case.
+    setState: (value) => {
+      sandbox.window[hostProps.state] = value;
+    },
     // Let every pending timer run, however far in the future. What a lifted finger and a
     // finished exit animation look like from the script's side.
     settle: () => {
@@ -347,16 +358,69 @@ console.log('\nrelease, not the threshold, is what commits');
   check('and no affordance was ever shown for it', p.liveOverlays() === 0, p.liveOverlays());
 }
 {
-  // The setting can flip WHILE a gesture is in flight. switchedOff() is checked inside onWheel
-  // already, so this specifically exercises decide() on the timer path, after the last onWheel
-  // call already latched a direction and distance. `state` is passed by reference and mutated
-  // directly - the same object the host pushes the flag onto in production.
+  // The setting can flip WHILE a gesture is in flight. onWheel checks it already, so this
+  // specifically exercises decide() at gesture end, after the last onWheel call latched a
+  // direction and a distance. `state` is passed by reference and mutated directly - the same
+  // object the host pushes the flag onto in production.
   const state = { back: true, forward: true };
   const p = newPage(js, { state });
   p.swipe(12, -10);
   state.enabled = false;
   p.settle();
   eq('switching the gesture off mid-swipe stops it committing on release too', p.navigated, []);
+}
+{
+  // decide() asks available() rather than switchedOff(), which also fails closed on state going
+  // away entirely - the host replacing the object, not mutating it.
+  const p = newPage(js);
+  p.swipe(12, -10);
+  p.setState(null);
+  p.settle();
+  eq('state disappearing mid-swipe stops it committing too', p.navigated, []);
+}
+{
+  // A direction that lost its history entry mid-gesture. onWheel latched `available` at the first
+  // event on purpose (see chainCanScroll's note on latching); decide() re-asks at the end, which
+  // is the conservative half of that pair.
+  const state = { back: true, forward: true };
+  const p = newPage(js, { state });
+  p.swipe(12, -10);
+  state.back = false;
+  p.settle();
+  eq('a direction that stopped being navigable mid-swipe does not commit', p.navigated, []);
+}
+{
+  // The gap check at the top of onWheel is the OTHER end-of-gesture signal, and it must decide
+  // too. Here the timer is due but has not run and a new gesture's first event beats it - the
+  // ordering Chromium's higher-priority input queue makes possible. Without decide() there, a
+  // gesture the user completed past the commit distance navigates nowhere, silently.
+  const p = newPage(js);
+  p.swipe(12, -10);
+  p.jump(GAP_MS + 1);
+  p.wheel(-10, 0);
+  eq('a finished gesture still commits when the next event beats its timer', p.navigated, ['back']);
+  p.settle();
+  eq('and the timer firing afterwards does not commit it twice', p.navigated, ['back']);
+}
+{
+  // Removing `committed` means the gesture keeps being evaluated after crossing COMMIT_PX, where
+  // it used to stop listening entirely. Reversing past the line therefore cancels now - the
+  // interesting half of the reversal guard, and consistent with reading the LAST position.
+  const p = newPage(js);
+  p.swipe(12, -10);
+  p.swipe(20, 10);
+  p.settle();
+  eq('reversing after crossing the commit distance cancels', p.navigated, []);
+}
+{
+  // Same consequence through the vertical rule: verticalPath keeps accumulating past the line, so
+  // a slow swipe that wobbles in its tail cancels. Deliberate, and the answer Chrome gives too -
+  // vertical is a path length, so it only ever counts against you.
+  const p = newPage(js);
+  p.swipe(10, -10);
+  for (let i = 0; i < 12; i++) p.wheel(-1, i % 2 === 0 ? 9 : -9);
+  p.settle();
+  eq('vertical drift after crossing the commit distance cancels', p.navigated, []);
 }
 
 console.log('\ngestures that must not navigate');

@@ -4,6 +4,7 @@ import ai.rever.boss.config.parseSwipeNavEnabled
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -102,7 +103,7 @@ class BrowserSwipeNavTest {
     @Test
     fun `a second swipe inside the window is refused`() {
         assertFalse(shouldAcceptSwipeNav(nowMs = 1_000 + SWIPE_NAV_DEBOUNCE_MS, lastNavigationMs = 1_000))
-        assertFalse(shouldAcceptSwipeNav(nowMs = 1_100, lastNavigationMs = 1_000))
+        assertFalse(shouldAcceptSwipeNav(nowMs = 1_000 + SWIPE_NAV_DEBOUNCE_MS / 2, lastNavigationMs = 1_000))
     }
 
     @Test
@@ -111,14 +112,29 @@ class BrowserSwipeNavTest {
     }
 
     /**
-     * The window's only remaining job (see [shouldAcceptSwipeNav]'s KDoc for why) is catching a
-     * genuine double-fire bug, not a real second gesture - so it must sit comfortably BELOW the
-     * structural floor between two real gestures, not above some other feature's window. 120 is
-     * `swipe-nav.js`'s own GESTURE_GAP_MS - the minimum possible gap between two gesture ends.
+     * The window's job (see [shouldAcceptSwipeNav]'s KDoc for why) is catching a genuine
+     * double-fire bug and not a real second gesture, so it is bounded at both ends: below
+     * `swipe-nav.js`'s own `GESTURE_GAP_MS`, the minimum possible gap between two gesture ends,
+     * and at or above one frame, which is the shape a bridge-level double-dispatch takes.
+     *
+     * The upper bound is read OUT of the script rather than restated here. The whole argument is
+     * a cross-language coupling to a constant in another file, and hard-coded, lowering
+     * `GESTURE_GAP_MS` would leave this green while quietly falsifying its own reasoning.
      */
     @Test
-    fun `the window sits below the structural floor between two real gestures`() {
-        assertTrue(SWIPE_NAV_DEBOUNCE_MS < 120, "must not be able to reject a genuinely separate swipe")
+    fun `the window sits between a double-dispatch and the floor between two real gestures`() {
+        val match = GESTURE_GAP_MS_IN_SCRIPT.find(BrowserSwipeNavScript.source)
+        assertNotNull(match, "GESTURE_GAP_MS not found in swipe-nav.js")
+        val gapMs = match.groupValues[1].toLong()
+        assertTrue(
+            SWIPE_NAV_DEBOUNCE_MS < gapMs,
+            "$SWIPE_NAV_DEBOUNCE_MS must stay under the script's ${gapMs}ms gesture gap, or it can " +
+                "reject a genuinely separate swipe",
+        )
+        assertTrue(
+            SWIPE_NAV_DEBOUNCE_MS >= ONE_FRAME_MS,
+            "$SWIPE_NAV_DEBOUNCE_MS must still cover a same-frame double-dispatch",
+        )
     }
 
     // --- What the host pushes into the page --------------------------------------------------
@@ -149,5 +165,10 @@ class BrowserSwipeNavTest {
             source.contains(BrowserSwipeNavScript.STATE_PROPERTY),
             "the packaged script does not name ${BrowserSwipeNavScript.STATE_PROPERTY}",
         )
+    }
+
+    private companion object {
+        val GESTURE_GAP_MS_IN_SCRIPT = Regex("""var GESTURE_GAP_MS = (\d+)""")
+        const val ONE_FRAME_MS = 16L
     }
 }

@@ -95,23 +95,23 @@ internal fun parseSwipeNavDirection(raw: String?): SwipeNavDirection? =
 /**
  * Whether a swipe arriving at [nowMs] should navigate, given when the last one did.
  *
- * **The rationale this originally shipped with no longer applies, and the value changed with
- * it.** `swipe-nav.js` used to call [navigate] the instant a gesture crossed the commit
- * distance, mid-swipe - so the tail of ONE continuous finger movement really could look like a
- * second gesture and re-fire. Since `swipe-nav.js`'s `decide()` (boss-plugin-fluck-browser#36)
- * now calls this at most once per gesture END, that case is structurally impossible: there is
- * nothing left in the page's own state machine that can produce two calls for one swipe.
+ * The window is here for a double-fire *bug* in this bridge or its caller, and not for a real
+ * second gesture. The page cannot produce one: `swipe-nav.js`'s `decide()` calls this at most
+ * once per gesture END, and two gesture ends are always at least the script's own
+ * `GESTURE_GAP_MS` apart, because that quiet gap IS how the script tells one gesture from the
+ * next.
  *
- * What is left to guard against is narrower - a genuine double-fire *bug* in this bridge or its
- * caller, not a real second gesture - and the value was still tuned for the old case. Two
- * distinct 90px swipes, timed as a deliberate long hold followed by a quick flick, can now land
- * as little as roughly `GESTURE_GAP_MS` (120ms, `swipe-nav.js`) plus the second gesture's own
- * duration apart - a fast trackpad flick clears the script's `MIN_EVENTS` in well under 100ms -
- * so the old 400ms window silently dropped a legitimate second swipe the user could see they had
- * just made. 100ms sits below `GESTURE_GAP_MS` itself (400ms did not), which is a hard floor on
- * every real gesture's END regardless of how short the gesture that produced it was - so this
- * can never reject a genuinely separate swipe - while still exceeding a same-tick or same-frame
- * double-dispatch, which is the actual failure shape a bridge-level bug would take.
+ * So the value belongs strictly BELOW that floor, and above a same-tick or same-frame
+ * double-dispatch, which is the shape a bridge-level bug takes. Above the floor it starts
+ * rejecting real swipes: two distinct 90px gestures timed as a deliberate long hold followed by
+ * a quick flick land about `GESTURE_GAP_MS` plus the flick's own duration apart, and a flick
+ * clears the script's `MIN_EVENTS` in well under 100ms. `BrowserSwipeNavTest` pins both ends
+ * against the script's constant rather than against a number restated here.
+ *
+ * It incidentally rate-limits a hostile page looping `window.__bossSwipeNav.navigate()`, at
+ * roughly 10 calls a second. That is not a boundary and is not sized as one - what holds is the
+ * class KDoc's reasoning, that the page can already loop on `history.back()` with no bridge at
+ * all.
  *
  * Pure, so the window is pinned by a test rather than by trying to swipe twice quickly by hand.
  */
