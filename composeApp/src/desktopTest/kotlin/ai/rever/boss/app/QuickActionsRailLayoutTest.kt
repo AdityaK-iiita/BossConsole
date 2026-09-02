@@ -8,6 +8,7 @@ import ai.rever.boss.layout.ChromeDimens
 import ai.rever.boss.plugin.api.SidebarItem
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
@@ -130,25 +131,28 @@ class QuickActionsRailLayoutTest {
     }
 
     @Test
-    fun `every action survives a short rail`() {
+    fun `every action survives the shortest rail the window can make`() {
         // The rail's SCARCE dimension once four or five stacked 32dp icons are added to it is
         // height, not width - and this column is the LAST thing in it, under a chevron, two
-        // rules, the scrolling tab list and the "+". A Column that cannot fit its children gives
-        // the last ones zero height, which is the same failure the bar's foot had on the other
-        // axis: not a clipped icon, an absent one.
+        // rules, the scrolling tab list and the "+". A Column measures its unweighted children in
+        // order and gives the last ones nothing when it runs out, so these are the first casualty,
+        // not the last: the same failure the bar's foot had on the other axis, an absent icon
+        // rather than a clipped one.
         //
-        // The tab list stands in for BossTabRail's own weight(1f) scroll region, which is what is
-        // supposed to yield first.
+        // The stand-in carries `RAIL_FIXED_CHROME`, which is BossTabRail's real fixed budget added
+        // up rather than estimated, and a weighted Box for the tab list - the one thing in that
+        // bar with `weight(1f)`, and so the only thing that can yield. That is a real trade this
+        // change makes and not a free win: the rail's own list of tabs is what pays for these.
         rule.setContent {
             Column(
                 modifier =
                     Modifier
                         .width(ChromeDimens.MIN_STRIP_WIDTH)
                         .height(SHORT_RAIL_HEIGHT)
-                        .clipToBounds()
                         .testTag(RAIL_TAG),
             ) {
-                Box(modifier = Modifier.fillMaxWidth().weight(1f))
+                Spacer(modifier = Modifier.height(RAIL_FIXED_CHROME))
+                Box(modifier = Modifier.fillMaxWidth().weight(1f).testTag(TAB_LIST_TAG))
                 VerticalBarRailActions(
                     focusQuickActionsTabRail(
                         placement = FocusQuickActionsPlacement.TAB_BAR_RAIL,
@@ -185,6 +189,15 @@ class QuickActionsRailLayoutTest {
             assertEquals(expected, icon.height, "$label is ${icon.height}px tall, expected $expected")
             assertTrue(icon.bottom <= rail.bottom, "$label ends at ${icon.bottom}, past the rail's ${rail.bottom}")
         }
+
+        // And the tab list is what gave way, which is the claim rather than a side effect. No
+        // clipToBounds here: BossTabRail has none either, so overflow in the real rail SPILLS,
+        // and a harness that clipped would be describing a bar that does not exist.
+        val tabList = rule.onNodeWithTag(TAB_LIST_TAG).fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            tabList.height >= 0f && tabList.top >= rail.top,
+            "the tab list should have absorbed the squeeze, not overflowed the rail",
+        )
     }
 
     @Test
@@ -213,10 +226,27 @@ class QuickActionsRailLayoutTest {
 private const val RAIL_TAG = "quick-actions-rail-layout-test-rail"
 
 /**
- * A rail with less height than its content wants.
+ * `BossTabRail`'s fixed budget, everything in it that is not the weighted tab list.
  *
- * Five 32dp icons with `space.xs` between them plus the rule is about 180dp, and the rail's own
- * chrome (chevron, two rules, the "+") is another 90dp - so this is short enough that something
- * has to give, and the scrolling tab list is what should.
+ * 4 + 4 (the Column's vertical padding), 32 (the chevron), 4, 1 (rule), 6, then below the list
+ * 6, 1 (rule), 4, 32 (the "+"). Added up rather than estimated, because the point of putting it
+ * in the harness is that the harness stops being more generous than the bar.
  */
-private val SHORT_RAIL_HEIGHT = 200.dp
+private val RAIL_FIXED_CHROME = 94.dp
+
+/**
+ * The shortest rail this window can produce, near enough.
+ *
+ * The rail is as tall as the content area. `DisplayUtils.calculateMainWindowSize` floors a new
+ * main window at 600dp of height, and 300 is half of that - well under anything the app opens
+ * itself, and still 17dp clear of the 283dp that [RAIL_FIXED_CHROME] plus five actions costs.
+ *
+ * Deliberately NOT a height where the actions lose: below about 283dp they do, because they are
+ * measured last. That is a real edge and it is reachable by dragging a window very short; it is
+ * out of this PR because fixing it means giving the rail a scroll or a drop rule of its own, and
+ * the number is written down here so the next person has it.
+ */
+private val SHORT_RAIL_HEIGHT = 300.dp
+
+/** The rail's scrolling tab list, the one thing in it that can yield. */
+private const val TAB_LIST_TAG = "quick-actions-rail-layout-test-tab-list"

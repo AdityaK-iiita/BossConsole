@@ -305,7 +305,21 @@ internal fun BossAppScaffold(
     // than inside an inline content lambda. One question answers both halves: whether these
     // actions land in a panel foot at all, and which column draws it - see hostActionsPanelEdge.
     val panelFooterEdge = state.draggablePanelComponent.hostActionsPanelColumn()
-    val rightPanelOpen = panelFooterEdge != null
+
+    // Whether that column is big enough to hold the row, reported back out of layout by
+    // `PanelFooterHostActions` - the same shape `onBarRailedChange` has, and for the same reason:
+    // a panel is user-resizable down to a sliver, and how many lines four or five 32dp icons wrap
+    // to in it is not something settings can answer.
+    //
+    // Starts true so the common case - a panel at its 250dp default, where the row is one line
+    // under a plugin with 355dp - never flickers. The other order would create and tear down the
+    // cluster's native window on every right-panel open, which is the cost this placement exists
+    // to avoid paying.
+    //
+    // KEYED on the column, so closing the panel forgets the answer rather than leaving a
+    // sliver's "no" behind for the next panel opened at a perfectly good width. A remember key
+    // and not an effect: there is nothing to do on the reset except be true again.
+    var panelFootFits by remember(panelFooterEdge) { mutableStateOf(true) }
 
     // Where Settings / Search / Sign Out go while focus mode holds the top bar that owns them.
     // One decision, five mutually exclusive renderings - every piece of chrome the window already
@@ -328,7 +342,7 @@ internal fun BossAppScaffold(
                     drawerVisible = drawerVisible,
                 ),
             // Only consulted once the bar has offered nothing, i.e. in TOP position.
-            rightPanelOpen = rightPanelOpen,
+            panelFootAvailable = panelFootAvailable(panelFooterEdge, panelFootFits),
         )
 
     // Where the way into the plugins goes, when a strip that would normally hold their icons is
@@ -681,12 +695,18 @@ internal fun BossAppScaffold(
                             // The panel itself is second when it is open, so the clearance moves
                             // onto it - this is what the lights were landing on.
                             leftPanelTopInset = trafficLights.columnInset(columns.panel),
-                            // Settings / Search / Sign Out at the foot of an open panel's column,
-                            // for a TOP tab bar with no bar of its own to hold them. Empty - and
-                            // so no row at all - for every other placement.
+                            // Settings / Search / Sign Out at the foot of the open right panel's
+                            // column, for a TOP tab bar with no bar of its own to hold them. Empty
+                            // - and so no row at all - for every other placement.
                             panelFooterEdge = panelFooterEdge,
                             panelFooter = {
                                 PanelFooterHostActions(
+                                    // What the row WOULD hold, which the fit measurement needs
+                                    // while the list is empty - the state a "does not fit" answer
+                                    // puts it in. Counted as `focusQuickActionsRailRows` counts
+                                    // the rail's reserve: the four, plus the launcher when both
+                                    // strips are off and this group is where it landed.
+                                    actionCount = hostActionsRowSize(hasLauncher = hostToolLauncher != null),
                                     actions =
                                         focusQuickActionsPanelFooter(
                                             placement = quickActionsPlacement,
@@ -696,6 +716,7 @@ internal fun BossAppScaffold(
                                             onSignOut = { state.showLogoutDialog = true },
                                             toolLauncher = hostToolLauncher,
                                         ),
+                                    onColumnFitsChange = { fits -> panelFootFits = fits },
                                 )
                             },
                             onDrawerVisibleChange = { visible -> drawerVisible = visible },
@@ -886,12 +907,47 @@ internal fun BossAppScaffold(
  *
  * The read; [hostActionsPanelEdge] is the rule, including why the left and bottom columns are not
  * candidates. One state subscription added to this composable's restart scope, on top of the
- * `isVisible(left)` the traffic-light rule already reads - so a right-panel toggle now recomposes
- * the scaffold. That is a user-scale event, and it is the same mechanism behind the overlay
- * teardown this placement already documents.
+ * `isVisible(left)` the traffic-light rule already reads.
+ *
+ * Slightly broader than "the right panel opened or closed", stated exactly because the file is
+ * careful about this elsewhere: `isVisible` folds `right.top` and `right.bottom`, and
+ * `setPanelVisible` and `toggleVisibility` write a whole fresh `PanelData`, so any write to either
+ * half - a `sidebarItem` change that does not touch visibility included - recomposes this
+ * scaffold. Still user-scale in every case, and the same mechanism already behind the overlay
+ * teardown this placement documents; noted rather than narrowed because a `derivedStateOf` here
+ * would buy a comparison per write and cost a reader the ability to see what is subscribed.
  *
  * A plain function rather than a `@Composable`: it only reads snapshot state, so called during
  * composition it subscribes its caller exactly as an inline chain would. Named at all because
  * this composable is at detekt's cyclomatic ceiling.
  */
 private fun BossDraggableComponent.hostActionsPanelColumn(): Panel? = hostActionsPanelEdge(rightOpen = isVisible(right))
+
+/**
+ * Whether the host's actions have a panel foot to go in: there is a column, and it can hold the row.
+ *
+ * Both halves, because either one alone ships a bug. Without [edge] the row is drawn into a column
+ * nothing composes; without [fits] it is drawn into a 20dp sliver, where it wraps five lines deep
+ * and takes 188dp out of the plugin - see `panelFooterFitsColumn`, which is where [fits] comes
+ * from, and `PanelFooterHostActions`, which measures it.
+ *
+ * Named rather than written inline for the same reason [hostActionsPanelEdge] is: this composable
+ * is at detekt's cyclomatic ceiling, and one more `&&` in its body puts it over.
+ */
+private fun panelFootAvailable(
+    edge: Panel?,
+    fits: Boolean,
+): Boolean = edge != null && fits
+
+/**
+ * How many buttons the host's action row would hold.
+ *
+ * What `PanelFooterHostActions` measures its column against, and it has to be answerable while
+ * the list itself is empty - which is the state a "does not fit" answer puts that row in.
+ *
+ * Counted the way `focusQuickActionsRailRows` counts the rail's reserve: the four, Toolbox
+ * included, plus the tools launcher when both icon strips are off and it landed in this group.
+ * Named rather than inlined because [BossAppScaffold] is at detekt's cyclomatic ceiling and one
+ * more `if` in its body puts it over.
+ */
+private fun hostActionsRowSize(hasLauncher: Boolean): Int = FOCUS_QUICK_ACTION_COUNT + if (hasLauncher) 1 else 0

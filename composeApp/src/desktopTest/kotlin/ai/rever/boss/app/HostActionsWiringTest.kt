@@ -10,8 +10,10 @@ import ai.rever.boss.plugin.api.Panel.Companion.top
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -152,8 +154,9 @@ class HostActionsWiringTest {
 
     @Test
     fun `the footer lands in exactly one panel column, the one the edge names`() {
-        // `hostActionsPanelEdge` names a column and BossWindow gates on `panelFooterEdge == panel`
-        // in each of the three. Panel is an open class whose subclasses carry a nullable child, so
+        // `hostActionsPanelEdge` names a column and `PanelColumn` gates on `footerEdge == column`,
+        // which is the one copy of that predicate since review round 2 - the test drives it rather
+        // than re-implementing it. Panel is an open class whose subclasses carry a nullable child, so
         // this pins that the roots do not collide - and, since only the right column is a
         // candidate, that a left or bottom panel does NOT quietly grow a foot of its own.
         //
@@ -169,7 +172,9 @@ class HostActionsWiringTest {
                 listOf(right to rightOpen.value, left to true, bottom to true)
                     .filter { (_, isOpen) -> isOpen }
                     .forEach { (column, _) ->
-                        PanelColumn(footer = { if (edge == column) FooterProbe(column) }) {
+                        // The real gate, inside the real PanelColumn: the predicate this means
+                        // to pin now lives in one place instead of being hand-copied here.
+                        PanelColumn(column = column, footerEdge = edge, footer = { FooterProbe(column) }) {
                             Box(modifier = Modifier.fillMaxSize())
                         }
                     }
@@ -187,6 +192,65 @@ class HostActionsWiringTest {
 
         assertNull(hostActionsPanelEdge(rightOpen = false), "the premise: no column without it")
         assertOnlyFooterIn(null)
+    }
+
+    @Test
+    fun `a column too small for the row hands the actions back, and takes them again when it grows`() {
+        // The round trip the fallback depends on, driven through the real pieces: the footer host
+        // measures its column, reports out through onColumnFitsChange, the placement reads that
+        // report, and the row it produces is what the host draws next frame.
+        //
+        // The reversibility is the half worth pinning. The measuring shell composes whether or not
+        // there is a row precisely so a column that has answered "no" can still answer "yes" when
+        // the user widens it - behind the same guard as the row, "no" would be permanent.
+        //
+        // It is also the test that would hang rather than fail if this loop could oscillate:
+        // waitForIdle does not return while recomposition keeps rescheduling itself.
+        val columnWidth = mutableStateOf(SLIVER_WIDTH)
+        // Snapshot state, as the scaffold holds it: the report has to invalidate the composition
+        // that reads it, or the placement never hears about the column it was measured against.
+        val fits = mutableStateOf(true)
+        var placement = FocusQuickActionsPlacement.NONE
+
+        rule.setContent {
+            val current =
+                focusQuickActionsPlacement(
+                    settings = FocusModeSettings(),
+                    topBarHidden = true,
+                    rightStripHidden = true,
+                    showTopBar = false,
+                    verticalBar = VerticalBarHost.NONE,
+                    panelFootAvailable = fits.value,
+                )
+            SideEffect { placement = current }
+            Box(modifier = Modifier.width(columnWidth.value).height(COLUMN_HEIGHT)) {
+                PanelColumn(column = right, footerEdge = right, footer = {
+                    PanelFooterHostActions(
+                        actionCount = FOCUS_QUICK_ACTION_COUNT,
+                        actions = focusQuickActionsPanelFooter(current, {}, {}, {}),
+                        onColumnFitsChange = { reported -> fits.value = reported },
+                    )
+                }) {
+                    Box(modifier = Modifier.fillMaxSize())
+                }
+            }
+        }
+        rule.waitForIdle()
+
+        assertEquals(FocusQuickActionsPlacement.FLOATING, placement, "a 20dp column keeps the cluster")
+        rule.onAllNodesWithTag(PANEL_FOOTER_HOST_ACTIONS_TAG).assertCountEquals(0)
+
+        columnWidth.value = ROOMY_WIDTH
+        rule.waitForIdle()
+
+        assertEquals(FocusQuickActionsPlacement.PANEL_FOOTER, placement, "and a 250dp one takes them")
+        rule.onAllNodesWithTag(PANEL_FOOTER_HOST_ACTIONS_TAG).assertCountEquals(1)
+
+        columnWidth.value = SLIVER_WIDTH
+        rule.waitForIdle()
+
+        assertEquals(FocusQuickActionsPlacement.FLOATING, placement, "and gives them back on the way down")
+        rule.onAllNodesWithTag(PANEL_FOOTER_HOST_ACTIONS_TAG).assertCountEquals(0)
     }
 
     /** A footer in [expected] and in neither of the other two columns; none at all when null. */
@@ -212,3 +276,12 @@ private fun FooterProbe(column: Panel) {
 private fun probeTagFor(column: Panel): String = "host-actions-footer-probe-${column::class.simpleName}"
 
 private val BAR_WIDTH = 200.dp
+
+/** `BossResizablePanel`'s floor for a side panel, where the row would wrap five lines deep. */
+private val SLIVER_WIDTH = 20.dp
+
+/** The right panel's default width, where the row is one line. */
+private val ROOMY_WIDTH = 250.dp
+
+/** Tall enough that width is the only thing under test. */
+private val COLUMN_HEIGHT = 400.dp

@@ -158,8 +158,21 @@ internal const val VERTICAL_BAR_HOST_ACTIONS_TAG = "vertical-bar-host-actions"
  * side, which `VerticalBarHostActionsLayoutTest` pins along with the narrow case.
  *
  * Shared rather than copied so the two feet cannot drift in height or spacing - they are the same
- * control in two places, and a user moving between them should not be able to tell. Each host adds
- * its own chrome around it: a rule, a background, or neither.
+ * control in two places, and a user moving between them should not be able to tell.
+ *
+ * **Each host adds its own separator, and the three differ on purpose** - what is directly above
+ * the row is different in each, and that is what a rule is for:
+ *
+ * - The **bar's foot** draws none. Above it is `SplitMap`, which is an inset, rounded, bordered
+ *   picture on the bar's own fill, so it delimits itself; a rule under it would be a second edge
+ *   a few dp below the first.
+ * - The **rail** draws a short centred rule, the one it already uses between panes, because a
+ *   full-width one at 36dp reads as the end of the bar rather than a division inside it.
+ * - The **panel's foot** draws a full-width one. Above it is a plugin's arbitrary content on a
+ *   fill this row has to paint for itself, and without the rule the actions read as the plugin's.
+ *
+ * So the shared thing is the row - height, spacing, wrap behaviour - and the chrome around it is
+ * the host's. Anything the row itself owns belongs in here, where it cannot drift.
  */
 @Composable
 internal fun HostActionsFlowRow(
@@ -172,7 +185,7 @@ internal fun HostActionsFlowRow(
             modifier
                 .fillMaxWidth()
                 .testTag(tag)
-                .padding(horizontal = BossTheme.space.sm, vertical = ROW_INSET),
+                .padding(horizontal = BossTheme.space.sm, vertical = HOST_ACTIONS_ROW_INSET),
         horizontalArrangement = Arrangement.spacedBy(BossTheme.space.xs, Alignment.CenterHorizontally),
         verticalArrangement = Arrangement.spacedBy(BossTheme.space.xs),
     ) {
@@ -188,8 +201,12 @@ internal fun HostActionsFlowRow(
  * A literal because the scale has no step between `space.xs` (4dp) and `space.md` (12dp): xs makes
  * a 40dp row that reads as cramped against the bar's other chrome, md a 56dp one that reads as a
  * toolbar. Kept in one place so both feet are the same height.
+ *
+ * `internal` because `panelFooterFitsColumn` computes what this row will COST a panel column
+ * before deciding to draw it, and a second copy of the number there is a second copy that can be
+ * edited alone.
  */
-private val ROW_INSET = 6.dp
+internal val HOST_ACTIONS_ROW_INSET = 6.dp
 
 /**
  * The actions as a row for the foot of the vertical tab bar, under its split map.

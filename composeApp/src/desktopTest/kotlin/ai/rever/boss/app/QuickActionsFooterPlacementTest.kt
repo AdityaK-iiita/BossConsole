@@ -22,14 +22,14 @@ class QuickActionsFooterPlacementTest {
     private fun placement(
         rightStripHidden: Boolean,
         verticalBar: VerticalBarHost,
-        rightPanelOpen: Boolean = false,
+        panelFootAvailable: Boolean = false,
     ) = focusQuickActionsPlacement(
         settings = focusOff,
         topBarHidden = true,
         rightStripHidden = rightStripHidden,
         showTopBar = false,
         verticalBar = verticalBar,
-        rightPanelOpen = rightPanelOpen,
+        panelFootAvailable = panelFootAvailable,
     )
 
     @Test
@@ -66,11 +66,11 @@ class QuickActionsFooterPlacementTest {
         // while a bar - full or railed - can hold these itself.
         assertEquals(
             FocusQuickActionsPlacement.TAB_BAR_RAIL,
-            placement(rightStripHidden = true, verticalBar = VerticalBarHost.RAIL, rightPanelOpen = true),
+            placement(rightStripHidden = true, verticalBar = VerticalBarHost.RAIL, panelFootAvailable = true),
         )
         assertEquals(
             FocusQuickActionsPlacement.TAB_BAR_FOOTER,
-            placement(rightStripHidden = true, verticalBar = VerticalBarHost.FOOT, rightPanelOpen = true),
+            placement(rightStripHidden = true, verticalBar = VerticalBarHost.FOOT, panelFootAvailable = true),
         )
     }
 
@@ -88,7 +88,7 @@ class QuickActionsFooterPlacementTest {
         // With the right panel open, the same window reserves a row instead of covering it.
         assertEquals(
             FocusQuickActionsPlacement.PANEL_FOOTER,
-            placement(rightStripHidden = true, verticalBar = tabsOnTop, rightPanelOpen = true),
+            placement(rightStripHidden = true, verticalBar = tabsOnTop, panelFootAvailable = true),
         )
 
         // A collapsed bar on the left reaches its own rail by the other route.
@@ -116,7 +116,7 @@ class QuickActionsFooterPlacementTest {
                 rightStripHidden = true,
                 showTopBar = true,
                 verticalBar = VerticalBarHost.FOOT,
-                rightPanelOpen = true,
+                panelFootAvailable = true,
             ),
             "the top bar owns these whenever it is on screen",
         )
@@ -216,7 +216,7 @@ class QuickActionsFooterPlacementTest {
                     placement(
                         rightStripHidden = true,
                         verticalBar = bar,
-                        rightPanelOpen = open,
+                        panelFootAvailable = open,
                     ) == FocusQuickActionsPlacement.FLOATING
                 }
 

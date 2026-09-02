@@ -152,7 +152,9 @@ internal enum class FocusQuickActionsPlacement {
      * which names that column and rules the other two out.
      *
      * Reached only in TOP tab-bar position, which has no vertical bar to put anything in, and only
-     * while the right panel is open. The cluster is an overlay that swallows clicks in the region
+     * while the right panel is open and big enough to carry the row - see [panelFooterFitsColumn],
+     * which is what keeps a sliver of a panel from growing 188dp of icons. The cluster is an
+     * overlay that swallows clicks in the region
      * it covers, it sits in the content area's bottom-right corner, and that corner belongs to the
      * right panel whenever there is one - so in that configuration the actions move into that
      * panel's chrome and cover nothing.
@@ -225,7 +227,7 @@ internal fun focusQuickActionsPlacement(
      */
     verticalBar: VerticalBarHost = VerticalBarHost.NONE,
     /**
-     * Whether the RIGHT plugin panel is open.
+     * Whether the RIGHT plugin panel is open AND its column can afford the row.
      *
      * The one input that is about the window's CONTENT rather than its chrome, and it is here for
      * one reason: the floating cluster has no click-through, so wherever it sits it takes that
@@ -235,8 +237,15 @@ internal fun focusQuickActionsPlacement(
      *
      * The right panel and not "any panel" - see [hostActionsPanelEdge], which is where the left
      * and bottom columns are ruled out and why, and which also picks the column.
+     *
+     * **Both halves, because a panel narrow enough is not a home either.** A panel drags down to
+     * about 20dp, where a row that wraps rather than clips stacks five buttons into 188dp and
+     * takes it out of the plugin. [panelFooterFitsColumn] is that test, and
+     * [PanelFooterHostActions] reports its answer back here out of layout, the same way
+     * `onBarRailedChange` reports a bar that railed itself on a narrow window. A window whose
+     * panel is too small keeps the cluster, which is what it had before this.
      */
-    rightPanelOpen: Boolean = false,
+    panelFootAvailable: Boolean = false,
 ): FocusQuickActionsPlacement =
     when {
         !focusQuickActionsVisible(settings, topBarHidden, showTopBar) -> FocusQuickActionsPlacement.NONE
@@ -255,9 +264,9 @@ internal fun focusQuickActionsPlacement(
         verticalBar == VerticalBarHost.RAIL -> FocusQuickActionsPlacement.TAB_BAR_RAIL
 
         // No vertical bar at all, so nothing above can host them. The right panel's foot while
-        // that panel is open, the corner of the content when it is not. See the two enum entries
-        // for why that split rather than one answer for both.
-        rightPanelOpen -> FocusQuickActionsPlacement.PANEL_FOOTER
+        // that panel is open and big enough to hold one, the corner of the content otherwise. See
+        // the two enum entries for why that split rather than one answer for both.
+        panelFootAvailable -> FocusQuickActionsPlacement.PANEL_FOOTER
 
         else -> FocusQuickActionsPlacement.FLOATING
     }

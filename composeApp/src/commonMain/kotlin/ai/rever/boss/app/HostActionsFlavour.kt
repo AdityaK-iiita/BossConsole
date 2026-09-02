@@ -8,9 +8,12 @@ import androidx.compose.ui.Modifier
 /**
  * The guarded builder every host's flavour delegates to: this placement's buttons, or nothing.
  *
- * One body, five call sites. Each flavour differs in exactly two things - the placement it belongs
- * to and which way its hints point - and each was a character-for-character copy of the other
- * three, so a sixth host meant a fourth copy and three `@Suppress` annotations to go with it.
+ * One body, four call sites - the right rail, the bar's foot, the rail's column and the panel's
+ * foot. The floating cluster is the fifth placement but not a fifth caller: it has no "am I the
+ * owner" question to ask, so it still builds `focusQuickActionButtons` directly. Each flavour
+ * differs in exactly two things - the placement it belongs to and which way its hints point - and
+ * each was a character-for-character copy of the other three, so a fifth host meant a fourth copy
+ * and three `@Suppress` annotations to go with it.
  *
  * The empty list is the whole contract: it lets every host call its own flavour unconditionally
  * and render nothing when the actions live elsewhere. The right rail also RESERVES height from the

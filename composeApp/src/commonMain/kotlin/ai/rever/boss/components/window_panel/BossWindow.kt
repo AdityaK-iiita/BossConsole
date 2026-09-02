@@ -136,7 +136,7 @@ fun BossDraggableComponent.BossWindow(
         WithPanel(
             panel,
             panelContent = {
-                PanelColumn(footer = { if (panelFooterEdge == panel) panelFooter() }) {
+                PanelColumn(column = panel, footerEdge = panelFooterEdge, footer = panelFooter) {
                     WithPanel(
                         secondaryPanel,
                         isPanelVisible = isFirstPanelVisible,
@@ -155,7 +155,7 @@ fun BossDraggableComponent.BossWindow(
         bottom,
         // The one panel with no second half, wrapped the same way as the two columns above.
         panelContent = {
-            PanelColumn(footer = { if (panelFooterEdge == bottom) panelFooter() }) {
+            PanelColumn(column = bottom, footerEdge = panelFooterEdge, footer = panelFooter) {
                 SidePanel(bottom, panelComponentStore)
             }
         },
@@ -229,7 +229,7 @@ private fun BossDraggableComponent.DragTargetHighlight() {
 }
 
 /**
- * A panel column with window chrome under it.
+ * A panel column, with window chrome under it when this is the column that carries it.
  *
  * The Column is what lets [footer] take a row out of the BOTTOM of the whole column - under
  * whichever of the two stacked panels is lowest in it - rather than inside one of them, where it
@@ -238,18 +238,26 @@ private fun BossDraggableComponent.DragTargetHighlight() {
  * With no footer to draw this is a Column around one `weight(1f)` child, which lays out exactly as
  * the bare panel did, so wrapping every column costs nothing in the common case.
  *
- * `internal` rather than private so `QuickActionsPanelFooterTest` can assert against THIS layout
- * rather than a copy of it - a test that rebuilds the structure it means to pin passes just as
- * happily when the real one loses its `weight(1f)` or draws the footer first.
+ * **The `[footerEdge] == [column]` gate lives here, not at the three call sites.** It was written
+ * out three times, which made it three things that could disagree and, in a test, something to
+ * hand-copy: a test that re-implements the predicate it means to pin passes just as happily when
+ * one of the real copies names the wrong column.
+ *
+ * `internal` rather than private so `QuickActionsPanelFooterTest` and `HostActionsWiringTest` can
+ * drive THIS layout and THIS gate rather than copies of them. What that still does not pin is
+ * which [column] each call site passes - that is one token beside the `WithPanel` it belongs to,
+ * and mounting the whole window is the only thing that would catch it.
  */
 @Composable
 internal fun PanelColumn(
+    column: Panel,
+    footerEdge: Panel?,
     footer: @Composable () -> Unit,
     content: @Composable BoxScope.() -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f), content = content)
-        footer()
+        if (footerEdge == column) footer()
     }
 }
 

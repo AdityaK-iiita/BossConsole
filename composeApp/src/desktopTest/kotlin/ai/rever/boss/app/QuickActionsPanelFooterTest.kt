@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Rect
@@ -48,16 +49,21 @@ class QuickActionsPanelFooterTest {
     @get:Rule
     val rule = createComposeRule()
 
+    /** The last answer [PanelFooterHostActions] reported about the column it was mounted in. */
+    private var reportedFits: Boolean? = null
+
     /**
      * The panel column, mounted through the REAL [PanelColumn] rather than a copy of its layout.
      *
      * That is what makes the carve-out assertions below mean anything: a test that rebuilds the
      * structure it means to pin passes just as happily when the production wrapper loses its
-     * `weight(1f)` or draws the footer above the content.
+     * `weight(1f)`, draws the footer above the content, or re-implements the gate that decides
+     * which column gets one.
      */
     private fun mountPanelColumn(
         placement: FocusQuickActionsPlacement,
         width: Dp = PANEL_WIDTH,
+        height: Dp = PANEL_HEIGHT,
         everyButton: Boolean = false,
     ) {
         rule.setContent {
@@ -81,13 +87,16 @@ class QuickActionsPanelFooterTest {
                 modifier =
                     Modifier
                         .width(width)
-                        .height(400.dp)
+                        .height(height)
                         .clipToBounds()
                         .testTag(COLUMN_TAG),
             ) {
                 PanelColumn(
+                    column = right,
+                    footerEdge = right,
                     footer = {
                         PanelFooterHostActions(
+                            actionCount = if (everyButton) EVERY_BUTTON else FOCUS_QUICK_ACTION_COUNT,
                             actions =
                                 focusQuickActionsPanelFooter(
                                     placement = placement,
@@ -97,6 +106,7 @@ class QuickActionsPanelFooterTest {
                                     toolbox = toolbox,
                                     toolLauncher = launcher,
                                 ),
+                            onColumnFitsChange = { fits -> reportedFits = fits },
                         )
                     },
                 ) {
@@ -174,25 +184,77 @@ class QuickActionsPanelFooterTest {
     }
 
     @Test
-    fun `every action survives a panel dragged to its floor`() {
-        // BossResizablePanel floors a side panel at max(2% of the window, 20dp) - narrower than
-        // ONE 32dp icon. The row wraps rather than clipping, and that claim is only worth making
-        // if it holds at the narrowest width a drag can reach, carrying the widest content it
-        // ever has: five buttons, which is a TOP tab bar with both icon strips switched off.
-        mountPanelColumn(FocusQuickActionsPlacement.PANEL_FOOTER, width = FLOOR_WIDTH, everyButton = true)
+    fun `every action survives the narrowest column that still hosts them`() {
+        // The row wraps rather than clipping, and that claim is only worth making at the
+        // narrowest width it is ever asked to hold - carrying the widest content it ever has:
+        // five buttons, which is a TOP tab bar with both icon strips switched off.
+        //
+        // WRAP_WIDTH is two lines, the most `panelFooterFitsColumn` allows. Below it the column
+        // stops hosting these at all rather than growing a tower of them - the test below.
+        mountPanelColumn(FocusQuickActionsPlacement.PANEL_FOOTER, width = WRAP_WIDTH, everyButton = true)
 
         val column = bounds(COLUMN_TAG)
+        val row = bounds(PANEL_FOOTER_HOST_ACTIONS_TAG)
         val expected = with(rule.density) { SIDEBAR_ICON_SIZE.toPx() }
         listOf("Sign Out", "Settings", "Toolbox", "Tools", "Search").forEach { label ->
             val icon = rule.onNodeWithContentDescription(label).fetchSemanticsNode().boundsInRoot
-            // SIZE, not just bounds: a row that cannot fit its children hands the last one a 0x0
-            // rect at the origin, which sits inside every bounds check ever written.
+            // BOTH axes. A row that cannot fit its children hands the last one a 0x0 rect at the
+            // origin, and a column narrower than an icon renders a 4dp-WIDE one - `Modifier.size`
+            // coerces to the incoming constraint rather than overflowing it. Height alone passed
+            // while the icons were slivers.
             assertEquals(expected, icon.height, "$label is ${icon.height}px tall, expected $expected")
+            assertEquals(expected, icon.width, "$label is ${icon.width}px wide, expected $expected")
             assertTrue(
                 icon.top >= column.top && icon.bottom <= column.bottom,
                 "$label spans ${icon.top}..${icon.bottom}, outside the column's ${column.top}..${column.bottom}",
             )
         }
+
+        // And the plugin still has the column. This is the assertion the old floor test was
+        // missing: the icons surviving is only good news if they did not take the panel to do it.
+        val plugin = bounds(PLUGIN_TAG)
+        assertTrue(
+            plugin.height > row.height * 2,
+            "the plugin kept ${plugin.height} against ${row.height} of chrome - the foot is eating its column",
+        )
+    }
+
+    @Test
+    fun `a column too small for the row reports it and draws nothing`() {
+        // The failure this reports out of layout to avoid. At the panel's 20dp floor the row
+        // wraps to five lines - measured at 188dp, with 4dp-wide icons - and `PanelColumn` gives
+        // the footer its height before the plugin, so the plugin gets what is left.
+        //
+        // The report is what makes the fallback work: the scaffold hands the actions back to the
+        // floating cluster, which is what this configuration had before this change.
+        mountPanelColumn(FocusQuickActionsPlacement.PANEL_FOOTER, width = FLOOR_WIDTH, everyButton = true)
+
+        assertEquals(false, reportedFits, "a 20dp column must report that it cannot host the row")
+
+        // Still no row of its own, because the placement is what decides that and it has not been
+        // told yet - so the guard has to be the report, not a half-drawn footer.
+        assertEquals(
+            false,
+            panelFooterFitsColumn(FLOOR_WIDTH, PANEL_HEIGHT, EVERY_BUTTON, SPACE_SM, SPACE_XS),
+            "the rule itself, so the report and the table cannot drift",
+        )
+    }
+
+    @Test
+    fun `a short column hands them back even at a comfortable width`() {
+        // The other axis. A 250dp panel in a 100dp-tall content area fits the row on one line and
+        // still should not spend nearly half its height on it.
+        mountPanelColumn(FocusQuickActionsPlacement.PANEL_FOOTER, height = SHORT_COLUMN)
+
+        assertEquals(false, reportedFits, "a 100dp column must report that it cannot host the row")
+    }
+
+    @Test
+    fun `a default panel hosts them and says so`() {
+        mountPanelColumn(FocusQuickActionsPlacement.PANEL_FOOTER)
+
+        assertEquals(true, reportedFits, "a 250x400 column is where this placement is aimed")
+        rule.onAllNodesWithTag(PANEL_FOOTER_HOST_ACTIONS_TAG).assertCountEquals(1)
     }
 
     @Test
@@ -204,13 +266,22 @@ class QuickActionsPanelFooterTest {
         //
         // So this reads a PIXEL. Compose's semantics tree carries no colour, and every other test
         // in this file passes just as happily against an unpainted row.
-        var expected: Color? = null
+        //
+        // Compared against the TOKEN rather than a hardcoded value: `BossColors` comes through a
+        // CompositionLocal, so the expectation has to be read from the same place the fill is.
+        var expected = Color.Unspecified
         rule.setContent {
-            expected = BossTheme.colors.panel
-            Box(modifier = Modifier.width(PANEL_WIDTH).height(400.dp).testTag(COLUMN_TAG)) {
+            // Published through SideEffect, which is what that hook is for: a plain assignment in
+            // the composable body is a write to captured state that every recomposition repeats.
+            val panel = BossTheme.colors.panel
+            SideEffect { expected = panel }
+            Box(modifier = Modifier.width(PANEL_WIDTH).height(PANEL_HEIGHT).testTag(COLUMN_TAG)) {
                 PanelColumn(
+                    column = right,
+                    footerEdge = right,
                     footer = {
                         PanelFooterHostActions(
+                            actionCount = FOCUS_QUICK_ACTION_COUNT,
                             actions =
                                 focusQuickActionsPanelFooter(
                                     placement = FocusQuickActionsPlacement.PANEL_FOOTER,
@@ -218,6 +289,7 @@ class QuickActionsPanelFooterTest {
                                     onShowSearch = {},
                                     onSignOut = {},
                                 ),
+                            onColumnFitsChange = {},
                         )
                     },
                 ) {
@@ -281,6 +353,27 @@ class HostActionsPanelEdgeTest {
 }
 
 private val PANEL_WIDTH = 250.dp
+
+/** A content area tall enough that height is never the binding constraint. */
+private val PANEL_HEIGHT = 400.dp
+
+/**
+ * The narrowest column that still carries the row: two lines of five buttons.
+ *
+ * `panelFooterFitsColumn` allows two, so three per line is the floor - 3 * 32dp + 2 * 4dp of gap
+ * plus 8dp either side is 120dp, which is also where the vertical bar's own foot bottoms out.
+ */
+private val WRAP_WIDTH = 120.dp
+
+/** Every button the row can hold: the four, plus the tools launcher with both strips off. */
+private const val EVERY_BUTTON = FOCUS_QUICK_ACTION_COUNT + 1
+
+/** A content area too short to spend a third of on four icons. */
+private val SHORT_COLUMN = 100.dp
+
+/** `BossSpacing`'s defaults, which are the only values ever provided - see BossTheme.kt. */
+private val SPACE_SM = 8.dp
+private val SPACE_XS = 4.dp
 
 /** `BossResizablePanel`'s floor for a side panel - narrower than one 32dp icon. */
 private val FLOOR_WIDTH = 20.dp
