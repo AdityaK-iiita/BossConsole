@@ -31,17 +31,29 @@ import javax.imageio.ImageIO
  * - Async HTTP with Ktor client (non-blocking)
  * - Reduced timeouts (2.5s) for faster failure detection
  * - Concurrency limit (3 simultaneous fetches) to prevent network flooding
- * - LRU cache eviction to prevent unbounded growth
+ * - Size-capped cache, oldest fetch evicted first, entries expiring after a fortnight
  * - Cache-first approach to minimize network requests
  */
 object HighQualityFaviconService {
     private val logger = BossLogger.forComponent("HighQualityFaviconService")
     private const val HQ_CACHE_DIR_NAME = "favicon-hq-cache"
-    private const val ICON_SIZE = 128 // Request 128px icons from Google
+
+    // Requested, not promised: Google honours it for some hosts and serves 32px for others
+    // (every google.com subdomain, among them), so a tile must cope with whatever comes back.
+    private const val ICON_SIZE = 128
     private const val REQUEST_TIMEOUT_MS = 2500L
     private const val MAX_CONCURRENT_FETCHES = 3
     private const val MAX_CACHE_SIZE = 200 // Maximum number of cached favicons
     private const val CACHE_EVICTION_COUNT = 50 // Number of items to evict when limit reached
+
+    /**
+     * How long a fetched icon is trusted before it is fetched again.
+     *
+     * A favicon here is a guess about a host, and a wrong guess used to be permanent: nothing
+     * ever refetched, so a site that had no icon on the day it was first opened kept whatever
+     * Google said then for as long as the entry survived eviction.
+     */
+    private const val MAX_CACHE_AGE_MS = 14L * 24 * 60 * 60 * 1000
 
     // Semaphore to limit concurrent network requests
     private val fetchSemaphore = Semaphore(MAX_CONCURRENT_FETCHES)
@@ -85,7 +97,7 @@ object HighQualityFaviconService {
     ): ai.rever.boss.plugin.api.TabIcon.Image? {
         return withContext(Dispatchers.IO) {
             try {
-                val domain = extractDomain(url) ?: return@withContext loadStandardFavicon(standardCacheKey)
+                val domain = extractFaviconHost(url) ?: return@withContext loadStandardFavicon(standardCacheKey)
                 val cacheKey = generateCacheKey(domain)
 
                 // Check HQ cache first (no semaphore needed for local cache)
@@ -117,22 +129,6 @@ object HighQualityFaviconService {
     }
 
     /**
-     * Extract domain from URL.
-     */
-    private fun extractDomain(url: String): String? =
-        try {
-            val withoutProtocol = url.removePrefix("https://").removePrefix("http://")
-            withoutProtocol.substringBefore('/').substringBefore('?').removePrefix("www.")
-        } catch (e: Exception) {
-            logger.debug(
-                LogCategory.BROWSER,
-                "Could not extract domain from URL for favicon",
-                mapOf("error" to e.toString()),
-            )
-            null
-        }
-
-    /**
      * Generate cache key for domain.
      */
     private fun generateCacheKey(domain: String): String {
@@ -142,17 +138,26 @@ object HighQualityFaviconService {
     }
 
     /**
-     * Load favicon from HQ cache.
-     * Updates file access time for LRU tracking.
+     * Load favicon from HQ cache, unless the entry is older than [MAX_CACHE_AGE_MS].
+     *
+     * **Reads no longer touch the file.** The mtime was bumped on every read to order an LRU,
+     * which had two costs: the age this TTL needs became unknowable, and the entries shown most
+     * often - including a wrong one on a favourite tile - were the ones eviction could never
+     * reach. Eviction is therefore oldest-fetched-first, which for 200 icons that all expire in
+     * a fortnight anyway is the same set of files in a slightly different order.
      */
     private fun loadFromCache(cacheKey: String): ai.rever.boss.plugin.api.TabIcon.Image? {
         val cacheFile = File(cacheDir, "$cacheKey.png")
         if (!cacheFile.exists()) return null
 
-        return try {
-            // Touch file to update access time for LRU
-            cacheFile.setLastModified(System.currentTimeMillis())
+        if (System.currentTimeMillis() - cacheFile.lastModified() > MAX_CACHE_AGE_MS) {
+            // Delete rather than merely ignore, so a host that has since dropped its favicon
+            // does not keep serving this entry from disk on every later miss.
+            cacheFile.delete()
+            return null
+        }
 
+        return try {
             val bufferedImage = ImageIO.read(cacheFile) ?: return null
             val imageBitmap = bufferedImage.toComposeImageBitmap()
             ai.rever.boss.plugin.api.TabIcon
@@ -187,10 +192,25 @@ object HighQualityFaviconService {
 
             if (response.status == HttpStatusCode.OK) {
                 val bytes = response.readRawBytes()
-                val bufferedImage = ImageIO.read(ByteArrayInputStream(bytes))
 
-                if (bufferedImage != null && bufferedImage.width >= 32) {
-                    // Evict old entries if cache is full
+                // Google has no icon for this host. Declining its placeholder is the useful
+                // answer: the caller then keeps the page's own favicon, or the tile's letter,
+                // either of which identifies the site better than a globe every stranger shares.
+                val placeholder = isNoIconPlaceholder(bytes)
+                if (placeholder) {
+                    logger.debug(
+                        LogCategory.NETWORK,
+                        "Google has no favicon for host - declining its placeholder",
+                        mapOf("domain" to domain),
+                    )
+                }
+
+                val bufferedImage = if (placeholder) null else ImageIO.read(ByteArrayInputStream(bytes))
+
+                if (bufferedImage != null) {
+                    // No minimum size. The floor was 32px, which rejected every genuine 16px
+                    // favicon - the host then showed a letter while the real icon sat unused. A
+                    // 16px icon in a 22dp tile is soft; it is still the right site.
                     evictIfNeeded()
 
                     // Save to cache
@@ -201,7 +221,7 @@ object HighQualityFaviconService {
                     ai.rever.boss.plugin.api.TabIcon
                         .Image(BitmapPainter(imageBitmap))
                 } else {
-                    // Image too small, skip caching
+                    // Not an image we can decode. Nothing to cache.
                     null
                 }
             } else {
@@ -219,7 +239,8 @@ object HighQualityFaviconService {
 
     /**
      * Evict oldest entries if cache exceeds MAX_CACHE_SIZE.
-     * Uses file modification time for LRU ordering.
+     * Uses file modification time, which is now the FETCH time - see [loadFromCache] for why
+     * reads no longer bump it, and what that changes about the eviction order.
      */
     private suspend fun evictIfNeeded() {
         cacheMutex.withLock {
@@ -282,4 +303,69 @@ object HighQualityFaviconService {
     fun close() {
         httpClient.close()
     }
+}
+
+/**
+ * The host Google should be asked about, or null when there is nothing to ask.
+ *
+ * Only http(s) URLs have a host Google can answer for. Everything else - `file:///…`, `boss://`,
+ * a bare path - used to reach here as a "domain" of whatever sat before the first slash (`file:`
+ * for a local file), which spends a network round trip to be told no.
+ *
+ * The port goes too. Google's service keys on host alone and 404s on `localhost:3000`, so a dev
+ * server got no icon at all while plain `localhost` would have answered.
+ *
+ * Every step is a `substringBefore`/`substringAfter`, none of which throw on any input, so there
+ * is nothing here to catch - the previous version's try/catch was unreachable.
+ */
+internal fun extractFaviconHost(url: String): String? {
+    val scheme = url.substringBefore("://", missingDelimiterValue = "").lowercase()
+    if (scheme != "http" && scheme != "https") return null
+
+    return url
+        .substringAfter("://")
+        .substringBefore('/')
+        .substringBefore('?')
+        .substringBefore('#')
+        // Credentials, if any, sit before the host and are not part of it.
+        .substringAfterLast('@')
+        .let(::stripPort)
+        .removeSuffix(".")
+        .lowercase()
+        .removePrefix("www.")
+        .ifBlank { null }
+}
+
+/** Drops a `:port`, leaving an IPv6 literal's own bracketed colons alone. */
+private fun stripPort(host: String): String =
+    when {
+        host.startsWith('[') && host.contains(']') -> host.substringBefore(']') + "]"
+        host.startsWith('[') -> host
+        else -> host.substringBefore(':')
+    }
+
+/**
+ * SHA-256 of the icon Google returns when it has NO favicon for a host.
+ *
+ * It arrives as HTTP 200 with a 16x16 grey globe - identical bytes for every unknown host,
+ * whatever `sz` was asked for - so nothing about the response says "miss" except the payload.
+ * Caching it is what made unrelated hosts share one anonymous globe and never re-check.
+ *
+ * Verified against two unrelated nonexistent hosts at sz=16/32/64/128: the same 726 bytes
+ * each time. A fingerprint is inherently a bet on Google not changing the asset; the cost of
+ * losing that bet is only that one placeholder gets cached again, which is where this
+ * started, so it fails no worse than not checking.
+ */
+private const val NO_ICON_PLACEHOLDER_SHA256 =
+    "59bfe9bc385ad69f50793ce4a53397316d7a875a7148a63c16df9b674c6cda64"
+
+/**
+ * Whether these bytes are Google's "no favicon for this host" globe.
+ *
+ * See [NO_ICON_PLACEHOLDER_SHA256] for why the check is on the payload
+ * rather than on the status code.
+ */
+internal fun isNoIconPlaceholder(bytes: ByteArray): Boolean {
+    val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+    return digest.joinToString("") { "%02x".format(it) } == NO_ICON_PLACEHOLDER_SHA256
 }

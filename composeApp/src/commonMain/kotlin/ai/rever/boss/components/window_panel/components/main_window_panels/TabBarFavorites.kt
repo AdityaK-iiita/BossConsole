@@ -285,12 +285,21 @@ private fun FavoritesGrid(
 /**
  * One favourite: its favicon, its title as a tooltip, and a right-click menu to remove it.
  *
- * **The icon is fetched, not just read from cache.** The first version read
- * `loadFaviconFromCache(faviconCacheKey)` synchronously during composition, and every tile came
- * out as a letter: a bookmark saved from anything but a browser tab has no cache key at all, and
- * one saved before its favicon was cached has a key that misses. `loadHighQualityFavicon` starts
- * from the URL instead and returns a 128px icon, which is also the right source for a tile this
- * size - a 16px favicon scaled to 22dp is visibly soft.
+ * **The page's own favicon wins; the fetch is only a fallback.** Two sources disagree here, and
+ * the order between them is the whole correctness of these tiles:
+ *
+ * - `loadFaviconFromCache(faviconCacheKey)` is keyed on the FULL page URL and holds what the tab
+ *   itself served. Right by construction, and absent for a bookmark saved from something that
+ *   was never a browser tab.
+ * - `loadHighQualityFavicon(url, …)` derives a HOST and asks Google's service about it. It fills
+ *   the gap the first source leaves, and it is a guess.
+ *
+ * Fetching FIRST was the bug: a guess about a host overwrote a known-correct per-page icon.
+ * Google resolves subdomains to their parent - `mail.google.com`, `docs.google.com` and
+ * `accounts.google.com` all return the same 32px Google "G" - so every Google-property favourite
+ * came out identical, and a bookmark on a `google.com/url?q=…` redirect link came out as Google
+ * rather than as the site it opens. Neither is recoverable from a host; both were already sitting
+ * correct in the standard cache.
  *
  * Loaded in a LaunchedEffect rather than inline, because it touches the disk and the network and
  * composition is the wrong thread for either. The letter shows until it resolves, so the grid has
@@ -316,14 +325,18 @@ private fun FavoriteTile(
     LaunchedEffect(config.url, config.faviconCacheKey) {
         val url = config.url
         icon =
-            if (url.isNullOrBlank()) {
-                // Not a page - a terminal, a file. Nothing to fetch; the cache key is the only
-                // chance, and usually absent too.
-                runCatching { loadFaviconFromCache(config.faviconCacheKey) }.getOrNull()
-            } else {
-                runCatching { loadHighQualityFavicon(url, config.faviconCacheKey) }.getOrNull()
-                    ?: runCatching { loadFaviconFromCache(config.faviconCacheKey) }.getOrNull()
-            }
+            // The page's OWN favicon first. It is keyed on the full URL and was captured from the
+            // tab, so it is the icon the site actually serves; the HQ fetch only ever knows a
+            // host, and asks a third party to guess from that.
+            runCatching { loadFaviconFromCache(config.faviconCacheKey) }.getOrNull()
+                ?: url?.takeUnless { it.isBlank() }?.let { pageUrl ->
+                    // Nothing cached: a bookmark saved before its favicon was, or one whose key
+                    // has since been evicted. A host-level guess beats a letter here.
+                    //
+                    // Not a page at all - a terminal, a file - has no host to guess from, so the
+                    // tile keeps its letter.
+                    runCatching { loadHighQualityFavicon(pageUrl, config.faviconCacheKey) }.getOrNull()
+                }
     }
 
     HoverTooltipBox(
