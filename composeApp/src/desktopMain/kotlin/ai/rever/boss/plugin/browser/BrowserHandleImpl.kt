@@ -306,11 +306,11 @@ internal class BrowserHandleImpl(
             windowId = { currentWindowId },
         )
 
-    // When the last two-finger swipe navigated, for [shouldAcceptSwipeNav]. A handle-level field
-    // rather than the `lastNavigationTime` the aux mouse buttons use, because that one is a
-    // `remember` slot inside Content() and this arrives from a JxBrowser thread with no
-    // composition in sight.
-    @Volatile private var lastSwipeNavAt = 0L
+    // How close together two two-finger swipes may navigate. A handle-level object rather than the
+    // `lastNavigationTime` the aux mouse buttons use, because that one is a `remember` slot inside
+    // Content() and this arrives from a JxBrowser thread with no composition in sight. It survives
+    // the navigation it just caused, which the page-side script cannot - see [SwipeNavGate].
+    private val swipeNavGate = SwipeNavGate()
 
     /** Receives committed two-finger swipes from the page. See [BrowserSwipeNavScript]. */
     private val swipeNavBridge = BrowserSwipeNavBridge(onNavigate = ::onSwipeNavigate)
@@ -1905,9 +1905,7 @@ internal class BrowserHandleImpl(
      * renderer it will not block, and `goBack()` is a round trip into the browser.
      */
     private fun onSwipeNavigate(direction: SwipeNavDirection) {
-        val now = System.currentTimeMillis()
-        if (!isValid || !shouldAcceptSwipeNav(now, lastSwipeNavAt)) return
-        lastSwipeNavAt = now
+        if (!isValid || !swipeNavGate.accept(direction)) return
         pageInjectScope.launch(pageInjectDispatcher) {
             when (direction) {
                 SwipeNavDirection.BACK -> goBack()

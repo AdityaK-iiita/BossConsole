@@ -25,6 +25,10 @@ const scriptKt = path.join(
   repoRoot,
   'composeApp/src/desktopMain/kotlin/ai/rever/boss/plugin/browser/BrowserSwipeNavScript.kt',
 );
+const bridgeKt = path.join(
+  repoRoot,
+  'composeApp/src/desktopMain/kotlin/ai/rever/boss/plugin/browser/BrowserSwipeNavBridge.kt',
+);
 
 let failures = 0;
 function check(name, cond, detail) {
@@ -34,6 +38,12 @@ function check(name, cond, detail) {
     failures++;
     console.log(`  FAIL ${name}${detail === undefined ? '' : ` -> ${detail}`}`);
   }
+}
+/** Smallest distance between consecutive commits; Infinity when there are fewer than two. */
+function minGap(times) {
+  let smallest = Infinity;
+  for (let i = 1; i < times.length; i++) smallest = Math.min(smallest, times[i] - times[i - 1]);
+  return smallest;
 }
 function eq(name, actual, expected) {
   check(
@@ -54,12 +64,27 @@ function hostProperties() {
   return { bridge: grab('BRIDGE_PROPERTY'), state: grab('STATE_PROPERTY') };
 }
 
+/**
+ * The host's same-direction repeat window, read from the Kotlin.
+ *
+ * The paused-drag case below is the one place these two files make a claim about each other: the
+ * script emits two commits and the host is what collapses them. Restating 400 here would let the
+ * two drift apart with both suites green.
+ */
+function hostRepeatMs() {
+  const src = fs.readFileSync(bridgeKt, 'utf8');
+  const m = /^internal const val SWIPE_NAV_REPEAT_MS = (\d+)L/m.exec(src);
+  if (!m) throw new Error('SWIPE_NAV_REPEAT_MS not found in BrowserSwipeNavBridge.kt');
+  return Number(m[1]);
+}
+
 // ---------------------------------------------------------------------------
 // Fake DOM: only what the detector touches, so an added DOM read fails loudly.
 // ---------------------------------------------------------------------------
 function newPage(js, options = {}) {
   const listeners = {};
   const navigated = [];
+  const navigatedAt = [];
   const registrations = [];
   let clockMs = 1000;
   let preventedDefaults = 0;
@@ -168,7 +193,14 @@ function newPage(js, options = {}) {
   };
   sandbox.window.top = options.subframe ? {} : sandbox.window;
   sandbox.document = sandbox.window.document;
-  sandbox.window[hostProps.bridge] = { navigate: (d) => navigated.push(d) };
+  // The clock is recorded alongside the direction: the host's SWIPE_NAV_DEBOUNCE_MS rests on
+  // "two commits are never closer than GESTURE_GAP_MS", and that claim lives in this script.
+  sandbox.window[hostProps.bridge] = {
+    navigate: (d) => {
+      navigated.push(d);
+      navigatedAt.push(clockMs);
+    },
+  };
   if (options.state !== null) {
     sandbox.window[hostProps.state] = options.state || { back: true, forward: true };
   }
@@ -195,6 +227,7 @@ function newPage(js, options = {}) {
     element,
     body,
     navigated,
+    navigatedAt,
     registrations,
     wheel,
     wheelRaw: (event) => (listeners.wheel || []).forEach((f) => f(event)),
@@ -252,6 +285,7 @@ function newPage(js, options = {}) {
 
 // ---------------------------------------------------------------------------
 const hostProps = hostProperties();
+const REPEAT_MS = hostRepeatMs();
 const js = fs.readFileSync(scriptJs, 'utf8');
 const constant = (name) => Number(new RegExp(`var ${name} = (\\d+)`).exec(js)[1]);
 const COMMIT_PX = constant('COMMIT_PX');
@@ -260,7 +294,8 @@ const MIN_EVENTS = constant('MIN_EVENTS');
 const MAX_STEP_PX = constant('MAX_STEP_PX');
 console.log(
   `detector: COMMIT_PX=${COMMIT_PX} GESTURE_GAP_MS=${GAP_MS} MIN_EVENTS=${MIN_EVENTS} ` +
-    `MAX_STEP_PX=${MAX_STEP_PX}; host: ${hostProps.bridge} / ${hostProps.state}`,
+    `MAX_STEP_PX=${MAX_STEP_PX}; host: ${hostProps.bridge} / ${hostProps.state}, ` +
+    `SWIPE_NAV_REPEAT_MS=${REPEAT_MS}`,
 );
 
 console.log('\nwiring');
@@ -310,15 +345,52 @@ console.log('\na real swipe');
   p.settle();
   eq('two swipes across a gap navigate twice', p.navigated, ['back', 'back']);
 }
+{
+  // The floor the host's SWIPE_NAV_DEBOUNCE_MS is derived from, proved rather than asserted in
+  // prose: whatever the ordering of timers and events, two commits are never closer together than
+  // GESTURE_GAP_MS, because that gap IS how one gesture is told from the next. If a future change
+  // to decide()'s call sites falsifies that, the debounce's whole justification goes with it.
+  const p = newPage(js);
+  p.swipe(12, -10);
+  p.advance(GAP_MS + 40);
+  p.swipe(12, -10);
+  p.advance(GAP_MS + 40);
+  p.swipe(12, 10);
+  p.settle();
+  eq('three gestures navigate three times', p.navigated, ['back', 'back', 'forward']);
+  check(
+    'and no two commits are closer than the gesture gap',
+    minGap(p.navigatedAt) >= GAP_MS,
+    `${JSON.stringify(p.navigatedAt)} min gap ${minGap(p.navigatedAt)}, want >= ${GAP_MS}`,
+  );
+}
+{
+  // A slow deliberate drag that HESITATES mid-swipe. 120ms of quiet with the fingers still down is
+  // byte-identical to a lift, so this is two gestures here and there is no signal that would make
+  // it one. What is pinned is that the script really does emit two commits: the guard against it
+  // is SWIPE_NAV_REPEAT_MS in BrowserSwipeNavBridge.kt, which has to live host-side because this
+  // script's state dies with the document the first commit navigates away from.
+  const p = newPage(js);
+  p.swipe(9, -10);
+  p.advance(GAP_MS + 1);
+  p.swipe(9, -10);
+  p.settle();
+  eq('a drag paused past the gesture gap is two gestures to the script', p.navigated, ['back', 'back']);
+  check(
+    'and the two are close enough for the host repeat window to catch',
+    minGap(p.navigatedAt) <= REPEAT_MS,
+    `${JSON.stringify(p.navigatedAt)} min gap ${minGap(p.navigatedAt)}, want <= ${REPEAT_MS}`,
+  );
+}
 
-console.log('\nrelease, not the threshold, is what commits');
+console.log('\nthe end of the gesture, not the threshold, is what commits');
 {
   // The bug this whole change fixes (boss-plugin-fluck-browser#36): crossing COMMIT_PX used to
   // navigate on the spot, in the same wheel event, fingers still down. Held right at the commit
   // distance with no further events, it must not navigate until the gesture actually ends.
   const p = newPage(js);
   p.swipe(9, -10);
-  eq('holding at the commit distance does not navigate yet', p.navigated, []);
+  eq('holding at the commit distance does not navigate on the crossing event', p.navigated, []);
   check('the affordance is still up, filled in', p.visibleOverlays() === 1, p.visibleOverlays());
   p.settle();
   eq('and only fires once the gesture ends', p.navigated, ['back']);
@@ -413,14 +485,51 @@ console.log('\nrelease, not the threshold, is what commits');
   eq('reversing after crossing the commit distance cancels', p.navigated, []);
 }
 {
-  // Same consequence through the vertical rule: verticalPath keeps accumulating past the line, so
-  // a slow swipe that wobbles in its tail cancels. Deliberate, and the answer Chrome gives too -
-  // vertical is a path length, so it only ever counts against you.
+  // The vertical rule is the opposite call, and it is `reachedCommit`. verticalPath only ever
+  // grows, so once the gesture is past the line every further event is another chance to cancel a
+  // swipe the user already completed - including events the user did not make, since a momentum
+  // tail carries 325-2500px (AGENTS.md) and any dy in it clears CANCEL_VERTICAL_HIGH outright.
+  // Past the line only the horizontal position decides, which is what a native swipe-back does.
   const p = newPage(js);
   p.swipe(10, -10);
   for (let i = 0; i < 12; i++) p.wheel(-1, i % 2 === 0 ? 9 : -9);
   p.settle();
-  eq('vertical drift after crossing the commit distance cancels', p.navigated, []);
+  eq('vertical drift after crossing the commit distance no longer cancels', p.navigated, ['back']);
+}
+{
+  // The same rule BEFORE the line still cancels, which is the half that must not be lost: this is
+  // one event short of COMMIT_PX when the wobble starts.
+  const p = newPage(js);
+  p.swipe(8, -10);
+  for (let i = 0; i < 12; i++) p.wheel(-1, i % 2 === 0 ? 9 : -9);
+  p.settle();
+  eq('vertical drift before the commit distance still cancels', p.navigated, []);
+}
+{
+  // The closest this harness gets to the momentum shape, sized to the top of the range measured in
+  // AGENTS.md: 2400px of same-direction travel after the gesture is past the line, with a little
+  // over 10% of it as vertical path. That clears CANCEL_VERTICAL_HIGH (270px) on its own - which
+  // is exactly how a tail the user never made could have cancelled a swipe they had completed.
+  // It must still commit, exactly once: late rather than lost is the whole claim decide() makes.
+  const p = newPage(js);
+  p.swipe(10, -10);
+  for (let i = 0; i < 60; i++) p.wheel(-40, i % 2 === 0 ? 5 : -5);
+  p.settle();
+  eq('a long same-direction tail past the line still commits once', p.navigated, ['back']);
+}
+{
+  // reachedCommit is latched only once the gesture also has MIN_EVENTS, so the two-big-deltas pair
+  // decide() refuses on its own cannot switch the vertical tiers off on its way past the line.
+  // Two 50px notches clear COMMIT_PX at eventCount 2; then real vertical scrolling (which
+  // accumulates verticalPath without running the tiers, since those events carry no dx); then one
+  // stray horizontal event, which is the tiers' single chance to see the whole shape. It has to
+  // still be taken, or the pair has bought itself immunity it never earned.
+  const p = newPage(js);
+  p.swipe(2, -50);
+  p.swipe(8, 0, 40);
+  p.wheel(-1, 0);
+  p.settle();
+  eq('two big deltas past the line do not switch the vertical tiers off', p.navigated, []);
 }
 
 console.log('\ngestures that must not navigate');

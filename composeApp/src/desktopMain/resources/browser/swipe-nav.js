@@ -68,6 +68,16 @@
     // rejected swipe cannot become an accepted one halfway through.
     var rejected = false;
     var direction = 0;
+    // Latched the first time this gesture is past COMMIT_PX with enough events to be real.
+    //
+    // From that point the vertical tiers stop being asked. Vertical is a PATH LENGTH, so it only
+    // ever grows, and every event after the crossing is one more chance for it to cancel a swipe
+    // the user already completed - including events the user did not make. macOS momentum-phase
+    // scroll carries 325-2500px of travel (AGENTS.md), and a tail with even a little dy in it
+    // clears CANCEL_VERTICAL_HIGH on its own. Past the line only the horizontal position decides:
+    // easing back below COMMIT_PX, or reversing outright. That is also what a native swipe-back
+    // does - once you are past the threshold, wobble no longer counts against you.
+    var reachedCommit = false;
     // Ends the gesture when the fingers lift.
     //
     // The gap check at the top of onWheel cannot do this on its own: it only runs when a NEXT
@@ -297,6 +307,7 @@
         eventCount = 0;
         rejected = false;
         direction = 0;
+        reachedCommit = false;
     }
 
     // Rule the current gesture out, keeping the accumulators so nothing restarts until the
@@ -348,13 +359,16 @@
     //   switchedOff() promises the detector stops when it does - and additionally fails closed if
     //   the direction lost its history entry, or if state went away entirely.
     //
-    // MOMENTUM is the open question in this design, and the numbers behind it are in AGENTS.md:
-    // macOS emits momentum-phase scroll for 180-870ms after the fingers lift, measured on this
-    // hardware. Whether Chromium forwards those to the renderer as `wheel` events is not yet
-    // confirmed. If it does, each one re-arms endTimer through onWheel and a flick commits at
-    // end-of-momentum rather than at release. That cannot turn a commit into a cancel, since a
-    // momentum tail runs the flick's own direction; it is latency, on the gesture that should
-    // feel fastest.
+    // MOMENTUM costs latency here and nothing else, which is what reachedCommit is for. The
+    // numbers are in AGENTS.md: macOS emits momentum-phase scroll for 180-870ms after the fingers
+    // lift, carrying 325-2500px, measured on this hardware. Whether Chromium forwards those to the
+    // renderer as `wheel` events is not confirmed and cannot be settled with synthetic events. If
+    // it does, each one re-arms endTimer through onWheel and a flick commits at end-of-momentum
+    // rather than at release.
+    //
+    // It cannot change the ANSWER, only when it arrives: a momentum tail runs the flick's own
+    // direction, so it cannot reverse or ease back, and past COMMIT_PX the vertical tiers - the
+    // one path by which a tail's dy could have cancelled a completed swipe - are no longer asked.
     function decide() {
         if (rejected || direction === 0 || eventCount < MIN_EVENTS || !available(direction)) {
             return;
@@ -418,11 +432,13 @@
         eventCount++;
         accumX += dx;
 
-        // Chrome's three tiers, in its order.
+        // Chrome's three tiers, in its order. Asked only until the gesture is past the commit
+        // distance - see reachedCommit.
         var xDelta = Math.abs(accumX);
-        if (verticalPath > CANCEL_STRONG_RATIO * xDelta ||
-            (verticalPath * CANCEL_MIXED_RATIO > xDelta && verticalPath > CANCEL_VERTICAL_LOW) ||
-            verticalPath > CANCEL_VERTICAL_HIGH) {
+        if (!reachedCommit &&
+            (verticalPath > CANCEL_STRONG_RATIO * xDelta ||
+                (verticalPath * CANCEL_MIXED_RATIO > xDelta && verticalPath > CANCEL_VERTICAL_LOW) ||
+                verticalPath > CANCEL_VERTICAL_HIGH)) {
             abandon();
             return;
         }
@@ -446,11 +462,18 @@
         if (eventCount < MIN_EVENTS) {
             return;
         }
+        // Latched here rather than the moment xDelta crosses, so it means the same thing decide()
+        // does: past the line AND enough events to be a trackpad at all. Latching earlier would
+        // let the two-big-deltas pair decide() rejects switch the vertical tiers off on its way
+        // through.
+        if (xDelta >= COMMIT_PX) {
+            reachedCommit = true;
+        }
 
         // Progress is tracked all the way through the gesture now, never gated on whether it
         // has reached the commit distance yet - see decide() for why crossing COMMIT_PX no
         // longer does anything here beyond what trackAffordance already draws.
-        var progress = Math.abs(accumX) / COMMIT_PX;
+        var progress = xDelta / COMMIT_PX;
         showAffordance(direction);
         trackAffordance(direction, progress);
     }
