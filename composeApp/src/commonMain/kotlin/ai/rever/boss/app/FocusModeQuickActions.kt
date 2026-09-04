@@ -1,3 +1,5 @@
+@file:Suppress("TooManyFunctions")
+
 package ai.rever.boss.app
 
 import ai.rever.boss.components.buttons.BossActionButton

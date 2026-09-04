@@ -53,7 +53,6 @@ fun BossDraggableComponent.BossWindow(
     onDrawerVisibleChange: (Boolean) -> Unit = {},
     /** See `SplitViewPanel.onBarRailedChange`. */
     onBarRailedChange: (Boolean) -> Unit = {},
-
     /** Reports whether the collapsed tab rail has enough height for its quick actions. */
     onRailFitsActionsChange: (Boolean) -> Unit = {},
     /**

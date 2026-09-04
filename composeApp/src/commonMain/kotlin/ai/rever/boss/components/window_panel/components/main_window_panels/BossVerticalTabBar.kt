@@ -1,5 +1,7 @@
 package ai.rever.boss.components.window_panel.components.main_window_panels
 
+import ai.rever.boss.app.FOCUS_QUICK_ACTION_COUNT
+import ai.rever.boss.app.railFitsActions
 import ai.rever.boss.components.bars.getPanelScrollbarConfig
 import ai.rever.boss.components.bars.lazyListScrollbar
 import ai.rever.boss.components.dividers.SDivider
@@ -42,9 +44,6 @@ import androidx.compose.material.Divider
 import androidx.compose.material.Icon
 import androidx.compose.material.Text
 import androidx.compose.material.icons.Icons
-import ai.rever.boss.app.FOCUS_QUICK_ACTION_COUNT
-import ai.rever.boss.app.railFitsActions
-
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
