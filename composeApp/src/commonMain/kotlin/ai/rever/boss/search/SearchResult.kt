@@ -130,6 +130,24 @@ sealed class SearchResult {
         override val displayName: String = description
         override val category: SearchCategory = SearchCategory.COMMANDS
     }
+
+    /**
+     * A tool search result.
+     *
+     * @property toolId The unique tool/sidebar item ID
+     * @property name The tool name
+     * @property score The fuzzy match score
+     * @property matchRanges Character ranges that matched the search query
+     */
+    data class ToolResult(
+        val toolId: String,
+        val name: String,
+        override val score: Int,
+        val matchRanges: List<MatchRange>,
+    ) : SearchResult() {
+        override val displayName: String = name
+        override val category: SearchCategory = SearchCategory.TOOLS
+    }
 }
 
 /**
@@ -145,6 +163,7 @@ enum class SearchCategory(
     BOOKMARKS("Bookmarks", "bookmark"),
     RUN_CONFIGS("Run Configs", "play_arrow"),
     COMMANDS("Commands", "terminal"),
+    TOOLS("Tools", "build"),
 }
 
 /**
@@ -172,4 +191,15 @@ data class IndexedFile(
     val path: String,
     val relativePath: String,
     val lowerName: String = name.lowercase(),
+)
+
+/**
+ * Lightweight representation of a tool available through the Toolbox/sidebar.
+ *
+ * Kept independent from SidebarItem so the search layer does not depend
+ * on UI/plugin implementation details.
+ */
+data class SearchableTool(
+    val id: String,
+    val name: String,
 )

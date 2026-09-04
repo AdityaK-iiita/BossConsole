@@ -9,6 +9,7 @@ import ai.rever.boss.search.GlobalSearchService
 import ai.rever.boss.search.MatchRange
 import ai.rever.boss.search.SearchCategory
 import ai.rever.boss.search.SearchResult
+import ai.rever.boss.search.SearchableTool
 import ai.rever.boss.utils.extractParentName
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
@@ -99,6 +100,8 @@ fun GlobalSearchDialog(
     onBookmarkSelect: ((bookmarkId: String, collectionId: String) -> Unit)? = null,
     onRunConfigSelect: ((configId: String) -> Unit)? = null,
     onCommandSelect: ((actionId: String) -> Unit)? = null,
+    tools: List<SearchableTool> = emptyList(),
+    onToolSelect: ((toolId: String) -> Unit)? = null,
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var selectedIndex by remember { mutableStateOf(0) }
@@ -156,7 +159,7 @@ fun GlobalSearchDialog(
             return@LaunchedEffect
         }
         delay(50)
-        GlobalSearchService.search(searchQuery)
+        GlobalSearchService.search(searchQuery, tools)
     }
 
     // Auto-scroll to selected item (only when triggered by keyboard)
@@ -240,6 +243,16 @@ fun GlobalSearchDialog(
                     onCommandSelect.invoke(result.actionId)
                 } else {
                     globalSearchLogger.warn(LogCategory.UI, "No command select handler, closing dialog")
+                    onDismiss()
+                }
+            }
+
+            is SearchResult.ToolResult -> {
+                globalSearchLogger.debug(LogCategory.UI, "Tool selected from search", mapOf("toolId" to result.toolId))
+                if (onToolSelect != null) {
+                    onToolSelect.invoke(result.toolId)
+                } else {
+                    globalSearchLogger.warn(LogCategory.UI, "No tool select handler, closing dialog")
                     onDismiss()
                 }
             }
@@ -568,6 +581,7 @@ private fun CategoryTab(
             SearchCategory.BOOKMARKS -> Icons.Outlined.Bookmark
             SearchCategory.RUN_CONFIGS -> Icons.Outlined.PlayArrow
             SearchCategory.COMMANDS -> Icons.Outlined.Terminal
+            SearchCategory.TOOLS -> Icons.Outlined.Build
         }
 
     Row(
@@ -1056,6 +1070,18 @@ private fun SearchResultItem(
                 onClick,
             )
         }
+
+        is SearchResult.ToolResult -> {
+            ToolResultItem(
+                result,
+                isSelected,
+                isHovered,
+                scale,
+                backgroundColor,
+                interactionSource,
+                onClick,
+            )
+        }
     }
 }
 
@@ -1373,6 +1399,47 @@ private fun CommandResultItem(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ToolResultItem(
+    result: SearchResult.ToolResult,
+    isSelected: Boolean,
+    isHovered: Boolean,
+    scale: Float,
+    backgroundColor: Color,
+    interactionSource: MutableInteractionSource,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .scale(scale)
+                .clip(SmallCardShape)
+                .background(backgroundColor)
+                .clickable { onClick() }
+                .hoverable(interactionSource)
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Build,
+            contentDescription = null,
+            tint = CommandsAccent,
+            modifier = Modifier.size(22.dp),
+        )
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Text(
+            text = result.name,
+            color = if (isSelected || isHovered) BossTheme.colors.textPrimary else BossTheme.colors.textSecondary,
+            fontSize = 13.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

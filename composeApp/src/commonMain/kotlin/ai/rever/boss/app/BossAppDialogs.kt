@@ -32,6 +32,7 @@ import ai.rever.boss.components.plugin.tab_types.fluck.FluckTabInfo
 import ai.rever.boss.components.registery.PanelComponentStoreRegistry
 import ai.rever.boss.components.registery.TabTypeId
 import ai.rever.boss.components.windows.SettingsWindow
+import ai.rever.boss.search.SearchableTool
 import ai.rever.boss.components.wizard.plugin.PluginWizardIntegration
 import ai.rever.boss.components.wizard.plugin.PluginWizardWindow
 import ai.rever.boss.components.wizard.plugin.rememberPluginInstallWizardState
@@ -526,6 +527,20 @@ internal fun BossAppDialogs(state: BossAppState) {
                         RunExecutionService.execute(config, debug = false, windowId)
                     }
                 }
+                state.focusRequester.requestFocus()
+            },
+            tools =
+                state.draggablePanelComponent
+                    .getAllTools()
+                    .map { tool -> SearchableTool(id = tool.id, name = tool.label) },
+            onToolSelect = { toolId ->
+                state.draggablePanelComponent
+                    .getAllTools()
+                    .find { it.id == toolId }
+                    ?.let { tool ->
+                        state.draggablePanelComponent.handleSidebarItemClick(tool)
+                    }
+                state.showGlobalSearchDialog = false
                 state.focusRequester.requestFocus()
             },
             onCommandSelect = { actionId ->

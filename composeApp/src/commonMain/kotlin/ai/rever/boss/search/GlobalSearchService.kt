@@ -113,7 +113,10 @@ object GlobalSearchService {
      * @param query The search query
      * @return List of matching search results, sorted by relevance
      */
-    suspend fun search(query: String): List<SearchResult> {
+    suspend fun search(
+        query: String,
+        tools: List<SearchableTool> = emptyList(),
+    ): List<SearchResult> {
         if (query.isBlank()) {
             _searchResults.value = emptyList()
             return emptyList()
@@ -133,6 +136,7 @@ object GlobalSearchService {
                                 async { searchPluginProviders(query) }, // Includes bookmarks from plugin
                                 async { searchRunConfigs(query) },
                                 async { searchCommands(query) },
+                                async { searchTools(query, tools) },
                             ).awaitAll().flatten()
 
                         // Sort by score
@@ -446,6 +450,42 @@ object GlobalSearchService {
         }
 
         return results
+            .sortedByDescending { it.score }
+            .take(MAX_RESULTS_PER_CATEGORY)
+    }
+
+    /**
+    * Search available Toolbox/sidebar tools using fuzzy matching.
+    */
+    private fun searchTools(
+        query: String,
+        tools: List<SearchableTool>,
+    ): List<SearchResult.ToolResult> {
+        if (tools.isEmpty()) {
+            return emptyList()
+        }
+
+        val queryLower = query.lowercase()
+
+        return tools
+            .mapNotNull { tool ->
+                val match = FuzzyMatcher.match(
+                    queryLower,
+                    tool.name,
+                    tool.name.lowercase(),
+                )
+
+                if (match != null && match.score >= MIN_SCORE) {
+                    SearchResult.ToolResult(
+                        toolId = tool.id,
+                        name = tool.name,
+                        score = match.score,
+                        matchRanges = match.matchRanges,
+                    )
+                } else {
+                    null
+                }
+            }
             .sortedByDescending { it.score }
             .take(MAX_RESULTS_PER_CATEGORY)
     }

@@ -298,6 +298,15 @@ class BossDraggableComponent(
     fun getItemsForSlotUnfiltered(slot: Panel): List<SidebarItem> = itemsBySlot[slot].orEmpty()
 
     /**
+     * All registered sidebar tools, including tools hidden from the sidebar.
+     */
+    fun getAllTools(): List<SidebarItem> =
+        SidebarVisibilitySettings.ALL_SLOT_IDS
+            .map(SidebarVisibilitySettings::panelFor)
+            .flatMap(::getItemsForSlotUnfiltered)
+            .distinctBy { it.id }
+
+    /**
      * The Toolbox's own sidebar item, or null if the plugin is not registered.
      *
      * Unfiltered, on purpose: a user who hid the Toolbox from their sidebar has not asked to lose
