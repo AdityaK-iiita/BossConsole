@@ -1,5 +1,6 @@
 package ai.rever.boss.window
 
+import ai.rever.boss.layout.ChromeDensity
 import ai.rever.boss.plugin.pathutils.BossDirectories
 import ai.rever.boss.utils.SystemUtils
 import ai.rever.boss.utils.logging.BossLogger
@@ -21,6 +22,31 @@ import java.io.File
  * - Synchronous load on init, asynchronous save
  * - Graceful error handling with fallback to defaults
  */
+private const val SMALL_SCREEN_HEIGHT_THRESHOLD_DP = 900
+private const val SMALL_SCREEN_WIDTH_THRESHOLD_DP = 1200
+
+internal data class ChromeScreenProfile(
+    val density: ChromeDensity,
+    val showBottomBar: Boolean,
+    val showLeftStrip: Boolean,
+    val showRightStrip: Boolean,
+)
+
+internal fun defaultChromeScreenProfile(
+    screenWidthDp: Int?,
+    screenHeightDp: Int?,
+): ChromeScreenProfile {
+    val compact = screenHeightDp != null && screenHeightDp < SMALL_SCREEN_HEIGHT_THRESHOLD_DP
+    val narrow = screenWidthDp != null && screenWidthDp < SMALL_SCREEN_WIDTH_THRESHOLD_DP
+
+    return ChromeScreenProfile(
+        density = if (compact) ChromeDensity.COMPACT else ChromeDensity.COMFORTABLE,
+        showBottomBar = !compact,
+        showLeftStrip = !narrow,
+        showRightStrip = !narrow,
+    )
+}
+
 actual object WindowAppearanceSettingsManager {
     private val logger = BossLogger.forComponent("WindowAppearanceSettingsManager")
     private val settingsFile = BossDirectories.resolve("window-appearance-settings.json")
@@ -128,8 +154,20 @@ actual object WindowAppearanceSettingsManager {
         //
         // Stamped current: a fresh file is already on this build's defaults and must not be
         // migrated on the next launch as though it were an older one.
+        val (screenWidthDp, screenHeightDp) =
+            runCatching {
+                val toolkit = java.awt.Toolkit.getDefaultToolkit()
+                toolkit.screenSize.let { it.width to it.height }
+            }.getOrNull() ?: (null to null)
+
+        val profile = defaultChromeScreenProfile(screenWidthDp, screenHeightDp)
+
         return WindowAppearanceSettings(
             showTitleBar = SystemUtils.isMacOS,
+            showBottomBar = profile.showBottomBar,
+            showLeftStrip = profile.showLeftStrip,
+            showRightStrip = profile.showRightStrip,
+            density = profile.density,
             settingsVersion = WindowAppearanceSettings.CURRENT_SETTINGS_VERSION,
         )
     }
