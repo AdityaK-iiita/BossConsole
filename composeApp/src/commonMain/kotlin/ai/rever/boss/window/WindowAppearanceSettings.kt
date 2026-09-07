@@ -1,5 +1,7 @@
 package ai.rever.boss.window
 
+import ai.rever.boss.layout.ChromeDensity
+
 import ai.rever.boss.utils.SystemUtils
 import kotlinx.serialization.Serializable
 
@@ -67,6 +69,7 @@ data class WindowAppearanceSettings(
     val showLeftStrip: Boolean = false,
     /** Whether the right icon strip is on screen. See [showTopBar]. */
     val showRightStrip: Boolean = false,
+    val density: ChromeDensity = ChromeDensity.COMFORTABLE,
     /**
      * How tabs in the main (top) tab bar are sized.
      * Default: SHRINK_TO_FIT (Safari behaviour)

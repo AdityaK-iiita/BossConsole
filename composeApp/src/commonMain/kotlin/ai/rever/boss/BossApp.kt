@@ -9,11 +9,15 @@ import ai.rever.boss.app.BossAppScaffold
 import ai.rever.boss.app.BossAppStartupEffects
 import ai.rever.boss.app.rememberBossAppState
 import ai.rever.boss.app.rememberFocusModeReveal
+import ai.rever.boss.layout.ChromeDimens
+import ai.rever.boss.layout.LocalChromeDimens
 import ai.rever.boss.components.registery.PanelRegistry
 import ai.rever.boss.filetypes.DefaultAppsOfferHost
 import ai.rever.boss.focusmode.FocusModeSettingsManager
 import ai.rever.boss.window.WindowAppearanceSettingsManager
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -59,13 +63,20 @@ fun ComponentContext.BossApp(
     // Focus mode + window appearance settings drive the chrome.
     val focusModeSettings by FocusModeSettingsManager.currentSettings.collectAsState()
     val windowAppearanceSettings by WindowAppearanceSettingsManager.currentSettings.collectAsState()
+    val chromeDimens =
+        remember(windowAppearanceSettings.density) {
+            ChromeDimens.of(windowAppearanceSettings.density)
+        }
     val reveal = rememberFocusModeReveal(focusModeSettings)
 
     // Menu actions can force-reveal sidebars, so they take the reveal state too.
     BossAppMenuActionEffects(state, reveal)
 
     BossTheme {
-        BossAppCompositionLocals(state) {
+        CompositionLocalProvider(
+            LocalChromeDimens provides chromeDimens,
+        ) {
+            BossAppCompositionLocals(state) {
             BossAppScaffold(
                 state = state,
                 reveal = reveal,
@@ -84,6 +95,7 @@ fun ComponentContext.BossApp(
             // like AuthBrandSite. It raises nothing on the windows that are not
             // the first, and nothing at all once the offer has been made.
             DefaultAppsOfferHost(isFirstWindow = state.isFirstWindow)
+            }
         }
     }
 }
