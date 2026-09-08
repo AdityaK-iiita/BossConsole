@@ -22,6 +22,13 @@ enum class ChromeDensity {
     SPACIOUS,
 }
 
+val ChromeDensity.label: String
+    get() = when (this) {
+        ChromeDensity.COMPACT -> "Compact"
+        ChromeDensity.COMFORTABLE -> "Comfortable"
+        ChromeDensity.SPACIOUS -> "Spacious"
+    }
+
 /**
  * The heights and widths of every host chrome bar, resolved from a [ChromeDensity].
  *

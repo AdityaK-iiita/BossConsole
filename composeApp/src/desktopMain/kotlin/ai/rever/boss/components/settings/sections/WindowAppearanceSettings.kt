@@ -9,6 +9,9 @@ import ai.rever.boss.components.settings.shared.SettingsInfoRow
 import ai.rever.boss.components.settings.shared.SettingsSection
 import ai.rever.boss.components.settings.shared.SettingsSlider
 import ai.rever.boss.components.settings.shared.SettingsToggle
+
+import ai.rever.boss.layout.ChromeDensity
+import ai.rever.boss.layout.label
 import ai.rever.boss.plugin.ui.menu.NativeContextMenus
 import ai.rever.boss.window.TabBarPosition
 import ai.rever.boss.window.TabBarVerticalWidthRange
@@ -279,6 +282,34 @@ private fun BarsSection() {
                 },
             )
         }
+
+        SettingsDropdown(
+
+            label = "Density",
+
+            options = ChromeDensity.entries.map { it.label },
+
+            selectedOption = settings.density.label,
+
+            onOptionSelected = { selected ->
+
+                val density = ChromeDensity.entries.first { it.label == selected }
+
+                coroutineScope.launch {
+
+                    WindowAppearanceSettingsManager.updateSettings(
+
+                        settings.copy(density = density),
+
+                    )
+
+                }
+
+            },
+
+            description = "Controls the size of the window chrome bars.",
+
+        )
 
         SettingsInfoRow(
             label = "Applies to",

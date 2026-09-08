@@ -70,6 +70,7 @@ data class WindowAppearanceSettings(
     /** Whether the right icon strip is on screen. See [showTopBar]. */
     val showRightStrip: Boolean = false,
     val density: ChromeDensity = ChromeDensity.COMFORTABLE,
+    val profileAppliedForSize: String? = null,
     /**
      * How tabs in the main (top) tab bar are sized.
      * Default: SHRINK_TO_FIT (Safari behaviour)

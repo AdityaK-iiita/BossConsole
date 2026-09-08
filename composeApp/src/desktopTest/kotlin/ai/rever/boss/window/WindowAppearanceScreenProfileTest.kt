@@ -14,20 +14,32 @@ class WindowAppearanceScreenProfileTest {
         )
 
         assertEquals(ChromeDensity.COMPACT, profile.density)
-        assertEquals(false, profile.showBottomBar)
+        assertEquals(true, profile.showBottomBar)
         assertEquals(true, profile.showLeftStrip)
         assertEquals(true, profile.showRightStrip)
     }
 
     @Test
-    fun `900dp height stays comfortable`() {
+    fun `1000dp height stays comfortable`() {
         val profile = defaultChromeScreenProfile(
             screenWidthDp = 1470,
-            screenHeightDp = 900,
+            screenHeightDp = 1000,
         )
 
         assertEquals(ChromeDensity.COMFORTABLE, profile.density)
         assertEquals(true, profile.showBottomBar)
+    }
+
+    @Test
+    fun `13 inch MacBook Air height gets compact density`() {
+        val profile = defaultChromeScreenProfile(
+            screenWidthDp = 1470,
+            screenHeightDp = 956,
+        )
+        assertEquals(ChromeDensity.COMPACT, profile.density)
+        assertEquals(true, profile.showBottomBar)
+        assertEquals(true, profile.showLeftStrip)
+        assertEquals(true, profile.showRightStrip)
     }
 
     @Test

@@ -419,6 +419,7 @@ private fun windowAppearanceEntries() =
         setting("Show Bottom Bar", "Bars", "chrome", "window", "status")
         setting("Show Left Strip", "Bars", "chrome", "sidebar")
         setting("Show Right Strip", "Bars", "chrome", "sidebar")
+        setting("Density", "Bars", "compact", "comfortable", "spacious", "chrome", "scale", "size")
         setting("Applies to", "Bars")
         group("Menus")
         setting("Native Context Menus", "Menus", "right click", "macos", "nsmenu")

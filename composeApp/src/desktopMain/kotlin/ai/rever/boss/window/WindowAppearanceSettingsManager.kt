@@ -22,7 +22,7 @@ import java.io.File
  * - Synchronous load on init, asynchronous save
  * - Graceful error handling with fallback to defaults
  */
-private const val SMALL_SCREEN_HEIGHT_THRESHOLD_DP = 900
+private const val SMALL_SCREEN_HEIGHT_THRESHOLD_DP = 1000
 private const val SMALL_SCREEN_WIDTH_THRESHOLD_DP = 1200
 
 internal data class ChromeScreenProfile(
@@ -41,7 +41,7 @@ internal fun defaultChromeScreenProfile(
 
     return ChromeScreenProfile(
         density = if (compact) ChromeDensity.COMPACT else ChromeDensity.COMFORTABLE,
-        showBottomBar = !compact,
+        showBottomBar = true,
         showLeftStrip = !narrow,
         showRightStrip = !narrow,
     )
@@ -156,11 +156,18 @@ actual object WindowAppearanceSettingsManager {
         // migrated on the next launch as though it were an older one.
         val (screenWidthDp, screenHeightDp) =
             runCatching {
-                val toolkit = java.awt.Toolkit.getDefaultToolkit()
-                toolkit.screenSize.let { it.width to it.height }
+                val screenSize = java.awt.Toolkit.getDefaultToolkit().screenSize
+                screenSize.width to screenSize.height
             }.getOrNull() ?: (null to null)
 
         val profile = defaultChromeScreenProfile(screenWidthDp, screenHeightDp)
+
+        val profileAppliedForSize =
+            if (screenWidthDp != null && screenHeightDp != null) {
+                "${screenWidthDp}x${screenHeightDp}"
+            } else {
+                "unknown"
+            }
 
         return WindowAppearanceSettings(
             showTitleBar = SystemUtils.isMacOS,
@@ -168,6 +175,7 @@ actual object WindowAppearanceSettingsManager {
             showLeftStrip = profile.showLeftStrip,
             showRightStrip = profile.showRightStrip,
             density = profile.density,
+            profileAppliedForSize = profileAppliedForSize,
             settingsVersion = WindowAppearanceSettings.CURRENT_SETTINGS_VERSION,
         )
     }
