@@ -1,6 +1,6 @@
 -- Exercise the actual standing audit, including missing-signature degradation.
 begin;
-select plan(5);
+select plan(8);
 create temporary table audit_snapshot as
 \ir ../audit/identity_disclosure_audit.sql
 select is(finding, 'HEALTHY', "check") from audit_snapshot
@@ -13,5 +13,24 @@ create temporary table audit_missing as
 \ir ../audit/identity_disclosure_audit.sql
 select ok(finding like '%MISSING SIGNATURE%', 'missing crypto signature is reported without aborting audit')
 from audit_missing where "check" = 'CHECK 5: client access to internal-only routines';
+-- Advisory checks still need behavior tests, without mistaking a textual
+-- heuristic for a complete authorization proof across existing app functions.
+create table public.pgtap_identity_no_rls(email text);
+grant select on public.pgtap_identity_no_rls to authenticated;
+create table public.pgtap_identity_open_rls(email text);
+alter table public.pgtap_identity_open_rls enable row level security;
+grant select on public.pgtap_identity_open_rls to authenticated;
+create policy open_read on public.pgtap_identity_open_rls for select to authenticated using (true);
+create function public.pgtap_identity_reader() returns text language sql security definer
+as 'select email::text from auth.users limit 1';
+grant execute on function public.pgtap_identity_reader() to authenticated;
+create temporary table audit_advisory as
+\ir ../audit/identity_disclosure_audit.sql
+select ok(finding like '%pgtap_identity_reader%', 'advisory detects ungated identity reader')
+from audit_advisory where "check" = 'CHECK 2: identity reachable with no gate';
+select ok(finding like '%pgtap_identity_open_rls%', 'advisory detects unrestricted identity policy')
+from audit_advisory where "check" = 'CHECK 3: identity-bearing relation readable by all';
+select ok(finding like '%pgtap_identity_no_rls%', 'advisory detects identity table without RLS')
+from audit_advisory where "check" = 'CHECK 3b: identity-bearing table without RLS';
 select * from finish();
 rollback;

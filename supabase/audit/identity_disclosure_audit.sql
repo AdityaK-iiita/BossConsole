@@ -3,7 +3,9 @@
 -- a candidate for investigation with the object named beside it. Checks 2 and
 -- 3 are heuristics, not proof of authorization: comments can match gate names,
 -- indirect calls can hide identity access, and nonliteral RLS predicates and
--- views require review. pgTAP tests enforce the concrete ACL/visibility rules.
+-- views require review. CI hard-gates checks 1, 1b, 4 and 5 and separately
+-- tests org visibility. Checks 2, 3 and 3b are advisory candidates; CI tests
+-- their detection on fixtures, not HEALTHY on every existing identity surface.
 --
 -- This exists because "we fixed the leak" is not a durable claim. On 2026-09-08
 -- the Arcade published its player roster to unauthenticated callers,

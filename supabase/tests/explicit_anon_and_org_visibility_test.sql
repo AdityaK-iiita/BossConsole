@@ -66,6 +66,21 @@ create procedure public.pgtap_anon_procedure() language sql as 'select 1';
 select ok(not has_function_privilege('anon', 'public.pgtap_anon_procedure()', 'EXECUTE'),
     'procedures receive the same guard');
 
+-- SET membership allows the fixture creator to be entered, but INHERIT FALSE
+-- means the guard's postgres definer cannot act as that routine's owner.
+create role pgtap_acl_outsider;
+grant pgtap_acl_outsider to postgres with inherit false, set true;
+grant usage, create on schema public to pgtap_acl_outsider;
+grant usage on schema extensions to pgtap_acl_outsider;
+select ok(not pg_has_role('postgres', 'pgtap_acl_outsider', 'USAGE'),
+    'guard definer does not inherit the outsider owner privileges');
+set local role pgtap_acl_outsider;
+select throws_ok('create function public.pgtap_unrevokable() returns integer language sql as ''select 1''',
+    '42501', null, 'DDL fails when guard cannot revoke the creator ACL');
+reset role;
+select ok(to_regprocedure('public.pgtap_unrevokable()') is null,
+    'failed DDL leaves no anonymously executable routine');
+
 insert into auth.users (id, email, email_confirmed_at, raw_user_meta_data) values
     ('42300000-0000-0000-0000-000000000001', 'actor@pgtap.test', now(), '{}'),
     ('42300000-0000-0000-0000-000000000002', 'mate@pgtap.test', now(), '{"display_name":"Visible Mate"}'),
@@ -126,10 +141,13 @@ select is((select count(*) from public.org_visible_users()), 1::bigint,
 select vault.create_secret('cGd0YXAtdGVzdC1rZXktMzItYnl0ZXMtYWVzLW9r',
     'master_encryption_key', 'transaction-local fixture');
 set local role authenticated;
-select is(public.create_secret('pgt423.example','actor','fixture-password')->>'success',
+select is(public.create_secret('pgt423.example','actor','fixture-password', p_recovery_codes=>array['fixture-recovery'])->>'success',
     'true', 'signed-in create RPC still encrypts');
 select is((select password from public.get_user_secrets(50,0)
     where website='pgt423.example'), 'fixture-password', 'signed-in read RPC still decrypts');
+select is((select metadata->'recovery_codes' from public.get_user_secrets(50,0)
+    where website='pgt423.example'), '["fixture-recovery"]'::jsonb,
+    'signed-in secret RPC still decrypts recovery codes');
 reset role;
 select * from finish();
 rollback;
