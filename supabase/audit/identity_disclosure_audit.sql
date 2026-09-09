@@ -83,7 +83,7 @@ from (
   from pg_proc p
   join pg_namespace n on n.oid = p.pronamespace
   where n.nspname = 'public'
-    and p.prokind = 'f'
+    and p.prokind in ('f', 'p')
     and p.prorettype not in ('trigger'::regtype, 'event_trigger'::regtype)
 ) t
 where t.def ~* '(auth\.users|raw_user_meta_data|user_display_name|arcade_display_name)'
@@ -137,6 +137,19 @@ where pol.schemaname = 'public'
       and a.attnum > 0 and not a.attisdropped
       and a.attname ~* '(email|display_name|full_name)'
   )
+
+union all
+
+-- Missing RLS has no pg_policies row, so examine identity-bearing tables too.
+select 'CHECK 3b: identity-bearing table without RLS',
+       coalesce(string_agg(c.oid::regclass::text, ', ' order by c.oid::regclass::text), 'HEALTHY')
+from pg_class c join pg_namespace n on n.oid=c.relnamespace
+where n.nspname='public' and c.relkind in ('r', 'p') and not c.relrowsecurity
+  and (has_table_privilege('anon', c.oid, 'SELECT')
+       or has_table_privilege('authenticated', c.oid, 'SELECT'))
+  and exists (select 1 from pg_attribute a where a.attrelid=c.oid
+              and a.attnum>0 and not a.attisdropped
+              and a.attname ~* '(email|display_name|full_name)')
 
 union all
 

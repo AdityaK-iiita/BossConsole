@@ -1,7 +1,7 @@
 -- The broker schemas are operated outside this repository. Model their exact
 -- encrypted-column contract locally; no production keys or rows are used.
 begin;
-select plan(6);
+select plan(8);
 create table public.qbo_token_state (
     id integer primary key, client_id_enc text, client_secret_enc text,
     refresh_token_enc text, access_token_enc text);
@@ -9,6 +9,11 @@ create table public.google_token_state (
     id integer primary key, private_key_enc text, access_token_enc text);
 select vault.create_secret(encode(extensions.gen_random_bytes(32), 'hex'),
     'master_encryption_key', 'transaction-local rotation fixture');
+insert into auth.users(id, email, email_confirmed_at) values
+    ('42399999-0000-0000-0000-000000000001', 'rotation@pgtap.test', now());
+select set_config('request.jwt.claims',
+    '{"sub":"42399999-0000-0000-0000-000000000001","role":"authenticated"}', true);
+select public.create_secret('rotation.example', 'fixture', 'core-fixture');
 insert into public.qbo_token_state values (1, public.encrypt_text('client'),
     public.encrypt_text('secret'), public.encrypt_text('refresh'), public.encrypt_text('access'));
 insert into public.google_token_state values (1, public.encrypt_text('pem'), public.encrypt_text('token'));
@@ -20,6 +25,8 @@ select is((select public.decrypt_text(client_secret_enc) from public.qbo_token_s
     'secret', 'QBO value survives rotation');
 select is((select public.decrypt_text(private_key_enc) from public.google_token_state where id=1),
     'pem', 'Google key survives rotation');
+select is((select password from public.get_user_secrets(50,0) where website='rotation.example'),
+    'core-fixture', 'core secret survives rotation from documented hex key');
 -- A normal second invocation starts a fresh transaction and has no rot_fp.
 drop table pg_temp.rot_fp;
 \ir ../ops/rotate_master_encryption_key.sql
@@ -33,5 +40,7 @@ drop table pg_temp.rot_fp;
 \ir ../ops/rotate_master_encryption_key.sql
 select is((select count(*) from vault.secrets where name like 'master_encryption_key_retired_%'),
     3::bigint, 'core-only deployment rotates without optional brokers');
+select is((select password from public.get_user_secrets(50,0) where website='rotation.example'),
+    'core-fixture', 'core secret survives without optional brokers');
 select * from finish();
 rollback;
