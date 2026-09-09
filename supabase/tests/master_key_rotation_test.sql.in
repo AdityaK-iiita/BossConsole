@@ -2,6 +2,7 @@
 -- encrypted-column contract locally; no production keys or rows are used.
 begin;
 select plan(10);
+set local datestyle = 'ISO, YMD';
 create table public.qbo_token_state (
     id integer primary key, client_id_enc text, client_secret_enc text,
     refresh_token_enc text, access_token_enc text);
@@ -18,7 +19,8 @@ insert into public.qbo_token_state values (1, public.encrypt_text('client'),
     public.encrypt_text('secret'), public.encrypt_text('refresh'), public.encrypt_text('access'));
 insert into public.google_token_state values (1, public.encrypt_text('pem'), public.encrypt_text('token'));
 create view public.pgtap_broker_view as select client_id_enc from public.qbo_token_state;
-create temp table rotation_initial_key as select public.get_encryption_key() as value;
+create temp table rotation_initial_key as
+select public.get_encryption_key() as value, clock_timestamp() as started_at;
 \ir ../ops/rotate_master_encryption_key.sql
 select isnt(public.get_encryption_key(), (select value from rotation_initial_key),
     'rotation replaces the master key');
@@ -29,7 +31,8 @@ select is((select public.decrypt_text(private_key_enc) from public.google_token_
 select is((select password from public.get_user_secrets(50,0) where website='rotation.example'),
     'core-fixture', 'core secret survives rotation from documented hex key');
 select ok(to_regclass('pg_temp.rot_fp') is null, 'rotation removes temporary fingerprints itself');
-select ok((select description like 'Master key for encrypting user secrets. Rotated ' || current_date::text || ' %'
+select ok((select substring(description from '^Master key for encrypting user secrets[.] Rotated (.+)[.]$')::timestamptz
+    between (select started_at from rotation_initial_key) and clock_timestamp()
     from vault.secrets where name = 'master_encryption_key'), 'live key description records actual rotation time');
 -- Repeat inside this same transaction, with no test-side cleanup.
 \ir ../ops/rotate_master_encryption_key.sql

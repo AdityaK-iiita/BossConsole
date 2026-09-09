@@ -161,7 +161,9 @@ select 'CHECK 3c: identity-bearing view without security_invoker',
        coalesce(string_agg(c.oid::regclass::text, ', ' order by c.oid::regclass::text), 'HEALTHY')
 from pg_class c join pg_namespace n on n.oid = c.relnamespace
 where n.nspname = 'public' and c.relkind = 'v'
-  and not coalesce(c.reloptions @> array['security_invoker=true'], false)
+  and not coalesce((select option_value::boolean
+                    from pg_catalog.pg_options_to_table(c.reloptions)
+                    where option_name = 'security_invoker'), false)
   and (has_table_privilege('anon', c.oid, 'SELECT')
        or has_table_privilege('authenticated', c.oid, 'SELECT'))
   and exists (select 1 from pg_attribute a where a.attrelid = c.oid

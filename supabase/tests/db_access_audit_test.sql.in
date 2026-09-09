@@ -1,6 +1,6 @@
 -- Exercise the actual standing audit, including missing-signature degradation.
 begin;
-select plan(10);
+select plan(11);
 create temporary table audit_snapshot as
 \ir ../audit/identity_disclosure_audit.sql
 select is(finding, 'HEALTHY', "check") from audit_snapshot
@@ -27,7 +27,10 @@ grant execute on function public.pgtap_identity_reader() to authenticated;
 create view public.pgtap_identity_definer as select email from public.pgtap_identity_no_rls;
 create view public.pgtap_identity_invoker with (security_invoker = true) as
 select email from public.pgtap_identity_no_rls;
-grant select on public.pgtap_identity_definer, public.pgtap_identity_invoker to authenticated;
+create view public.pgtap_identity_on with (security_invoker = 'on') as
+select email from public.pgtap_identity_no_rls;
+grant select on public.pgtap_identity_definer, public.pgtap_identity_invoker,
+    public.pgtap_identity_on to authenticated;
 create temporary table audit_advisory as
 \ir ../audit/identity_disclosure_audit.sql
 select ok(finding like '%pgtap_identity_reader%', 'advisory detects ungated identity reader')
@@ -39,6 +42,8 @@ from audit_advisory where "check" = 'CHECK 3b: identity-bearing table without RL
 select ok(finding like '%pgtap_identity_definer%', 'advisory detects identity definer view')
 from audit_advisory where "check" = 'CHECK 3c: identity-bearing view without security_invoker';
 select ok(finding not like '%pgtap_identity_invoker%', 'advisory excludes invoker view')
+from audit_advisory where "check" = 'CHECK 3c: identity-bearing view without security_invoker';
+select ok(finding not like '%pgtap_identity_on%', 'advisory accepts on spelling for invoker view')
 from audit_advisory where "check" = 'CHECK 3c: identity-bearing view without security_invoker';
 select * from finish();
 rollback;

@@ -27,7 +27,8 @@ begin
       -- postcondition, including permissions inherited through another role.
       if pg_catalog.has_function_privilege('anon', obj.objid, 'EXECUTE') then
         raise exception using errcode = '42501',
-          message = format('Anonymous EXECUTE remains on %s', obj.object_identity);
+          message = format('Anonymous EXECUTE remains on %s', obj.object_identity),
+          hint = 'Review routine ownership and inherited anon grants. The guard must be authorized to revoke access; do not bypass it for extension routines in public.';
       end if;
     end if;
   end loop;
