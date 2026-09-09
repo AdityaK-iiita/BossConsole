@@ -29,34 +29,43 @@ with intentionally_anon as (
   -- helpers are invoked by roles that are not `authenticated`. Adding a name
   -- here is a deliberate decision to publish it; do not add one to silence the
   -- audit.
-  -- Must stay in step with the `keep` list in
+  -- Exact signatures refine the historical name-only `keep` snapshot in
   -- migrations/20260908030000_revoke_remaining_anon_execute.sql, which explains
   -- what breaks for each. In short: the plugin store is browsable before
   -- sign-in; authorize / is_user_admin / can_view_plugin_row are called from
   -- RLS policies on anon-readable tables, and a policy expression runs as the
   -- QUERYING role; custom_access_token_hook is invoked on every token issuance.
-  select unnest(array[
-    'search_plugins', 'get_plugin_with_stats', 'get_plugin_versions',
-    'get_popular_tags', 'record_plugin_download', 'upsert_plugin_rating',
-    'can_view_plugin_row', 'authorize', 'is_user_admin',
-    'custom_access_token_hook'
-  ]) as proname
+  select to_regprocedure(signature) as oid
+  from unnest(array[
+    'public.search_plugins(text,text,text[],numeric,boolean,integer,integer,text)',
+    'public.get_plugin_with_stats(text)', 'public.get_plugin_versions(text)',
+    'public.get_popular_tags(integer)', 'public.record_plugin_download(uuid,uuid,uuid,text)',
+    'public.upsert_plugin_rating(uuid,uuid,integer,text)',
+    'public.can_view_plugin_row(text,uuid,uuid,boolean)',
+    'public.authorize(text)', 'public.is_user_admin(uuid)',
+    'public.custom_access_token_hook(jsonb)'
+  ]) signature
 ),
 anon_callable as (
   select distinct p.proname, p.oid
   from pg_proc p
   join pg_namespace n on n.oid = p.pronamespace
-  cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
-  left join pg_roles r on r.oid = a.grantee
   where n.nspname = 'public'
     and p.prokind in ('f', 'p')
-    and a.privilege_type = 'EXECUTE'
-    and (a.grantee = 0 or r.rolname = 'anon')
+    and has_function_privilege('anon', p.oid, 'EXECUTE')
 )
 select 'CHECK 1: callable without an account' as check,
-       coalesce(nullif(string_agg(ac.proname, ', ' order by ac.proname), ''), 'HEALTHY') as finding
+       coalesce(nullif(string_agg(ac.oid::regprocedure::text, ', ' order by ac.oid::regprocedure::text), ''), 'HEALTHY') as finding
 from anon_callable ac
-where ac.proname not in (select proname from intentionally_anon)
+where not exists (select 1 from intentionally_anon i where i.oid = ac.oid)
+
+union all
+
+select 'CHECK 1b: expected anonymous signature missing or revoked',
+       case when exists (select 1 from intentionally_anon
+                         where oid is null or not has_function_privilege('anon', oid, 'EXECUTE'))
+            then 'EXPECTED ANONYMOUS ACCESS MISSING - review signature allowlist'
+            else 'HEALTHY' end
 
 union all
 
