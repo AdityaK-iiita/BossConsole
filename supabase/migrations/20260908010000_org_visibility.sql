@@ -38,8 +38,8 @@ $$;
 -- paths need: as a per-row predicate the same rule was pushed below a
 -- DISTINCT ON and evaluated once per underlying row - 2.7s on a 45-player
 -- leaderboard over 29k score rows, versus 37ms for the set. Use the set in
--- policies and read queries; use a boolean wrapper only for single-target
--- write-path checks.
+-- policies and read queries. This migration does not change write-path
+-- authorization; direct sharing to a known user UUID retains its contract.
 --
 -- Signed out yields the empty set, via an explicit `is not null` arm rather
 -- than a NULL comparison happening to match nothing. That distinction matters:

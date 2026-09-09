@@ -4,7 +4,7 @@
 -- 3 are heuristics, not proof of authorization: comments can match gate names,
 -- indirect calls can hide identity access, and nonliteral RLS predicates and
 -- views require review. CI hard-gates checks 1, 1b, 4 and 5 and separately
--- tests org visibility. Checks 2, 3 and 3b are advisory candidates; CI tests
+-- tests org visibility. Checks 2, 3, 3b and 3c are advisory candidates; CI tests
 -- their detection on fixtures, not HEALTHY on every existing identity surface.
 --
 -- This exists because "we fixed the leak" is not a durable claim. On 2026-09-08
@@ -155,9 +155,27 @@ where n.nspname='public' and c.relkind in ('r', 'p') and not c.relrowsecurity
 
 union all
 
+-- Definer views can bypass underlying RLS. Column-name matching is advisory;
+-- security_invoker does not prove the underlying policy is correctly scoped.
+select 'CHECK 3c: identity-bearing view without security_invoker',
+       coalesce(string_agg(c.oid::regclass::text, ', ' order by c.oid::regclass::text), 'HEALTHY')
+from pg_class c join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'public' and c.relkind = 'v'
+  and not coalesce(c.reloptions @> array['security_invoker=true'], false)
+  and (has_table_privilege('anon', c.oid, 'SELECT')
+       or has_table_privilege('authenticated', c.oid, 'SELECT'))
+  and exists (select 1 from pg_attribute a where a.attrelid = c.oid
+              and a.attnum > 0 and not a.attisdropped
+              and a.attname ~* '(email|display_name|full_name)')
+
+union all
+
 -- ---------------------------------------------------------------------------
 -- CHECK 4: the guard from 20260908000000 is still installed and enabled.
 -- Without it, checks 1 and 2 go stale the moment someone adds a function.
+-- This is a structural check. CI separately exercises guard behavior, including
+-- warning-only REVOKE, in explicit_anon_and_org_visibility_test.sql. Matching
+-- function-body text here would not prove that its postcondition executes.
 -- ---------------------------------------------------------------------------
 select 'CHECK 4: explicit-anon-grant event trigger',
        coalesce(

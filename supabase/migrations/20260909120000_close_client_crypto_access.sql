@@ -1,3 +1,4 @@
+-- Guard body superseded by 20260909140000_verify_anon_revocation.sql.
 -- Follow-up to the deployed anonymous-grant sweep. Signup is open, so
 -- authenticated is not a trust boundary for key material or decryption oracles.
 -- These are called inside owner-run secret RPCs; clients use those gated RPCs.

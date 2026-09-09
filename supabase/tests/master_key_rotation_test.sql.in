@@ -1,7 +1,7 @@
 -- The broker schemas are operated outside this repository. Model their exact
 -- encrypted-column contract locally; no production keys or rows are used.
 begin;
-select plan(9);
+select plan(10);
 create table public.qbo_token_state (
     id integer primary key, client_id_enc text, client_secret_enc text,
     refresh_token_enc text, access_token_enc text);
@@ -29,6 +29,8 @@ select is((select public.decrypt_text(private_key_enc) from public.google_token_
 select is((select password from public.get_user_secrets(50,0) where website='rotation.example'),
     'core-fixture', 'core secret survives rotation from documented hex key');
 select ok(to_regclass('pg_temp.rot_fp') is null, 'rotation removes temporary fingerprints itself');
+select ok((select description like 'Master key for encrypting user secrets. Rotated ' || current_date::text || ' %'
+    from vault.secrets where name = 'master_encryption_key'), 'live key description records actual rotation time');
 -- Repeat inside this same transaction, with no test-side cleanup.
 \ir ../ops/rotate_master_encryption_key.sql
 select is((select count(*) from vault.secrets where name like 'master_encryption_key_retired_%'),

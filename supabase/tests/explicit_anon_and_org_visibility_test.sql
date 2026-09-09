@@ -2,7 +2,7 @@
 begin;
 select no_plan();
 
-select ok(not has_function_privilege(r, f, 'EXECUTE'), r || ' cannot execute ' || f)
+select ok(to_regprocedure(f) is not null and not has_function_privilege(r, to_regprocedure(f), 'EXECUTE'), r || ' cannot execute ' || f)
 from unnest(array['anon', 'authenticated']) r
 cross join unnest(array['public.get_encryption_key()', 'public.encrypt_text(text)',
     'public.decrypt_text(text)', 'public.safe_decrypt_recovery_codes(text)',
@@ -18,18 +18,18 @@ select throws_ok($$select public.decrypt_text('anything')$$, '42501',
 reset role;
 
 -- The deliberately public store/RLS signatures must remain callable.
-select ok(has_function_privilege('anon', f, 'EXECUTE'), 'anonymous compatibility: ' || f)
+select ok(coalesce(has_function_privilege('anon', to_regprocedure(f), 'EXECUTE'), false), 'anonymous compatibility: ' || f)
 from unnest(array[
     'public.search_plugins(text,text,text[],numeric,boolean,integer,integer,text)',
     'public.get_plugin_with_stats(text)', 'public.get_plugin_versions(text)',
     'public.get_popular_tags(integer)',
     'public.can_view_plugin_row(text,uuid,uuid,boolean)',
     'public.authorize(text)', 'public.is_user_admin(uuid)']) f;
-select ok(has_function_privilege('service_role', f, 'EXECUTE'), 'edge mutator compatibility: ' || f)
+select ok(coalesce(has_function_privilege('service_role', to_regprocedure(f), 'EXECUTE'), false), 'edge mutator compatibility: ' || f)
 from unnest(array['public.upsert_plugin_rating(uuid,uuid,integer,text)',
                   'public.record_plugin_download(uuid,uuid,uuid,text)']) f;
-select ok(has_function_privilege('supabase_auth_admin',
-    'public.custom_access_token_hook(jsonb)', 'EXECUTE'), 'token issuer retains hook access');
+select ok(coalesce(has_function_privilege('supabase_auth_admin',
+    to_regprocedure('public.custom_access_token_hook(jsonb)'), 'EXECUTE'), false), 'token issuer retains hook access');
 
 -- Replacement intentionally requires a new explicit grant, documented by behavior.
 create function public.pgtap_anon_guard() returns integer language sql as 'select 1';

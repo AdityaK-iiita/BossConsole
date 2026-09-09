@@ -80,14 +80,15 @@ begin
     raise exception 'TOTP encryption is installed; extend rotation coverage before running';
   end if;
   if exists (
-    select 1 from information_schema.columns c
-    join pg_catalog.pg_namespace ns on ns.nspname = c.table_schema
-    join pg_catalog.pg_class rel on rel.relnamespace = ns.oid and rel.relname = c.table_name
-    where c.table_schema = 'public' and c.column_name ~ '(_enc$|_encrypted$)'
+    select 1 from pg_catalog.pg_attribute a
+    join pg_catalog.pg_class rel on rel.oid = a.attrelid
+    join pg_catalog.pg_namespace ns on ns.oid = rel.relnamespace
+    where ns.nspname = 'public' and a.attname ~ '(_enc$|_encrypted$)'
+      and a.attnum > 0 and not a.attisdropped
       and rel.relkind in ('r', 'p')
       and not exists (
         select 1 from generate_subscripts(cols, 1) j
-        where cols[j][1] = c.table_name and cols[j][2] = c.column_name)
+        where cols[j][1] = rel.relname and cols[j][2] = a.attname)
   ) then
     raise exception 'Unmapped encrypted column; extend rotation coverage before running';
   end if;
@@ -134,7 +135,7 @@ begin
 
   -- 4. Swap the live key.
   perform vault.update_secret(secret_id, new_key, 'master_encryption_key',
-    'Master key for encrypting user secrets. Rotated 2026-09-09 after the previous value was found to be retrievable by unauthenticated callers.');
+    'Master key for encrypting user secrets. Rotated ' || pg_catalog.clock_timestamp()::text || '.');
 
   -- 5. Verify through public.decrypt_text, which re-reads the vault - so this
   --    proves the swap took effect AND that every plaintext survived.

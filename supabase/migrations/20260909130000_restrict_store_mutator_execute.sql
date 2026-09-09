@@ -1,3 +1,4 @@
+-- Supersedes the mutator/hook exceptions documented in 20260908030000.
 -- Browse does not require direct client access to identity-taking mutators.
 -- plugin-store/index.ts injects a service-role client, and routes/rating.ts
 -- authenticates the caller before services/ratings.ts supplies p_user_id.
