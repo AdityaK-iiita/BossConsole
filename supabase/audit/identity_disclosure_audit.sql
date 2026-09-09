@@ -154,11 +154,13 @@ union all
 
 -- Explicit grants to signed-in accounts must not reopen the key or an oracle.
 select 'CHECK 5: client access to internal-only routines',
-       coalesce(string_agg(signature || ' (' || role_name || ')', ', '), 'HEALTHY')
+       coalesce(string_agg(signature || ' (' || role_name || ')' ||
+           case when to_regprocedure(signature) is null then ' MISSING SIGNATURE' else '' end, ', '), 'HEALTHY')
 from unnest(array['public.get_encryption_key()', 'public.encrypt_text(text)',
                   'public.decrypt_text(text)', 'public.safe_decrypt_recovery_codes(text)',
                   'public.upsert_plugin_rating(uuid,uuid,integer,text)',
                   'public.record_plugin_download(uuid,uuid,uuid,text)',
                   'public.custom_access_token_hook(jsonb)']) signature
 cross join unnest(array['anon', 'authenticated']) role_name
-where has_function_privilege(role_name, signature, 'EXECUTE');
+where to_regprocedure(signature) is null
+   or has_function_privilege(role_name, to_regprocedure(signature), 'EXECUTE');

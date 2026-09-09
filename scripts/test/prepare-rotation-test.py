@@ -11,6 +11,6 @@ template = root / "supabase/tests/master_key_rotation_test.sql.in"
 operation = root / "supabase/ops/rotate_master_encryption_key.sql"
 marker = r"\ir ../ops/rotate_master_encryption_key.sql"
 source = template.read_text()
-if source.count(marker) != 2:
-    raise SystemExit("Expected two rotation invocations in the regression template")
+if source.count(marker) != 3:
+    raise SystemExit("Expected three rotation invocations in the regression template")
 template.with_suffix("").write_text(source.replace(marker, operation.read_text()))

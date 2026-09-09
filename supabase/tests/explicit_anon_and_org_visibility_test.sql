@@ -70,6 +70,19 @@ insert into auth.users (id, email, email_confirmed_at, raw_user_meta_data) value
     ('42300000-0000-0000-0000-000000000001', 'actor@pgtap.test', now(), '{}'),
     ('42300000-0000-0000-0000-000000000002', 'mate@pgtap.test', now(), '{"display_name":"Visible Mate"}'),
     ('42300000-0000-0000-0000-000000000003', 'outsider@pgtap.test', now(), '{}');
+-- Use invite_only to isolate the is_system arm from the open-org arm. The
+-- fixture really has co-members; dropping the system predicate must fail.
+select public.create_organisation_internal(p_slug=>'pgt423system', p_name=>'System test',
+    p_owner_id=>'42300000-0000-0000-0000-000000000001',
+    p_visibility=>'public', p_join_policy=>'invite_only', p_is_system=>true);
+insert into public.organisation_members (org_id, user_id, status, joined_at, join_source)
+select o.id, u.id, 'active', now(), 'admin'
+from public.organisations o cross join auth.users u
+where o.slug='pgt423system'
+  and u.id in ('42300000-0000-0000-0000-000000000002', '42300000-0000-0000-0000-000000000003');
+select is((select count(*) from public.organisation_members m
+           join public.organisations o on o.id=m.org_id where o.slug='pgt423system'),
+    3::bigint, 'system fixture has three actual co-members');
 select set_config('request.jwt.claims', '{}', true);
 select is((select count(*) from public.org_visible_users()), 0::bigint,
     'signed-out visibility is empty');
@@ -77,9 +90,9 @@ select set_config('request.jwt.claims',
     '{"sub":"42300000-0000-0000-0000-000000000001","role":"authenticated"}', true);
 set local role authenticated;
 select is((select count(*) from public.org_visible_users()), 1::bigint,
-    'system boss membership exposes only self');
+    'system invite-only membership exposes only self');
 select is(public.list_shareable_recipients()->'data', '[]'::jsonb,
-    'boss-only caller cannot enumerate recipients');
+    'system-only caller cannot enumerate recipients');
 reset role;
 select public.create_organisation_internal(p_slug=>'pgt423', p_name=>'Visibility test',
     p_owner_id=>'42300000-0000-0000-0000-000000000001',

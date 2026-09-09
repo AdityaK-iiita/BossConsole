@@ -10,7 +10,9 @@ revoke all on function public.safe_decrypt_recovery_codes(text) from public, ano
 grant execute on function public.org_is_vetted(uuid) to authenticated;
 
 -- Preserve existing effective signed-in/server access before removing PUBLIC.
--- Do not grant a role that could not execute the routine beforehand. Deliberate
+-- This includes access derived only from PUBLIC, including at CREATE time;
+-- new sensitive helpers must explicitly revoke authenticated as well as anon.
+-- Replacements with an already restricted ACL do not gain that role. Deliberate
 -- anonymous grants must be re-issued after CREATE OR REPLACE as well as CREATE.
 -- Failure must abort the DDL, not leave an exposed routine behind a warning.
 create or replace function public.enforce_explicit_anon_grants()

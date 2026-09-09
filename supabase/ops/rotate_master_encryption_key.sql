@@ -36,6 +36,7 @@ declare
   new_key    text := encode(extensions.gen_random_bytes(32), 'base64');
   secret_id  uuid;
   backup_name text;
+  table_name text;
   cols text[][] := array[
     array['secrets','password_encrypted','id'],
     array['secret_metadata','recovery_codes_encrypted','id'],
@@ -53,8 +54,21 @@ begin
   -- vault.secrets: writes are exposed only through vault.update_secret.
   -- Coordinate any other key-management operation outside this procedure.
   perform pg_catalog.pg_advisory_xact_lock(423, 1200);
-  lock table public.google_token_state, public.qbo_token_state,
-    public.secret_metadata, public.secrets in access exclusive mode;
+  -- Core vault tables are required. Brokers are optional deployments; absent
+  -- tables contain nothing to rotate. Existing broker tables keep the exact
+  -- documented column contract and an unexpected schema still fails closed.
+  if to_regclass('public.secrets') is null or to_regclass('public.secret_metadata') is null then
+    raise exception 'Core secret tables are missing';
+  end if;
+  select array_agg(array[cols[j][1], cols[j][2], cols[j][3]] order by j)
+    into cols
+    from generate_subscripts(cols, 1) j
+    where to_regclass(format('public.%I', cols[j][1])) is not null;
+  for table_name in
+    select distinct cols[j][1] from generate_subscripts(cols, 1) j order by 1
+  loop
+    execute format('lock table public.%I in access exclusive mode', table_name);
+  end loop;
   select id into strict secret_id from vault.secrets
     where name = 'master_encryption_key';
   old_key := public.get_encryption_key();
@@ -74,12 +88,9 @@ begin
     raise exception 'Unmapped encrypted column; extend rotation coverage before running';
   end if;
 
-  -- pgcrypto truncates a key to the cipher key size, so a different length
-  -- would silently change which bytes are the key.
-  if length(new_key) <> length(old_key) then
-    raise exception 'key shape mismatch: new % vs old %', length(new_key), length(old_key);
-  end if;
-
+  -- The old key may be the documented hex string or a deployed base64 key.
+  -- Decrypt with its original bytes, then encrypt with the new key's bytes;
+  -- equal textual lengths are not a cryptographic requirement.
 
   -- 1. Fingerprint every row's PLAINTEXT under the old key. md5 only.
   create temp table rot_fp(tbl text, col text, pk text, fp text) on commit drop;

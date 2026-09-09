@@ -1,13 +1,13 @@
 -- The broker schemas are operated outside this repository. Model their exact
 -- encrypted-column contract locally; no production keys or rows are used.
 begin;
-select plan(5);
+select plan(6);
 create table public.qbo_token_state (
     id integer primary key, client_id_enc text, client_secret_enc text,
     refresh_token_enc text, access_token_enc text);
 create table public.google_token_state (
     id integer primary key, private_key_enc text, access_token_enc text);
-select vault.create_secret(encode(extensions.gen_random_bytes(32), 'base64'),
+select vault.create_secret(encode(extensions.gen_random_bytes(32), 'hex'),
     'master_encryption_key', 'transaction-local rotation fixture');
 insert into public.qbo_token_state values (1, public.encrypt_text('client'),
     public.encrypt_text('secret'), public.encrypt_text('refresh'), public.encrypt_text('access'));
@@ -27,5 +27,11 @@ select is((select count(*) from vault.secrets where name like 'master_encryption
     2::bigint, 'both outgoing keys are retained across repeated rotations');
 select is((select public.decrypt_text(refresh_token_enc) from public.qbo_token_state where id=1),
     'refresh', 'value survives the second rotation');
+-- A core-only deployment must rotate too, without inventing broker tables.
+drop table public.qbo_token_state, public.google_token_state;
+drop table pg_temp.rot_fp;
+\ir ../ops/rotate_master_encryption_key.sql
+select is((select count(*) from vault.secrets where name like 'master_encryption_key_retired_%'),
+    3::bigint, 'core-only deployment rotates without optional brokers');
 select * from finish();
 rollback;
