@@ -402,7 +402,7 @@ jobs:
 
       - name: 🧪 Run pgTAP RBAC tests
         run: |
-          python3 scripts/test/prepare-rotation-test.py
+          python3 scripts/test/prepare-db-access-tests.py
           supabase test db
 
       - name: 🧹 Stop Supabase

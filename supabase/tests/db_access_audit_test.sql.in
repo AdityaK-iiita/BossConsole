@@ -1,0 +1,17 @@
+-- Exercise the actual standing audit, including missing-signature degradation.
+begin;
+select plan(5);
+create temporary table audit_snapshot as
+\ir ../audit/identity_disclosure_audit.sql
+select is(finding, 'HEALTHY', "check") from audit_snapshot
+where "check" in ('CHECK 1: callable without an account',
+    'CHECK 1b: expected anonymous signature missing or revoked',
+    'CHECK 4: explicit-anon-grant event trigger',
+    'CHECK 5: client access to internal-only routines');
+drop function public.safe_decrypt_recovery_codes(text);
+create temporary table audit_missing as
+\ir ../audit/identity_disclosure_audit.sql
+select ok(finding like '%MISSING SIGNATURE%', 'missing crypto signature is reported without aborting audit')
+from audit_missing where "check" = 'CHECK 5: client access to internal-only routines';
+select * from finish();
+rollback;
