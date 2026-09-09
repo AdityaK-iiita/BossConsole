@@ -44,6 +44,7 @@ select ok(has_function_privilege('anon', 'public.pgtap_anon_guard()', 'EXECUTE')
 
 -- A creator without Supabase defaults exposes the PUBLIC-only regression.
 create role pgtap_acl_creator;
+grant pgtap_acl_creator to postgres;
 grant usage, create on schema public to pgtap_acl_creator;
 set local role pgtap_acl_creator;
 create function public.pgtap_public_only() returns integer language sql as 'select 3';
