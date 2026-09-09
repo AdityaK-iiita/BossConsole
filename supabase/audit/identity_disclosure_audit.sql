@@ -1,6 +1,9 @@
 -- Identity-disclosure audit for schema `public`. Run it against the project and
 -- read the `finding` column: HEALTHY means that check passed. Any other value is
--- a real finding with the object named beside it.
+-- a candidate for investigation with the object named beside it. Checks 2 and
+-- 3 are heuristics, not proof of authorization: comments can match gate names,
+-- indirect calls can hide identity access, and nonliteral RLS predicates and
+-- views require review. pgTAP tests enforce the concrete ACL/visibility rules.
 --
 -- This exists because "we fixed the leak" is not a durable claim. On 2026-09-08
 -- the Arcade published its player roster to unauthenticated callers,
@@ -46,7 +49,7 @@ anon_callable as (
   cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
   left join pg_roles r on r.oid = a.grantee
   where n.nspname = 'public'
-    and p.prokind = 'f'
+    and p.prokind in ('f', 'p')
     and a.privilege_type = 'EXECUTE'
     and (a.grantee = 0 or r.rolname = 'anon')
 )
@@ -90,8 +93,6 @@ where t.def ~* '(auth\.users|raw_user_meta_data|user_display_name|arcade_display
   and t.def !~* '(org_visible_users|org_is_vetted|arcade_visible_users|arcade_may_see)'
   and t.def !~* '(is_admin|is_user_admin|arcade_is_admin|authorize\(|user_is_org_admin|user_holds_permission|can_manage_secret|can_view)'
   and t.def !~* 'auth\.uid\(\)'
-  -- the rule itself, and the name formatter it calls, are the definition of the
-  -- gate rather than users of it
   -- The rule itself, and the name formatter it calls, ARE the gate rather than
   -- users of it.
   and t.proname not in ('user_display_name', 'arcade_display_name',
@@ -118,7 +119,7 @@ from pg_policies pol
 where pol.schemaname = 'public'
   and pol.cmd in ('SELECT', 'ALL')
   and (pol.qual is null or btrim(lower(pol.qual)) in ('true', '(true)'))
-  and pol.roles::text ~ '(anon|authenticated|public)'
+  and pol.roles && array['anon','authenticated','public']::name[]
   and exists (
     select 1
     from pg_attribute a
@@ -137,6 +138,16 @@ union all
 -- ---------------------------------------------------------------------------
 select 'CHECK 4: explicit-anon-grant event trigger',
        coalesce(
-         (select case when evtenabled = 'D' then 'INSTALLED BUT DISABLED' else 'HEALTHY' end
+         (select case when evtenabled in ('O', 'A') and evttags @> array['CREATE FUNCTION', 'CREATE PROCEDURE']::text[] then 'HEALTHY' else 'DISABLED OR WRONG FIRING MODE/TAGS' end
             from pg_event_trigger where evtname = 'enforce_explicit_anon_grants'),
-         'MISSING - new functions are anon-callable at birth');
+         'MISSING - new functions are anon-callable at birth')
+
+union all
+
+-- Explicit grants to signed-in accounts must not reopen the key or an oracle.
+select 'CHECK 5: client crypto access',
+       coalesce(string_agg(signature || ' (' || role_name || ')', ', '), 'HEALTHY')
+from unnest(array['public.get_encryption_key()', 'public.encrypt_text(text)',
+                  'public.decrypt_text(text)', 'public.safe_decrypt_recovery_codes(text)']) signature
+cross join unnest(array['anon', 'authenticated']) role_name
+where has_function_privilege(role_name, signature, 'EXECUTE');

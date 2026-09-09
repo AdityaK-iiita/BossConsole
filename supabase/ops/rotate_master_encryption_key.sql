@@ -32,9 +32,10 @@
 -- returned the key. Revoking access does not un-disclose it.
 do $$
 declare
-  old_key    text := public.get_encryption_key();
+  old_key    text;
   new_key    text := encode(extensions.gen_random_bytes(32), 'base64');
   secret_id  uuid;
+  backup_name text;
   cols text[][] := array[
     array['secrets','password_encrypted','id'],
     array['secret_metadata','recovery_codes_encrypted','id'],
@@ -47,13 +48,36 @@ declare
   ];
   i int; n int; expected int; verified int; mismatched int;
 begin
+  -- Serialize rotations and freeze writers before reading the key or data.
+  -- Lock the Vault row first, then tables in a fixed order. A waiting writer
+  -- resumes only after the new key and all ciphertext commit together.
+  select id into strict secret_id from vault.secrets
+    where name = 'master_encryption_key' for update;
+  lock table public.google_token_state, public.qbo_token_state,
+    public.secret_metadata, public.secrets in access exclusive mode;
+  old_key := public.get_encryption_key();
+
+  -- #417 adds another encrypted field using a different encoding. Refuse a
+  -- rotation until that format has an explicit adapter in this script.
+  if to_regprocedure('public.safe_decrypt_twofa_secret(text)') is not null then
+    raise exception 'TOTP encryption is installed; extend rotation coverage before running';
+  end if;
+  if exists (
+    select 1 from information_schema.columns c
+    where c.table_schema = 'public' and c.column_name ~ '(_enc$|_encrypted$)'
+      and not exists (
+        select 1 from generate_subscripts(cols, 1) j
+        where cols[j][1] = c.table_name and cols[j][2] = c.column_name)
+  ) then
+    raise exception 'Unmapped encrypted column; extend rotation coverage before running';
+  end if;
+
   -- pgcrypto truncates a key to the cipher key size, so a different length
   -- would silently change which bytes are the key.
   if length(new_key) <> length(old_key) then
     raise exception 'key shape mismatch: new % vs old %', length(new_key), length(old_key);
   end if;
 
-  select id into strict secret_id from vault.secrets where name = 'master_encryption_key';
 
   -- 1. Fingerprint every row's PLAINTEXT under the old key. md5 only.
   create temp table rot_fp(tbl text, col text, pk text, fp text) on commit drop;
@@ -83,13 +107,11 @@ begin
     $f$, cols[i][1], cols[i][2]) using old_key, new_key;
   end loop;
 
-  -- 3. Keep the old key under an explicit name so this is reversible until the
-  --    verification below has been seen to pass. It is already public, so
-  --    retaining it adds no exposure - delete it once satisfied.
-  if not exists (select 1 from vault.secrets where name = 'master_encryption_key_compromised_20260908') then
-    perform vault.create_secret(old_key, 'master_encryption_key_compromised_20260908',
-      'PUBLICLY DISCLOSED via anon-callable get_encryption_key() before 2026-09-08. Kept only to roll back the rotation. Delete once verified.');
-  end if;
+  -- 3. Keep EVERY outgoing key, including on subsequent rotations. Retain it
+  -- while any backup encrypted under it exists. Never delete on verification.
+  backup_name := 'master_encryption_key_retired_' || gen_random_uuid()::text;
+  perform vault.create_secret(old_key, backup_name,
+    'Retired master key. Retain while any backup encrypted under this key exists.');
 
   -- 4. Swap the live key.
   perform vault.update_secret(secret_id, new_key, 'master_encryption_key',

@@ -7,10 +7,9 @@
 -- it is created. That key is compiled into the public BossConsole repo, so
 -- "callable by anon" means "callable by the internet".
 --
--- ALTER DEFAULT PRIVILEGES cannot fix this on its own: revoking EXECUTE from
--- PUBLIC there leaves the hardwired grant in place (verified on this project -
--- pg_default_acl loses the PUBLIC entry and new functions still get `=X`).
--- An event trigger can, because it runs after the object exists.
+-- A per-schema ALTER DEFAULT PRIVILEGES cannot remove the global PUBLIC
+-- default. A global revoke can, but would affect other schemas too. This guard
+-- deliberately confines the change to public, regardless of the creator role.
 --
 -- This is how the BOSS Arcade published the roster of everyone who had opened
 -- it, including to unauthenticated callers: five leaderboard and picker
@@ -20,7 +19,9 @@
 -- Effect on migrations: a function that genuinely needs anonymous access - the
 -- passkey pre-auth path is a real example - keeps working, because an explicit
 -- `grant execute ... to anon` runs AFTER the create and therefore after this
--- trigger. What stops working is getting anon access without asking for it.
+-- trigger. CREATE OR REPLACE fires it too: every replacement of an intentionally
+-- anonymous function must repeat that explicit grant after the definition.
+-- See 20260909120000 for the fail-closed follow-up and role-preserving guard.
 create or replace function public.enforce_explicit_anon_grants()
 returns event_trigger
 language plpgsql
