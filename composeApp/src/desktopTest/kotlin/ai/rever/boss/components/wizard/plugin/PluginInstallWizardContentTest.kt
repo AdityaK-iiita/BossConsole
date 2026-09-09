@@ -81,9 +81,9 @@ class PluginInstallWizardContentTest {
                 )
             }
         }
+        rule.onNodeWithText("Required", useUnmergedTree = true).assertIsDisplayed()
         rule
             .onNodeWithText("Required")
-            .assertIsDisplayed()
             .assertIsEnabled()
             .assertIsOn()
             .assertHasNoClickAction()
