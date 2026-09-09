@@ -47,7 +47,8 @@ class ShortcutCaptureConsumersTest {
         try {
             val binding = KeyBinding(actionId = "window.new", key = Key.N.keyCode.toString())
             val settings = KeymapSettings(shortcuts = mapOf(binding.actionId to binding))
-            val imported = assertNotNull(KeymapSettingsManager.importFromJson(Json.encodeToString(KeymapSettings.serializer(), settings)))
+            val encoded = Json.encodeToString(KeymapSettings.serializer(), settings)
+            val imported = assertNotNull(KeymapSettingsManager.importFromJson(encoded))
             assertEquals("n", imported.shortcuts.getValue(binding.actionId).key)
             assertEquals(setOf(binding.actionId), imported.shortcuts.keys)
         } finally {
