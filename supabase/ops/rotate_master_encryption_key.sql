@@ -48,13 +48,15 @@ declare
   ];
   i int; n int; expected int; verified int; mismatched int;
 begin
-  -- Serialize rotations and freeze writers before reading the key or data.
-  -- Lock the Vault row first, then tables in a fixed order. A waiting writer
-  -- resumes only after the new key and all ciphertext commit together.
-  select id into strict secret_id from vault.secrets
-    where name = 'master_encryption_key' for update;
+  -- Serialize invocations of this procedure, then freeze data writers before
+  -- reading the key. Supabase's postgres role cannot SELECT FOR UPDATE on
+  -- vault.secrets: writes are exposed only through vault.update_secret.
+  -- Coordinate any other key-management operation outside this procedure.
+  perform pg_catalog.pg_advisory_xact_lock(423, 1200);
   lock table public.google_token_state, public.qbo_token_state,
     public.secret_metadata, public.secrets in access exclusive mode;
+  select id into strict secret_id from vault.secrets
+    where name = 'master_encryption_key';
   old_key := public.get_encryption_key();
 
   -- #417 adds another encrypted field using a different encoding. Refuse a
