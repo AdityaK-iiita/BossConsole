@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -264,6 +265,7 @@ fun CheckboxCard(
     onCheckedChange: (Boolean) -> Unit,
     enabled: Boolean = true,
     modifier: Modifier = Modifier,
+    trailingLabel: String? = null,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isHovered by interactionSource.collectIsHoveredAsState()
@@ -318,46 +320,9 @@ fun CheckboxCard(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            if (icon != null) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                    tint =
-                        if (enabled) {
-                            if (isChecked) BossTheme.colors.signal else BossTheme.colors.textSecondary
-                        } else {
-                            BossTheme.colors.textSecondary.copy(alpha = 0.5f)
-                        },
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-            }
+            CheckboxCardIcon(icon, enabled, isChecked)
 
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color =
-                        if (enabled) {
-                            if (isChecked || isHovered) BossTheme.colors.textPrimary else BossTheme.colors.textSecondary
-                        } else {
-                            BossTheme.colors.textSecondary.copy(alpha = 0.5f)
-                        },
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (description.isNotEmpty()) {
-                    Text(
-                        text = description,
-                        fontSize = 11.sp,
-                        color = BossTheme.colors.textSecondary.copy(alpha = if (enabled) 0.7f else 0.4f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        lineHeight = 14.sp,
-                    )
-                }
-            }
+            CheckboxCardLabels(title, description, enabled, isChecked, isHovered, trailingLabel)
         }
     }
 }
@@ -387,5 +352,71 @@ fun WizardNote(
             color = BossTheme.colors.textSecondary,
             lineHeight = 16.sp,
         )
+    }
+}
+
+@Composable
+private fun RowScope.CheckboxCardLabels(
+    title: String,
+    description: String,
+    enabled: Boolean,
+    isChecked: Boolean,
+    isHovered: Boolean,
+    trailingLabel: String?,
+) {
+    Column(modifier = Modifier.weight(1f)) {
+        Text(
+            text = title,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            color =
+                if (enabled) {
+                    if (isChecked || isHovered) BossTheme.colors.textPrimary else BossTheme.colors.textSecondary
+                } else {
+                    BossTheme.colors.textSecondary.copy(alpha = 0.5f)
+                },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (description.isNotEmpty()) {
+            Text(
+                text = description,
+                fontSize = 11.sp,
+                color = BossTheme.colors.textSecondary.copy(alpha = if (enabled) 0.7f else 0.4f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                lineHeight = 14.sp,
+            )
+        }
+    }
+    trailingLabel?.let { label ->
+        Text(
+            text = label,
+            modifier = Modifier.padding(start = 8.dp),
+            fontSize = 11.sp,
+            color = BossTheme.colors.textSecondary,
+        )
+    }
+}
+
+@Composable
+private fun CheckboxCardIcon(
+    icon: ImageVector?,
+    enabled: Boolean,
+    isChecked: Boolean,
+) {
+    if (icon != null) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(20.dp),
+            tint =
+                if (enabled) {
+                    if (isChecked) BossTheme.colors.signal else BossTheme.colors.textSecondary
+                } else {
+                    BossTheme.colors.textSecondary.copy(alpha = 0.5f)
+                },
+        )
+        Spacer(modifier = Modifier.width(10.dp))
     }
 }
