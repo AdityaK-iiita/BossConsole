@@ -141,7 +141,7 @@ select is((select count(*) from public.org_visible_users()), 1::bigint,
 select vault.create_secret('cGd0YXAtdGVzdC1rZXktMzItYnl0ZXMtYWVzLW9r',
     'master_encryption_key', 'transaction-local fixture');
 set local role authenticated;
-select is(public.create_secret('pgt423.example','actor','fixture-password', p_recovery_codes=>array['fixture-recovery'])->>'success',
+select is(public.create_secret('pgt423.example','actor','fixture-password', p_twofa_enabled=>true, p_twofa_type=>'totp', p_recovery_codes=>array['fixture-recovery'])->>'success',
     'true', 'signed-in create RPC still encrypts');
 select is((select password from public.get_user_secrets(50,0)
     where website='pgt423.example'), 'fixture-password', 'signed-in read RPC still decrypts');
