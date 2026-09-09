@@ -1,0 +1,31 @@
+-- The broker schemas are operated outside this repository. Model their exact
+-- encrypted-column contract locally; no production keys or rows are used.
+begin;
+select plan(5);
+create table public.qbo_token_state (
+    id integer primary key, client_id_enc text, client_secret_enc text,
+    refresh_token_enc text, access_token_enc text);
+create table public.google_token_state (
+    id integer primary key, private_key_enc text, access_token_enc text);
+select vault.create_secret(encode(extensions.gen_random_bytes(32), 'base64'),
+    'master_encryption_key', 'transaction-local rotation fixture');
+insert into public.qbo_token_state values (1, public.encrypt_text('client'),
+    public.encrypt_text('secret'), public.encrypt_text('refresh'), public.encrypt_text('access'));
+insert into public.google_token_state values (1, public.encrypt_text('pem'), public.encrypt_text('token'));
+create temp table rotation_initial_key as select public.get_encryption_key() as value;
+\ir ../ops/rotate_master_encryption_key.sql
+select isnt(public.get_encryption_key(), (select value from rotation_initial_key),
+    'rotation replaces the master key');
+select is((select public.decrypt_text(client_secret_enc) from public.qbo_token_state where id=1),
+    'secret', 'QBO value survives rotation');
+select is((select public.decrypt_text(private_key_enc) from public.google_token_state where id=1),
+    'pem', 'Google key survives rotation');
+-- A normal second invocation starts a fresh transaction and has no rot_fp.
+drop table pg_temp.rot_fp;
+\ir ../ops/rotate_master_encryption_key.sql
+select is((select count(*) from vault.secrets where name like 'master_encryption_key_retired_%'),
+    2::bigint, 'both outgoing keys are retained across repeated rotations');
+select is((select public.decrypt_text(refresh_token_enc) from public.qbo_token_state where id=1),
+    'refresh', 'value survives the second rotation');
+select * from finish();
+rollback;
