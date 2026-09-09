@@ -6,7 +6,6 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class PluginInstallWizardStateTest {
-
     private val defaultPlugin =
         WizardPluginInfo(
             id = "default-plugin",
