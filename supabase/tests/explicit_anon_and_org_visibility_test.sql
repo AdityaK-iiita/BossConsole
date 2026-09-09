@@ -6,7 +6,8 @@ select ok(not has_function_privilege(r, f, 'EXECUTE'), r || ' cannot execute ' |
 from unnest(array['anon', 'authenticated']) r
 cross join unnest(array['public.get_encryption_key()', 'public.encrypt_text(text)',
     'public.decrypt_text(text)', 'public.safe_decrypt_recovery_codes(text)',
-    'public.user_display_name(uuid)']) f;
+    'public.user_display_name(uuid)', 'public.upsert_plugin_rating(uuid,uuid,integer,text)',
+    'public.record_plugin_download(uuid,uuid,uuid,text)', 'public.custom_access_token_hook(jsonb)']) f;
 
 -- Also exercise the actual database role, not only JWT claims on postgres.
 set local role authenticated;
@@ -21,10 +22,12 @@ select ok(has_function_privilege('anon', f, 'EXECUTE'), 'anonymous compatibility
 from unnest(array[
     'public.search_plugins(text,text,text[],numeric,boolean,integer,integer,text)',
     'public.get_plugin_with_stats(text)', 'public.get_plugin_versions(text)',
-    'public.get_popular_tags(integer)', 'public.record_plugin_download(uuid,uuid,uuid,text)',
-    'public.upsert_plugin_rating(uuid,uuid,integer,text)',
+    'public.get_popular_tags(integer)',
     'public.can_view_plugin_row(text,uuid,uuid,boolean)',
     'public.authorize(text)', 'public.is_user_admin(uuid)']) f;
+select ok(has_function_privilege('service_role', f, 'EXECUTE'), 'edge mutator compatibility: ' || f)
+from unnest(array['public.upsert_plugin_rating(uuid,uuid,integer,text)',
+                  'public.record_plugin_download(uuid,uuid,uuid,text)']) f;
 select ok(has_function_privilege('supabase_auth_admin',
     'public.custom_access_token_hook(jsonb)', 'EXECUTE'), 'token issuer retains hook access');
 

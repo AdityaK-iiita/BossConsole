@@ -25,8 +25,8 @@
 -- it at creation time; this proves the trigger is still installed and working.
 -- ---------------------------------------------------------------------------
 with intentionally_anon as (
-  -- The plugin store is browsable before sign-in, and the auth hook + RLS
-  -- helpers are invoked by roles that are not `authenticated`. Adding a name
+  -- The plugin store is browsable before sign-in, and the RLS
+  -- helpers are invoked by anonymous queries. Adding a signature
   -- here is a deliberate decision to publish it; do not add one to silence the
   -- audit.
   -- Exact signatures refine the historical name-only `keep` snapshot in
@@ -34,16 +34,15 @@ with intentionally_anon as (
   -- what breaks for each. In short: the plugin store is browsable before
   -- sign-in; authorize / is_user_admin / can_view_plugin_row are called from
   -- RLS policies on anon-readable tables, and a policy expression runs as the
-  -- QUERYING role; custom_access_token_hook is invoked on every token issuance.
+  -- QUERYING role. The 20260909130000 follow-up removes the two edge-only
+  -- mutators and the GoTrue hook from anonymous access.
   select to_regprocedure(signature) as oid
   from unnest(array[
     'public.search_plugins(text,text,text[],numeric,boolean,integer,integer,text)',
     'public.get_plugin_with_stats(text)', 'public.get_plugin_versions(text)',
-    'public.get_popular_tags(integer)', 'public.record_plugin_download(uuid,uuid,uuid,text)',
-    'public.upsert_plugin_rating(uuid,uuid,integer,text)',
+    'public.get_popular_tags(integer)',
     'public.can_view_plugin_row(text,uuid,uuid,boolean)',
-    'public.authorize(text)', 'public.is_user_admin(uuid)',
-    'public.custom_access_token_hook(jsonb)'
+    'public.authorize(text)', 'public.is_user_admin(uuid)'
   ]) signature
 ),
 anon_callable as (
@@ -154,9 +153,12 @@ select 'CHECK 4: explicit-anon-grant event trigger',
 union all
 
 -- Explicit grants to signed-in accounts must not reopen the key or an oracle.
-select 'CHECK 5: client crypto access',
+select 'CHECK 5: client access to internal-only routines',
        coalesce(string_agg(signature || ' (' || role_name || ')', ', '), 'HEALTHY')
 from unnest(array['public.get_encryption_key()', 'public.encrypt_text(text)',
-                  'public.decrypt_text(text)', 'public.safe_decrypt_recovery_codes(text)']) signature
+                  'public.decrypt_text(text)', 'public.safe_decrypt_recovery_codes(text)',
+                  'public.upsert_plugin_rating(uuid,uuid,integer,text)',
+                  'public.record_plugin_download(uuid,uuid,uuid,text)',
+                  'public.custom_access_token_hook(jsonb)']) signature
 cross join unnest(array['anon', 'authenticated']) role_name
 where has_function_privilege(role_name, signature, 'EXECUTE');
