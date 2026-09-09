@@ -344,29 +344,17 @@ internal fun focusQuickActionsRailRows(
         0
     }
 
-/**
- * Whether the quick-action column fits in the available height of the collapsed tab rail.
- *
- * The rail actions are stacked vertically: each button is 32dp high, with 4dp between buttons,
- * 4dp of vertical padding, and a 1dp separator above them.
- */
+/** Whether the rendered rail column, including its separator and themed gaps, fits. */
 internal fun railFitsActions(
     availableHeight: Dp,
     actionCount: Int,
+    gap: Dp,
 ): Boolean {
     if (actionCount == 0) return true
 
-    val buttonHeight = 32.dp
-    val gap = 4.dp
-    val verticalPadding = 8.dp
-    val separator = 1.dp
-
-    val actionsHeight =
-        buttonHeight * actionCount +
-            gap * (actionCount - 1) +
-            verticalPadding +
-            separator
-
+    // The separator is a child too: there is a gap between it and the first action,
+    // plus one between each pair of actions and padding at both ends.
+    val actionsHeight = SIDEBAR_ICON_SIZE * actionCount + gap * (actionCount + 2) + 1.dp
     return actionsHeight <= availableHeight
 }
 

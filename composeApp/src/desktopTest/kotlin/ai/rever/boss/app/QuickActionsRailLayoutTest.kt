@@ -101,8 +101,9 @@ class QuickActionsRailLayoutTest {
     fun `rail fits exactly at the required height`() {
         assertTrue(
             railFitsActions(
-                availableHeight = 149.dp,
+                availableHeight = 153.dp,
                 actionCount = 4,
+                gap = 4.dp,
             ),
         )
     }
@@ -111,8 +112,9 @@ class QuickActionsRailLayoutTest {
     fun `rail does not fit when one dp too short`() {
         assertTrue(
             !railFitsActions(
-                availableHeight = 148.dp,
+                availableHeight = 152.dp,
                 actionCount = 4,
+                gap = 4.dp,
             ),
         )
     }
@@ -123,6 +125,7 @@ class QuickActionsRailLayoutTest {
             railFitsActions(
                 availableHeight = 0.dp,
                 actionCount = 0,
+                gap = 4.dp,
             ),
         )
     }

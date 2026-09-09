@@ -258,6 +258,38 @@ class FocusQuickActionsPlacementTest {
         )
     }
 
+    @Test
+    fun `a short collapsed rail without a panel falls back to the floating cluster`() {
+        assertEquals(
+            FocusQuickActionsPlacement.FLOATING,
+            focusQuickActionsPlacement(
+                settings = clearsTopKeepsRail,
+                topBarHidden = true,
+                rightStripHidden = true,
+                showTopBar = false,
+                verticalBar = VerticalBarHost.RAIL,
+                railActionsFit = false,
+                panelFootAvailable = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `a short rail enables the panel measurement before choosing its footer`() {
+        assertEquals(
+            true,
+            hostActionsNeedAPanel(clearsTopKeepsRail, true, false, VerticalBarHost.RAIL, false),
+        )
+        assertEquals(
+            false,
+            hostActionsNeedAPanel(clearsTopKeepsRail, true, false, VerticalBarHost.RAIL, true),
+        )
+        assertEquals(
+            false,
+            hostActionsNeedAPanel(clearsTopKeepsRail, true, false, VerticalBarHost.FOOT, false),
+        )
+    }
+
     private fun railFor(placement: FocusQuickActionsPlacement) =
         focusQuickActionsRail(
             placement = placement,
