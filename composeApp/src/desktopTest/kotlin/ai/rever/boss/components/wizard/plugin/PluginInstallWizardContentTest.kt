@@ -3,13 +3,19 @@ package ai.rever.boss.components.wizard.plugin
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
 import org.junit.Rule
 import org.junit.Test
+import kotlin.test.assertEquals
 
 class PluginInstallWizardContentTest {
     @get:Rule
@@ -18,7 +24,7 @@ class PluginInstallWizardContentTest {
     @Test
     fun `all failed installs are explained without claiming no selection`() {
         rule.setContent {
-            Box(Modifier.size(636.dp, 420.dp)) {
+            Box(Modifier.size(636.dp, 400.dp).clipToBounds()) {
                 CompleteStepContent(0, listOf("terminal" to "Download failed"))
             }
         }
@@ -32,7 +38,7 @@ class PluginInstallWizardContentTest {
     fun `long failure list scrolls to the last error and keeps recovery guidance visible`() {
         val failures = (1..30).map { "plugin$it" to "Download failed" }
         rule.setContent {
-            Box(Modifier.size(636.dp, 420.dp)) {
+            Box(Modifier.size(636.dp, 400.dp).clipToBounds()) {
                 CompleteStepContent(2, failures)
             }
         }
@@ -59,7 +65,7 @@ class PluginInstallWizardContentTest {
                 isMandatory = true,
             )
         rule.setContent {
-            Box(Modifier.size(400.dp, 420.dp)) {
+            Box(Modifier.size(400.dp, 400.dp).clipToBounds()) {
                 CategoryStepContent(
                     category = PluginCategory.OTHER,
                     plugins = listOf(plugin),
@@ -70,6 +76,29 @@ class PluginInstallWizardContentTest {
                 )
             }
         }
-        rule.onNodeWithText("Required").assertIsDisplayed()
+        rule
+            .onNodeWithText("Required")
+            .assertIsDisplayed()
+            .assertIsEnabled()
+            .assertIsOn()
+            .assertHasNoClickAction()
+    }
+
+    @Test
+    fun `optional card still toggles from its label`() {
+        var toggles = 0
+        val plugin = WizardPluginInfo("optional", "Optional tool", "Useful tool", "1.0.0")
+        rule.setContent {
+            CategoryStepContent(
+                category = PluginCategory.OTHER,
+                plugins = listOf(plugin),
+                isPluginSelected = { false },
+                onTogglePlugin = { toggles++ },
+                onSelectAll = {},
+                onDeselectAll = {},
+            )
+        }
+        rule.onNodeWithText("Optional").assertIsEnabled().performClick()
+        rule.runOnIdle { assertEquals(1, toggles) }
     }
 }

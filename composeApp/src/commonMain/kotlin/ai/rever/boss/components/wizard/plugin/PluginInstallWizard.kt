@@ -534,7 +534,7 @@ private fun PluginChoiceCard(
     CheckboxCard(
         title = plugin.name,
         trailingLabel = if (plugin.isMandatory) "Required" else "Optional",
-        enabled = !plugin.isMandatory,
+        locked = plugin.isMandatory,
         description = plugin.description,
         icon = plugin.icon,
         isChecked = selected,
