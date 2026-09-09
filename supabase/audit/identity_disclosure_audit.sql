@@ -1,0 +1,142 @@
+-- Identity-disclosure audit for schema `public`. Run it against the project and
+-- read the `finding` column: HEALTHY means that check passed. Any other value is
+-- a real finding with the object named beside it.
+--
+-- This exists because "we fixed the leak" is not a durable claim. On 2026-09-08
+-- the Arcade published its player roster to unauthenticated callers,
+-- get_encryption_key() handed the Vault master key to anyone holding the anon
+-- key that ships in this public repo, and list_shareable_recipients returned 152
+-- users with full email addresses to any self-registered account. None of those
+-- was a typo; each was a rule enforced at one site and asked in a weaker form at
+-- another. A checklist in someone's head does not catch that. This does.
+--
+-- Run it after any migration that adds a function or a policy.
+
+-- ---------------------------------------------------------------------------
+-- CHECK 1: nothing in schema public is callable without an account, except the
+-- objects that intend to be.
+--
+-- PostgreSQL hardwires EXECUTE to PUBLIC on every new function, and PUBLIC
+-- includes `anon` - so this check is load-bearing forever, not just after a
+-- mistake. The event trigger in 20260908000000_explicit_anon_grants.sql revokes
+-- it at creation time; this proves the trigger is still installed and working.
+-- ---------------------------------------------------------------------------
+with intentionally_anon as (
+  -- The plugin store is browsable before sign-in, and the auth hook + RLS
+  -- helpers are invoked by roles that are not `authenticated`. Adding a name
+  -- here is a deliberate decision to publish it; do not add one to silence the
+  -- audit.
+  -- Must stay in step with the `keep` list in
+  -- migrations/20260908030000_revoke_remaining_anon_execute.sql, which explains
+  -- what breaks for each. In short: the plugin store is browsable before
+  -- sign-in; authorize / is_user_admin / can_view_plugin_row are called from
+  -- RLS policies on anon-readable tables, and a policy expression runs as the
+  -- QUERYING role; custom_access_token_hook is invoked on every token issuance.
+  select unnest(array[
+    'search_plugins', 'get_plugin_with_stats', 'get_plugin_versions',
+    'get_popular_tags', 'record_plugin_download', 'upsert_plugin_rating',
+    'can_view_plugin_row', 'authorize', 'is_user_admin',
+    'custom_access_token_hook'
+  ]) as proname
+),
+anon_callable as (
+  select distinct p.proname, p.oid
+  from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+  cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+  left join pg_roles r on r.oid = a.grantee
+  where n.nspname = 'public'
+    and p.prokind = 'f'
+    and a.privilege_type = 'EXECUTE'
+    and (a.grantee = 0 or r.rolname = 'anon')
+)
+select 'CHECK 1: callable without an account' as check,
+       coalesce(nullif(string_agg(ac.proname, ', ' order by ac.proname), ''), 'HEALTHY') as finding
+from anon_callable ac
+where ac.proname not in (select proname from intentionally_anon)
+
+union all
+
+-- ---------------------------------------------------------------------------
+-- CHECK 2: every function that can reach an identity applies a gate.
+--
+-- A gate is the visibility rule (org_visible_users / org_is_vetted and the
+-- arcade aliases), an admin/permission check, or a self-scope on auth.uid().
+-- A function that reaches auth.users with none of those returns whoever it
+-- likes to whoever asks - which is what arcade_leaderboard and poker_lobby did.
+-- ---------------------------------------------------------------------------
+select 'CHECK 2: identity reachable with no gate',
+       coalesce(nullif(string_agg(t.proname, ', ' order by t.proname), ''), 'HEALTHY')
+from (
+  select p.proname, pg_get_functiondef(p.oid) as def, p.oid
+  from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public'
+    and p.prokind = 'f'
+    and p.prorettype not in ('trigger'::regtype, 'event_trigger'::regtype)
+) t
+where t.def ~* '(auth\.users|raw_user_meta_data|user_display_name|arcade_display_name)'
+  -- reachable by a client role at all
+  and exists (
+    select 1
+    from aclexplode(coalesce((select proacl from pg_proc where oid = t.oid),
+                             acldefault('f', (select proowner from pg_proc where oid = t.oid)))) a
+    left join pg_roles r on r.oid = a.grantee
+    where a.privilege_type = 'EXECUTE'
+      and (a.grantee = 0 or r.rolname in ('anon', 'authenticated'))
+  )
+  -- ...and gated by none of the three accepted gates. Keep this list in step
+  -- with the helpers actually used; a gate under a new name reads as no gate.
+  and t.def !~* '(org_visible_users|org_is_vetted|arcade_visible_users|arcade_may_see)'
+  and t.def !~* '(is_admin|is_user_admin|arcade_is_admin|authorize\(|user_is_org_admin|user_holds_permission|can_manage_secret|can_view)'
+  and t.def !~* 'auth\.uid\(\)'
+  -- the rule itself, and the name formatter it calls, are the definition of the
+  -- gate rather than users of it
+  -- The rule itself, and the name formatter it calls, ARE the gate rather than
+  -- users of it.
+  and t.proname not in ('user_display_name', 'arcade_display_name',
+                        'org_visible_users', 'org_is_vetted')
+  -- search_organisations is a reviewed exception, not an oversight. It touches
+  -- auth.users only to read the CALLER'S OWN email domain, and returns
+  -- organisations - never another user's identity - scoped to public orgs, orgs
+  -- the caller belongs to, and orgs whose verified domain matches that domain.
+  -- Re-read it before removing this line.
+  and t.proname <> 'search_organisations'
+
+union all
+
+-- ---------------------------------------------------------------------------
+-- CHECK 3: no relation carrying a name or an email is readable by everyone.
+--
+-- `using (true)` is not access control in this project: signup is open with
+-- email autoconfirm, so `authenticated` includes anyone on the internet who
+-- registered. This is what exposed poker chat.
+-- ---------------------------------------------------------------------------
+select 'CHECK 3: identity-bearing relation readable by all',
+       coalesce(nullif(string_agg(distinct pol.tablename, ', ' order by pol.tablename), ''), 'HEALTHY')
+from pg_policies pol
+where pol.schemaname = 'public'
+  and pol.cmd in ('SELECT', 'ALL')
+  and (pol.qual is null or btrim(lower(pol.qual)) in ('true', '(true)'))
+  and pol.roles::text ~ '(anon|authenticated|public)'
+  and exists (
+    select 1
+    from pg_attribute a
+    join pg_class c on c.oid = a.attrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relname = pol.tablename
+      and a.attnum > 0 and not a.attisdropped
+      and a.attname ~* '(email|display_name|full_name)'
+  )
+
+union all
+
+-- ---------------------------------------------------------------------------
+-- CHECK 4: the guard from 20260908000000 is still installed and enabled.
+-- Without it, checks 1 and 2 go stale the moment someone adds a function.
+-- ---------------------------------------------------------------------------
+select 'CHECK 4: explicit-anon-grant event trigger',
+       coalesce(
+         (select case when evtenabled = 'D' then 'INSTALLED BUT DISABLED' else 'HEALTHY' end
+            from pg_event_trigger where evtname = 'enforce_explicit_anon_grants'),
+         'MISSING - new functions are anon-callable at birth');
