@@ -334,7 +334,7 @@ internal fun CompleteStepContent(
     val hasFailures = failedPlugins.isNotEmpty()
 
     Column(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {

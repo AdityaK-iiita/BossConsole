@@ -1,17 +1,22 @@
 package ai.rever.boss.components.wizard.plugin
 
+import ai.rever.boss.components.wizard.CheckboxCard
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import org.junit.Rule
 import org.junit.Test
@@ -100,5 +105,40 @@ class PluginInstallWizardContentTest {
         }
         rule.onNodeWithText("Optional").assertIsEnabled().performClick()
         rule.runOnIdle { assertEquals(1, toggles) }
+    }
+
+    @Test
+    fun `locked disabled cards report disabled semantics without a click action`() {
+        rule.setContent {
+            CheckboxCard(
+                title = "Unavailable tool",
+                description = "",
+                isChecked = true,
+                onCheckedChange = { error("Locked card must not toggle") },
+                enabled = false,
+                locked = true,
+            )
+        }
+        rule
+            .onNodeWithText("Unavailable tool")
+            .assertIsNotEnabled()
+            .assertIsOn()
+            .assertHasNoClickAction()
+    }
+
+    @Test
+    fun `large text completion scrolls to recovery guidance and back to its heading`() {
+        rule.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale = 1.5f)) {
+                Box(Modifier.size(636.dp, 400.dp).clipToBounds()) {
+                    CompleteStepContent(0, (1..30).map { "plugin$it" to "Download failed" })
+                }
+            }
+        }
+        rule
+            .onNodeWithText("You can retry installing these tools from the Toolbox")
+            .performScrollTo()
+            .assertIsDisplayed()
+        rule.onNodeWithText("Installation incomplete").performScrollTo().assertIsDisplayed()
     }
 }

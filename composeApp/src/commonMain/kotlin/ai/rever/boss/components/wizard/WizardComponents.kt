@@ -39,6 +39,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.toggleableState
@@ -439,6 +440,7 @@ private fun Modifier.checkboxCardInteraction(
 ): Modifier =
     if (locked) {
         semantics(mergeDescendants = true) {
+            if (!enabled) disabled()
             role = Role.Checkbox
             toggleableState = ToggleableState(checked)
         }
