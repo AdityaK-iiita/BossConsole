@@ -114,8 +114,8 @@ private val KEY_ALIASES: Map<String, String> =
         alias("tab", "⇥")
         alias("backspace", "⌫")
         alias("delete", "⌦")
-        alias("home", "↖")
-        alias("end", "↘")
+        alias("home", "movehome", "↖")
+        alias("end", "moveend", "↘")
         // A dedicated + key and Shift+= are the same chord to every preset: zoom in is stored as
         // Equals with a Cmd+Shift+Equals alternate.
         alias("equals", "plus", "+", "=")
