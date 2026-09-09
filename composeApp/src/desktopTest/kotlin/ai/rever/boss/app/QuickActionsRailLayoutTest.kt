@@ -277,8 +277,8 @@ private val RAIL_FIXED_CHROME = 94.dp
  * Deliberately NOT a height where the actions lose: below about 283dp they do, because they are
  * measured last, and they vanish rather than clip. That is a real edge, reachable by dragging a
  * window short - the 600dp floor in `DisplayUtils.calculateMainWindowSize` is an initial size and
- * not a constraint. Tracked in issue #320, with the numbers and the shape of the fix; the panel
- * foot's `panelFooterFitsColumn` + `onColumnFitsChange` is the machinery it should reuse.
+ * not a constraint. `RailHostActionsResizeTest` now covers that shorter case through the real
+ * rail and its fit guard; this test covers the fully rendered action column.
  */
 private val SHORT_RAIL_HEIGHT = 300.dp
 
