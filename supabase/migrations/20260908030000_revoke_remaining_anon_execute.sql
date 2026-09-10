@@ -49,6 +49,15 @@ begin
     where n.nspname = 'public'
       and p.prokind in ('f', 'p')
       and p.proname <> all (keep)
+      -- Extension-owned routines are excluded deliberately. pgcrypto's
+      -- digest()/gen_random_uuid()-style helpers are called from column
+      -- DEFAULTs, CHECK constraints and policy expressions, which are evaluated
+      -- with the DML role's privileges - revoking PUBLIC there breaks writes for
+      -- everyone, and the extension would re-grant on its next upgrade anyway.
+      and not exists (
+        select 1 from pg_catalog.pg_depend d
+        where d.classid = 'pg_catalog.pg_proc'::regclass
+          and d.objid = p.oid and d.deptype = 'e')
       and exists (
         select 1
         from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a

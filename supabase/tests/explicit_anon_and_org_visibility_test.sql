@@ -138,8 +138,20 @@ select is((select count(*) from public.org_visible_users()), 1::bigint,
     'inactive co-members are invisible');
 
 -- Owner-run RPCs must still decrypt under the real authenticated role.
-select vault.create_secret('cGd0YXAtdGVzdC1rZXktMzItYnl0ZXMtYWVzLW9r',
-    'master_encryption_key', 'transaction-local fixture');
+-- Provision the fixture key without assuming the database has none: a seed, a
+-- migration or a previous run may already hold the name, and vault.secrets.name
+-- is unique. Unconditional create_secret() made the whole suite fail in exactly
+-- that case.
+do $fixture$
+declare existing uuid;
+begin
+  select id into existing from vault.secrets where name = 'master_encryption_key';
+  if existing is null then
+    perform vault.create_secret('cGd0YXAtdGVzdC1rZXktMzItYnl0ZXMtYWVzLW9r', 'master_encryption_key', 'transaction-local fixture');
+  else
+    perform vault.update_secret(existing, 'cGd0YXAtdGVzdC1rZXktMzItYnl0ZXMtYWVzLW9r', 'master_encryption_key', 'transaction-local fixture');
+  end if;
+end $fixture$;
 set local role authenticated;
 select is(public.create_secret('pgt423.example','actor','fixture-password', p_twofa_enabled=>true, p_twofa_type=>'app', p_recovery_codes=>array['fixture-recovery'])->>'success',
     'true', 'signed-in create RPC still encrypts');

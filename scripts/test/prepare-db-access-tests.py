@@ -9,7 +9,7 @@ import re
 
 root = Path(__file__).resolve().parents[2]
 for name, operation, count in [
-    ("master_key_rotation", "ops/rotate_master_encryption_key.sql", 3),
+    ("master_key_rotation", "ops/rotate_master_encryption_key.sql", 5),
     ("db_access_audit", "audit/identity_disclosure_audit.sql", 3),
 ]:
     template = root / f"supabase/tests/{name}_test.sql.in"

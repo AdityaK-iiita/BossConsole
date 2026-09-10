@@ -53,6 +53,10 @@ anon_callable as (
   join pg_namespace n on n.oid = p.pronamespace
   where n.nspname = 'public'
     and p.prokind in ('f', 'p')
+      and not exists (
+        select 1 from pg_catalog.pg_depend d
+        where d.classid = 'pg_catalog.pg_proc'::regclass
+          and d.objid = p.oid and d.deptype = 'e')
     and has_function_privilege('anon', p.oid, 'EXECUTE')
 )
 select 'CHECK 1: callable without an account' as check,
@@ -68,6 +72,32 @@ select 'CHECK 1b: expected anonymous signature missing or revoked',
             then 'EXPECTED ANONYMOUS ACCESS MISSING - review signature allowlist'
             else 'HEALTHY' end
 
+union all
+
+-- ---------------------------------------------------------------------------
+-- CHECK 1x (advisory): extensions installed into `public` whose routines are
+-- anon-callable. CHECK 1 exempts them because the event trigger cannot hold an
+-- extension to the invariant without making CREATE EXTENSION impossible - but
+-- the exposure is real and must stay visible rather than vanish. `create
+-- extension pgtap` alone lands 1079 anon-executable functions in public.
+-- The fix is to install extensions into their own schema, not to silence this.
+-- ---------------------------------------------------------------------------
+select 'CHECK 1x (advisory): anon-callable extension routines in public',
+       coalesce(nullif(string_agg(distinct t.extname || ' (' || t.n::text || ')', ', ' order by t.extname || ' (' || t.n::text || ')'), ''), 'HEALTHY')
+from (
+  select e.extname, count(*) as n
+  from pg_catalog.pg_extension e
+  join pg_catalog.pg_depend d on d.refobjid = e.oid and d.deptype = 'e'
+   and d.classid = 'pg_catalog.pg_proc'::regclass
+  join pg_catalog.pg_proc p on p.oid = d.objid
+  join pg_catalog.pg_namespace n on n.oid = p.pronamespace and n.nspname = 'public'
+  where exists (
+    select 1 from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+    left join pg_catalog.pg_roles r on r.oid = a.grantee
+    where a.privilege_type = 'EXECUTE'
+      and (a.grantee = 0 or r.rolname = 'anon'))
+  group by e.extname
+) t
 union all
 
 -- ---------------------------------------------------------------------------
