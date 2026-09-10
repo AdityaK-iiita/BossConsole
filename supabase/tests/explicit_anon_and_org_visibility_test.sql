@@ -28,6 +28,48 @@ from unnest(array[
 select ok(coalesce(has_function_privilege('service_role', to_regprocedure(f), 'EXECUTE'), false), 'edge mutator compatibility: ' || f)
 from unnest(array['public.upsert_plugin_rating(uuid,uuid,integer,text)',
                   'public.record_plugin_download(uuid,uuid,uuid,text)']) f;
+
+-- has_function_privilege proves the grant, not the path. The sweep's own comment
+-- names the sharp edge: an RLS policy expression is evaluated as the QUERYING
+-- role, so revoking a policy helper turns an anonymous SELECT into
+-- 'permission denied for function ...' rather than an empty result - which no
+-- privilege assertion can see. Exercise the reads themselves.
+--
+-- The rows matter. A policy expression is evaluated PER ROW, so on an empty
+-- table it never runs and the probe below passes no matter what has been
+-- revoked - both tables are empty on a fresh database. Seed one row each first.
+--
+-- Sensitivity, measured rather than assumed: with the row present, revoking
+-- can_view_plugin_row from anon DOES fail this probe, and revoking authorize
+-- does NOT. That is not a gap in the seeding - permissive policies are ORed and
+-- short-circuit, so a helper in a policy that never has to be evaluated cannot
+-- be detected this way by any test. This probe covers the helper the anonymous
+-- browse actually depends on, plus the table grant; CHECK 1b covers the rest by
+-- asserting the grants directly.
+insert into public.plugins (plugin_id, display_name, author_name)
+values ('pgtap.acl.probe', 'pgTAP ACL probe', 'pgtap');
+-- Creating the user is enough: handle_new_user assigns the default role, which
+-- is the user_roles row the second probe needs.
+insert into auth.users (id, email, email_confirmed_at)
+values ('42342342-0000-0000-0000-000000000001', 'aclprobe@pgtap.test', now());
+
+select lives_ok($anonread$
+do $inner$
+begin
+  perform set_config('role', 'anon', true);
+  perform 1 from public.plugins limit 1;
+  perform set_config('role', 'postgres', true);
+end $inner$
+$anonread$, 'anonymous SELECT on plugins still resolves its policy helpers');
+
+select lives_ok($anonread$
+do $inner$
+begin
+  perform set_config('role', 'anon', true);
+  perform 1 from public.user_roles limit 1;
+  perform set_config('role', 'postgres', true);
+end $inner$
+$anonread$, 'anonymous SELECT on user_roles still resolves is_user_admin');
 select ok(coalesce(has_function_privilege('supabase_auth_admin',
     to_regprocedure('public.custom_access_token_hook(jsonb)'), 'EXECUTE'), false), 'token issuer retains hook access');
 
