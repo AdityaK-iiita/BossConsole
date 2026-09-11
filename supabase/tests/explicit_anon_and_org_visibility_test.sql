@@ -94,14 +94,20 @@ grant usage, create on schema public to pgtap_acl_creator;
 set local role pgtap_acl_creator;
 create function public.pgtap_public_only() returns integer language sql as 'select 3';
 reset role;
-select ok(has_function_privilege('authenticated', 'public.pgtap_public_only()', 'EXECUTE'),
-    'guard preserves previously PUBLIC-derived authenticated access');
-select ok(has_function_privilege('service_role', 'public.pgtap_public_only()', 'EXECUTE'),
-    'guard preserves previously PUBLIC-derived service access');
+select ok(not has_function_privilege('authenticated', 'public.pgtap_public_only()', 'EXECUTE'),
+    'guard does not materialise PUBLIC-derived authenticated access');
+select ok(not has_function_privilege('service_role', 'public.pgtap_public_only()', 'EXECUTE'),
+    'guard does not materialise PUBLIC-derived service access');
 select ok(not has_function_privilege('anon', 'public.pgtap_public_only()', 'EXECUTE'),
     'guard removes PUBLIC-derived anonymous access');
-revoke execute on function public.pgtap_public_only() from authenticated;
+grant execute on function public.pgtap_public_only() to authenticated, service_role;
 create or replace function public.pgtap_public_only() returns integer language sql as 'select 4';
+select ok(has_function_privilege('authenticated', 'public.pgtap_public_only()', 'EXECUTE'),
+    'replacement preserves a direct authenticated grant');
+select ok(has_function_privilege('service_role', 'public.pgtap_public_only()', 'EXECUTE'),
+    'replacement preserves a direct service grant');
+revoke execute on function public.pgtap_public_only() from authenticated;
+create or replace function public.pgtap_public_only() returns integer language sql as 'select 5';
 select ok(not has_function_privilege('authenticated', 'public.pgtap_public_only()', 'EXECUTE'),
     'replacement does not restore deliberately revoked signed-in access');
 create procedure public.pgtap_anon_procedure() language sql as 'select 1';

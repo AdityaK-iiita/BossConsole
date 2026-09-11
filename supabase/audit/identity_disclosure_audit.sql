@@ -4,8 +4,8 @@
 -- 3 are heuristics, not proof of authorization: comments can match gate names,
 -- indirect calls can hide identity access, and nonliteral RLS predicates and
 -- views require review. CI hard-gates checks 1, 1b, 4 and 5 and separately
--- tests org visibility. Checks 2, 3, 3b and 3c are advisory candidates; CI tests
--- their detection on fixtures, not HEALTHY on every existing identity surface.
+-- tests org visibility. Checks 2, 3, 3b, 3c and 5x are advisory candidates; CI
+-- tests their detection on fixtures, not HEALTHY on every existing surface.
 --
 -- This exists because "we fixed the leak" is not a durable claim. On 2026-09-08
 -- the Arcade published its player roster to unauthenticated callers,
@@ -228,4 +228,28 @@ from unnest(array['public.get_encryption_key()', 'public.encrypt_text(text)',
                   'public.custom_access_token_hook(jsonb)']) signature
 cross join unnest(array['anon', 'authenticated']) role_name
 where to_regprocedure(signature) is null
-   or has_function_privilege(role_name, to_regprocedure(signature), 'EXECUTE');
+   or has_function_privilege(role_name, to_regprocedure(signature), 'EXECUTE')
+
+union all
+
+-- ---------------------------------------------------------------------------
+-- CHECK 5x (advisory): inventory every SECURITY DEFINER routine callable by a
+-- self-registered account. `authenticated` is not a trust boundary while signup
+-- is open. Existing client RPCs make a zero-result gate impractical today, but
+-- keeping the exact signatures visible prevents the surface from growing
+-- silently and gives reviewers a concrete list to triage into an allowlist.
+-- ---------------------------------------------------------------------------
+select 'CHECK 5x (advisory): authenticated-callable SECURITY DEFINER routines',
+       coalesce(string_agg(p.oid::regprocedure::text, ', ' order by p.oid::regprocedure::text), 'HEALTHY')
+from pg_catalog.pg_proc p
+join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'public'
+  and p.prokind in ('f', 'p')
+  and p.prosecdef
+  and p.prorettype not in ('trigger'::regtype, 'event_trigger'::regtype)
+  and pg_catalog.to_regrole('authenticated') is not null
+  and pg_catalog.has_function_privilege('authenticated', p.oid, 'EXECUTE')
+  and not exists (
+    select 1 from pg_catalog.pg_depend d
+    where d.classid = 'pg_catalog.pg_proc'::regclass
+      and d.objid = p.oid and d.deptype = 'e');
