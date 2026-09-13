@@ -1,10 +1,12 @@
 BEGIN;
 
-SELECT plan(11);
+SELECT plan(16);
 
 -- These objects simulate objects created after the restrictive default
 -- privileges migration.
 
+-- Explicit migration owner, carried over from @johncybersage in #592.
+SET ROLE postgres;
 CREATE SEQUENCE public.default_privilege_guard_sequence;
 
 CREATE TABLE public.default_privilege_guard_table (
@@ -17,6 +19,8 @@ LANGUAGE sql
 AS $$
     SELECT 1;
 $$;
+
+RESET ROLE;
 
 -- Table privileges must not be inherited by client roles.
 SELECT ok(
@@ -149,6 +153,28 @@ SELECT ok(
     ),
     'authenticated cannot execute the internal handle_new_user trigger'
 );
+
+-- service_role remains the intended server caller after defaults change.
+SELECT ok((SELECT bool_and(has_table_privilege('service_role',
+    'public.default_privilege_guard_table', privilege))
+    FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) AS p(privilege)),
+    'service_role retains table access');
+SELECT ok(has_sequence_privilege('service_role', 'public.default_privilege_guard_sequence', 'USAGE'),
+    'service_role retains sequence access');
+SELECT ok(has_function_privilege('service_role', 'public.default_privilege_guard_function()', 'EXECUTE'),
+    'service_role retains function access');
+
+-- The public-schema event trigger also revokes PUBLIC. Probe another schema so
+-- that guard cannot mask a missing GLOBAL default EXECUTE revoke.
+SET ROLE postgres;
+CREATE SCHEMA default_privilege_guard_schema;
+CREATE FUNCTION default_privilege_guard_schema.probe() RETURNS integer
+LANGUAGE sql AS $$ SELECT 1 $$;
+RESET ROLE;
+SELECT ok(NOT has_function_privilege('anon', 'default_privilege_guard_schema.probe()', 'EXECUTE'),
+    'global PUBLIC default does not grant anon EXECUTE outside public');
+SELECT ok(NOT has_function_privilege('authenticated', 'default_privilege_guard_schema.probe()', 'EXECUTE'),
+    'global PUBLIC default does not grant authenticated EXECUTE outside public');
 
 SELECT * FROM finish();
 
