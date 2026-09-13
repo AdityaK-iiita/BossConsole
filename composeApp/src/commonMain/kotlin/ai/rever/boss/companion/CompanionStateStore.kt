@@ -23,6 +23,8 @@ class CompanionStateStore(
             )
 
         val updated = _tasks.value.toMutableMap()
+        // Keep event order, including a task that finishes after newer tasks started.
+        updated.remove(event.taskId)
         updated[event.taskId] = task
 
         if (event.isFinished()) {
@@ -45,7 +47,6 @@ class CompanionStateStore(
         val finished =
             tasks.values
                 .filter { it.status.isFinished() }
-                .sortedBy { it.id }
 
         val overflow = finished.size - maxFinishedTasks
 

@@ -3,8 +3,32 @@ package ai.rever.boss.companion
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 
 class CompanionStateStoreTest {
+    @Test
+    fun retainsNewestCompletionRegardlessOfTaskId() {
+        val store = CompanionStateStore(maxFinishedTasks = 1)
+        store.handle(CompanionEvent.Completed("z-old", "Old result"))
+        store.handle(CompanionEvent.Completed("a-new", "New result"))
+
+        assertNull(store.getTask("z-old"))
+        assertEquals(CompanionTaskStatus.COMPLETED, store.getTask("a-new")?.status)
+    }
+
+    @Test
+    fun retentionUsesCompletionOrderAndPreservesActiveTasks() {
+        val store = CompanionStateStore(maxFinishedTasks = 1)
+        store.handle(CompanionEvent.Started("a-long", "Long build"))
+        store.handle(CompanionEvent.Started("active", "Still running"))
+        store.handle(CompanionEvent.Failed("z-short", "Short build"))
+        store.handle(CompanionEvent.Completed("a-long", "Long build"))
+
+        assertNull(store.getTask("z-short"))
+        assertEquals(CompanionTaskStatus.COMPLETED, store.getTask("a-long")?.status)
+        assertEquals(CompanionTaskStatus.WORKING, store.getTask("active")?.status)
+    }
+
     @Test
     fun tracksMultipleTasksIndependently() {
         val store = CompanionStateStore()
