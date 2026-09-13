@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(16);
+SELECT plan(17);
 
 -- These objects simulate objects created after the restrictive default
 -- privileges migration.
@@ -164,17 +164,26 @@ SELECT ok(has_sequence_privilege('service_role', 'public.default_privilege_guard
 SELECT ok(has_function_privilege('service_role', 'public.default_privilege_guard_function()', 'EXECUTE'),
     'service_role retains function access');
 
--- The public-schema event trigger also revokes PUBLIC. Probe another schema so
--- that guard cannot mask a missing GLOBAL default EXECUTE revoke.
+-- Default ACLs must not silently restore client grants behind the event guard.
+SELECT ok(NOT EXISTS (
+    SELECT 1 FROM pg_default_acl d
+    CROSS JOIN LATERAL aclexplode(d.defaclacl) a
+    WHERE d.defaclrole = 'postgres'::regrole
+      AND d.defaclnamespace = 'public'::regnamespace
+      AND d.defaclobjtype IN ('r', 'S', 'f')
+      AND a.grantee IN ('anon'::regrole, 'authenticated'::regrole)
+), 'public defaults contain no client grants');
+
+-- The public-schema guard must not change functions in other schemas.
 SET ROLE postgres;
 CREATE SCHEMA default_privilege_guard_schema;
 CREATE FUNCTION default_privilege_guard_schema.probe() RETURNS integer
 LANGUAGE sql AS $$ SELECT 1 $$;
 RESET ROLE;
-SELECT ok(NOT has_function_privilege('anon', 'default_privilege_guard_schema.probe()', 'EXECUTE'),
-    'global PUBLIC default does not grant anon EXECUTE outside public');
-SELECT ok(NOT has_function_privilege('authenticated', 'default_privilege_guard_schema.probe()', 'EXECUTE'),
-    'global PUBLIC default does not grant authenticated EXECUTE outside public');
+SELECT ok(has_function_privilege('anon', 'default_privilege_guard_schema.probe()', 'EXECUTE'),
+    'outside-public function retains built-in PUBLIC EXECUTE for anon');
+SELECT ok(has_function_privilege('authenticated', 'default_privilege_guard_schema.probe()', 'EXECUTE'),
+    'outside-public function retains built-in PUBLIC EXECUTE for authenticated');
 
 SELECT * FROM finish();
 
