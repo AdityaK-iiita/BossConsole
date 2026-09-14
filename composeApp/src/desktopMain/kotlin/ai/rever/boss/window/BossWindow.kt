@@ -727,6 +727,11 @@ fun ApplicationScope.BossWindow(
                     onClick = {
                         MenuActionsHandler.triggerActualSize(windowState.id)
                     },
+                    // Their bindings are BROWSER-context: AWTKeyboardInterceptor declines them
+                    // outside a browser tab, so the menu must not out-broaden the interceptor.
+                    // Un-gated, a now-live Ctrl accelerator (Windows/Linux) would fire these
+                    // from a terminal or editor tab. Back/Forward/DevTools already gate this way.
+                    enabled = hasBrowser,
                 )
                 Item(
                     "Zoom In",
@@ -734,6 +739,7 @@ fun ApplicationScope.BossWindow(
                     onClick = {
                         MenuActionsHandler.triggerZoomIn(windowState.id)
                     },
+                    enabled = hasBrowser,
                 )
                 Item(
                     "Zoom Out",
@@ -741,6 +747,7 @@ fun ApplicationScope.BossWindow(
                     onClick = {
                         MenuActionsHandler.triggerZoomOut(windowState.id)
                     },
+                    enabled = hasBrowser,
                 )
                 Item(
                     "Reload",
@@ -748,6 +755,7 @@ fun ApplicationScope.BossWindow(
                     onClick = {
                         MenuActionsHandler.triggerReloadBrowser(windowState.id)
                     },
+                    enabled = hasBrowser,
                 )
                 Item(
                     "Back",
