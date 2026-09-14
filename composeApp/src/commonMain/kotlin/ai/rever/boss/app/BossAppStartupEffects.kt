@@ -1,7 +1,6 @@
 package ai.rever.boss.app
 
 import ai.rever.boss.companion.CompanionCoordinator
-import ai.rever.boss.plugin.api.ApplicationEventBusRegistry
 import ai.rever.boss.components.plugin.DefaultPlugin
 import ai.rever.boss.components.plugin.PluginUpdateRegistry
 import ai.rever.boss.components.plugin.tab_types.fluck.FluckTabInfo
@@ -32,6 +31,7 @@ import ai.rever.boss.performance.BrowserTabInfo
 import ai.rever.boss.performance.EditorTabResourceInfo
 import ai.rever.boss.performance.PerformanceState
 import ai.rever.boss.performance.TerminalInfo
+import ai.rever.boss.plugin.api.ApplicationEventBusRegistry
 import ai.rever.boss.plugin.api.Panel.Companion.bottom
 import ai.rever.boss.plugin.api.Panel.Companion.left
 import ai.rever.boss.plugin.api.Panel.Companion.right

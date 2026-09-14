@@ -6,10 +6,10 @@ import ai.rever.boss.components.overlays.ContextMenuItem
 import ai.rever.boss.icons.LanguageIcons
 import ai.rever.boss.plugin.ui.BossTheme
 import ai.rever.boss.run.Language
+import ai.rever.boss.run.ProcessStatus
 import ai.rever.boss.run.RunConfiguration
 import ai.rever.boss.run.RunConfigurationManager
 import ai.rever.boss.run.RunExecutionService
-import ai.rever.boss.run.ProcessStatus
 import ai.rever.boss.run.RunnerTerminalService
 import ai.rever.boss.window.LocalWindowId
 import ai.rever.boss.window.LocalWindowRunnerState
@@ -59,6 +59,17 @@ import kotlinx.coroutines.launch
  * IntelliJ-style behavior: Only shows previously run configurations (run history),
  * not auto-detected configurations. Auto-detection is handled by a separate plugin.
  */
+private fun RunningProcess.isActiveFor(
+    configId: String,
+    windowId: String,
+): Boolean =
+    this.configId == configId &&
+        this.windowId == windowId &&
+        (
+            status == ProcessStatus.STARTING ||
+                status == ProcessStatus.RUNNING
+        )
+
 @Composable
 fun BossTopRunBar() {
     val scope = rememberCoroutineScope()
@@ -78,15 +89,9 @@ fun BossTopRunBar() {
 
     val selectedRunningProcess =
         selectedConfig?.let { config ->
-            runningProcesses
-                .lastOrNull { process ->
-                    process.configId == config.id &&
-                        process.windowId == windowId &&
-                        (
-                            process.status == ProcessStatus.STARTING ||
-                                process.status == ProcessStatus.RUNNING
-                        )
-                }
+            runningProcesses.lastOrNull {
+                it.isActiveFor(config.id, windowId)
+            }
         }
 
     val isSelectedConfigRunning = selectedRunningProcess != null
@@ -122,14 +127,7 @@ fun BossTopRunBar() {
                 scope.launch {
                     windowRunnerState.selectConfiguration(config)
                     runningProcesses
-                        .lastOrNull { process ->
-                            process.configId == config.id &&
-                                process.windowId == windowId &&
-                                (
-                                    process.status == ProcessStatus.STARTING ||
-                                        process.status == ProcessStatus.RUNNING
-                                )
-                        }
+                        .lastOrNull { it.isActiveFor(config.id, windowId) }
                         ?.let { process ->
                             RunExecutionService.stop(process.id)
                         }

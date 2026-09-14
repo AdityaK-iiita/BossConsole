@@ -1436,7 +1436,6 @@ fun ApplicationScope.BossWindow(
             }
         }
     }
-
 }
 
 /**

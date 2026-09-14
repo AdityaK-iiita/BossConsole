@@ -12,11 +12,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.Button
 import androidx.compose.material.Text
@@ -184,54 +184,49 @@ private fun java.awt.Window.saveCompanionPosition() {
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun CompanionWindow() {
-    val coordinator = CompanionCoordinator.getOrNull() ?: return
+    val coordinator = CompanionCoordinator.getOrNull()
 
-    val tasks by coordinator.tasks().collectAsState()
-    val enabled by coordinator.enabled.collectAsState()
-    val snoozed by coordinator.snoozed.collectAsState()
-    val dismissed by coordinator.dismissed.collectAsState()
+    if (coordinator != null) {
+        val tasks by coordinator.tasks().collectAsState()
+        val enabled by coordinator.enabled.collectAsState()
+        val snoozed by coordinator.snoozed.collectAsState()
+        val dismissed by coordinator.dismissed.collectAsState()
 
-    if (!enabled) {
-        return
+        when {
+            !enabled || dismissed -> {
+                Unit
+            }
+
+            snoozed || tasks.isEmpty() -> {
+                CompanionSnoozedWindow(coordinator)
+            }
+
+            else -> {
+                val taskList = tasks.values.toList()
+                var selectedTaskId by remember(taskList.map { it.id }) {
+                    mutableStateOf(taskList.last().id)
+                }
+                val selectedTask =
+                    taskList.firstOrNull { it.id == selectedTaskId }
+                        ?: taskList.last()
+                CompanionWindowFrame(
+                    coordinator = coordinator,
+                    taskList = taskList,
+                    selectedTask = selectedTask,
+                    onTaskSelected = { selectedTaskId = it },
+                )
+            }
+        }
     }
-
-    if (dismissed) {
-        return
-    }
-
-    if (snoozed || tasks.isEmpty()) {
-        CompanionSnoozedWindow(coordinator)
-        return
-    }
-
-    val taskList = tasks.values.toList()
-
-    var selectedTaskId by remember(taskList.map { it.id }) {
-        mutableStateOf(taskList.last().id)
-    }
-
-    val selectedTask =
-        taskList.firstOrNull { it.id == selectedTaskId }
-            ?: taskList.last()
-
-    CompanionWindowFrame(
-        coordinator = coordinator,
-        taskList = taskList,
-        selectedTask = selectedTask,
-        onTaskSelected = { selectedTaskId = it },
-    )
 }
 
 @Composable
-private fun CompanionSnoozedWindow(
-    coordinator: CompanionCoordinator,
-) {
+private fun CompanionSnoozedWindow(coordinator: CompanionCoordinator) {
     val state =
         rememberWindowState(
             width = 280.dp,
             height = 100.dp,
         )
-
     Window(
         onCloseRequest = { coordinator.dismiss() },
         state = state,
@@ -291,7 +286,6 @@ private fun CompanionWindowFrame(
             width = 360.dp,
             height = 240.dp,
         )
-
     Window(
         onCloseRequest = { coordinator.dismiss() },
         state = state,
@@ -352,9 +346,7 @@ private fun CompanionContent(
 }
 
 @Composable
-private fun CompanionHeader(
-    coordinator: CompanionCoordinator,
-) {
+private fun CompanionHeader(coordinator: CompanionCoordinator) {
     Row(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -362,7 +354,6 @@ private fun CompanionHeader(
             "🤖 BOSS Companion",
             color = Color.White,
         )
-
         Button(
             onClick = {
                 coordinator.snooze()
@@ -426,13 +417,11 @@ private fun CompanionTaskRow(
             statusIcon(task.status),
             color = Color.White,
         )
-
         Column {
             Text(
                 task.name,
                 color = Color.White,
             )
-
             Text(
                 statusText(task.status),
                 color = Color.LightGray,
@@ -447,7 +436,6 @@ private fun CompanionTaskResult(task: CompanionTask) {
         completionMessage(task),
         color = Color.White,
     )
-
     if (task.status == CompanionTaskStatus.COMPLETED ||
         task.status == CompanionTaskStatus.FAILED
     ) {
@@ -477,7 +465,6 @@ private fun java.awt.Window.moveCompanionBy(dragAmount: androidx.compose.ui.geom
             newX,
             newY,
         )
-
     saveCompanionPosition()
 }
 

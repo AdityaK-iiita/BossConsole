@@ -61,30 +61,30 @@ class RunProcessCompanionAdapter(
                                 it.status == ProcessStatus.RUNNING
                         )
                 }?.let { process ->
-                val failed = exitCode != 0
+                    val failed = exitCode != 0
 
-                emitProcessEvent(
-                    RunProcessEvent(
+                    emitProcessEvent(
+                        RunProcessEvent(
+                            processId = process.id,
+                            configId = process.configId,
+                            configName = process.configName,
+                            windowId = process.windowId,
+                            terminalId = process.terminalId,
+                            status =
+                                if (failed) {
+                                    ai.rever.boss.components.events.RunProcessStatus.FAILED
+                                } else {
+                                    ai.rever.boss.components.events.RunProcessStatus.COMPLETED
+                                },
+                            exitCode = exitCode,
+                        ),
+                    )
+
+                    RunExecutionService.markCompleted(
                         processId = process.id,
-                        configId = process.configId,
-                        configName = process.configName,
-                        windowId = process.windowId,
-                        terminalId = process.terminalId,
-                        status =
-                            if (failed) {
-                                ai.rever.boss.components.events.RunProcessStatus.FAILED
-                            } else {
-                                ai.rever.boss.components.events.RunProcessStatus.COMPLETED
-                            },
-                        exitCode = exitCode,
-                    ),
-                )
-
-                RunExecutionService.markCompleted(
-                    processId = process.id,
-                    failed = failed,
-                )
-            }
+                        failed = failed,
+                    )
+                }
         }
     }
 
@@ -100,20 +100,18 @@ class RunProcessCompanionAdapter(
                                 it.status == ProcessStatus.RUNNING
                         )
                 }?.let { process ->
-                emitProcessEvent(
-                    RunProcessEvent(
-                        processId = process.id,
-                        configId = process.configId,
-                        configName = process.configName,
-                        windowId = process.windowId,
-                        terminalId = process.terminalId,
-                        status =
-                            ai.rever.boss.components.events.RunProcessStatus.WAITING_FOR_INPUT,
-                    ),
-                )
-            }
+                    emitProcessEvent(
+                        RunProcessEvent(
+                            processId = process.id,
+                            configId = process.configId,
+                            configName = process.configName,
+                            windowId = process.windowId,
+                            terminalId = process.terminalId,
+                            status =
+                                ai.rever.boss.components.events.RunProcessStatus.WAITING_FOR_INPUT,
+                        ),
+                    )
+                }
         }
     }
-
-
 }

@@ -1061,7 +1061,8 @@ class DefaultPlugin(
 
                     if (panelId != null) {
                         splitView.selectTabInPanel(event.tabId, panelId)
-                        ai.rever.boss.utils.WindowFocusManager.focusWindow(ownWindowId)
+                        ai.rever.boss.utils.WindowFocusManager
+                            .focusWindow(ownWindowId)
                     } else {
                         logger.debug(
                             LogCategory.UI,
