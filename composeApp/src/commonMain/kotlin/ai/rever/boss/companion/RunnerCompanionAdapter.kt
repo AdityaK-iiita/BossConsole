@@ -169,8 +169,7 @@ class RunnerCompanionAdapter(
                     ),
                 )
 
-                trackedTasks.remove(task.id)
-                taskConfigIds.remove(task.id)
+                trackedTasks[task.id] = completed
             }
     }
 
@@ -197,8 +196,7 @@ class RunnerCompanionAdapter(
                     ),
                 )
 
-                trackedTasks.remove(task.id)
-                taskConfigIds.remove(task.id)
+                trackedTasks[task.id] = failed
             }
     }
 
@@ -237,8 +235,7 @@ class RunnerCompanionAdapter(
             ),
         )
 
-        trackedTasks.remove(task.id)
-        taskConfigIds.remove(task.id)
+        trackedTasks[task.id] = stopped
     }
 
     private fun CompanionTask.isActive(): Boolean =
