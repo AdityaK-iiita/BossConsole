@@ -7,11 +7,11 @@ import ai.rever.boss.icons.LanguageIcons
 import ai.rever.boss.plugin.ui.BossTheme
 import ai.rever.boss.run.Language
 import ai.rever.boss.run.ProcessStatus
-import ai.rever.boss.run.RunningProcess
 import ai.rever.boss.run.RunConfiguration
 import ai.rever.boss.run.RunConfigurationManager
 import ai.rever.boss.run.RunExecutionService
 import ai.rever.boss.run.RunnerTerminalService
+import ai.rever.boss.run.RunningProcess
 import ai.rever.boss.window.LocalWindowId
 import ai.rever.boss.window.LocalWindowRunnerState
 import androidx.compose.foundation.background
