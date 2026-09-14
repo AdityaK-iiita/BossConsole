@@ -54,7 +54,7 @@ class RunProcessCompanionAdapter(
         val exitCode = (payload["exitCode"] as? Number)?.toInt()
 
         if (windowId != null && terminalId != null && exitCode != null) {
-            findRunningProcess(windowId, terminalId)?.let { process ->
+            findRunningProcess(windowId, terminalId, payload["command"] as? String)?.let { process ->
                 val failed = exitCode != 0
 
                 emitProcessEvent(
@@ -87,7 +87,7 @@ class RunProcessCompanionAdapter(
         val terminalId = payload["terminalId"] as? String
 
         if (windowId != null && terminalId != null) {
-            findRunningProcess(windowId, terminalId)?.let { process ->
+            findRunningProcess(windowId, terminalId, payload["command"] as? String)?.let { process ->
                 emitProcessEvent(
                     RunProcessEvent(
                         processId = process.id,
@@ -106,10 +106,12 @@ class RunProcessCompanionAdapter(
     private fun findRunningProcess(
         windowId: String,
         terminalId: String,
+        command: String?,
     ): ai.rever.boss.run.RunningProcess? =
         RunExecutionService.runningProcesses.value.firstOrNull {
             it.windowId == windowId &&
                 it.terminalId == terminalId &&
+                it.command == command &&
                 (
                     it.status == ProcessStatus.STARTING ||
                         it.status == ProcessStatus.RUNNING
