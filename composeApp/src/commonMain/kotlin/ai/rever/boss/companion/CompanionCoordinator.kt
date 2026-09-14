@@ -3,6 +3,8 @@ package ai.rever.boss.companion
 import ai.rever.boss.components.events.RunProcessEventBus
 import ai.rever.boss.plugin.api.CustomPluginEvent
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asStateFlow
@@ -11,8 +13,11 @@ import kotlinx.coroutines.flow.onEach
 
 class CompanionCoordinator internal constructor(
     private val applicationEvents: Flow<CustomPluginEvent>,
-    private val scope: CoroutineScope,
 ) {
+
+    // Application-scoped: survives individual BOSS window disposal.
+    private val scope =
+        CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val stateStore = CompanionStateStore()
 
     private val preferences =
@@ -111,13 +116,15 @@ class CompanionCoordinator internal constructor(
 
         fun initialize(
             applicationEvents: Flow<CustomPluginEvent>,
-            scope: CoroutineScope,
         ) {
             if (::instance.isInitialized) {
-                instance.stop()
+                return
             }
 
-            instance = CompanionCoordinator(applicationEvents, scope)
+            instance = CompanionCoordinator(applicationEvents)
         }
+
+        fun getOrNull(): CompanionCoordinator? =
+            if (::instance.isInitialized) instance else null
     }
 }

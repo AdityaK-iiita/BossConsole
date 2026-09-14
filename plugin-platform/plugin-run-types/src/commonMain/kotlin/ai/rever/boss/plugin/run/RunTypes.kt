@@ -300,6 +300,7 @@ data class RunnerTerminalOpenEvent(
     val workingDirectory: String?,
     val isRerun: Boolean,
     val sourceWindowId: String, // Window that initiated the run (Issue #498)
+    val processId: String? = null,
 )
 
 /**

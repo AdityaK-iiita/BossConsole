@@ -49,12 +49,18 @@ class RunProcessCompanionAdapter(
     }
 
     private suspend fun handleLifecycle(payload: Map<String, Any?>) {
-        val windowId = payload["windowId"] as? String
-        val terminalId = payload["terminalId"] as? String
+        val processId = payload["processId"] as? String
         val exitCode = (payload["exitCode"] as? Number)?.toInt()
 
-        if (windowId != null && terminalId != null && exitCode != null) {
-            findRunningProcess(windowId, terminalId, payload["command"] as? String)?.let { process ->
+        if (processId != null && exitCode != null) {
+            RunExecutionService.runningProcesses.value
+                .firstOrNull {
+                    it.id == processId &&
+                        (
+                            it.status == ProcessStatus.STARTING ||
+                                it.status == ProcessStatus.RUNNING
+                        )
+                }?.let { process ->
                 val failed = exitCode != 0
 
                 emitProcessEvent(
@@ -83,11 +89,17 @@ class RunProcessCompanionAdapter(
     }
 
     private suspend fun handleWaitingForInput(payload: Map<String, Any?>) {
-        val windowId = payload["windowId"] as? String
-        val terminalId = payload["terminalId"] as? String
+        val processId = payload["processId"] as? String
 
-        if (windowId != null && terminalId != null) {
-            findRunningProcess(windowId, terminalId, payload["command"] as? String)?.let { process ->
+        if (processId != null) {
+            RunExecutionService.runningProcesses.value
+                .firstOrNull {
+                    it.id == processId &&
+                        (
+                            it.status == ProcessStatus.STARTING ||
+                                it.status == ProcessStatus.RUNNING
+                        )
+                }?.let { process ->
                 emitProcessEvent(
                     RunProcessEvent(
                         processId = process.id,
@@ -103,18 +115,5 @@ class RunProcessCompanionAdapter(
         }
     }
 
-    private fun findRunningProcess(
-        windowId: String,
-        terminalId: String,
-        command: String?,
-    ): ai.rever.boss.run.RunningProcess? =
-        RunExecutionService.runningProcesses.value.firstOrNull {
-            it.windowId == windowId &&
-                it.terminalId == terminalId &&
-                it.command == command &&
-                (
-                    it.status == ProcessStatus.STARTING ||
-                        it.status == ProcessStatus.RUNNING
-                )
-        }
+
 }

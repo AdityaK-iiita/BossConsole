@@ -1,6 +1,10 @@
 package ai.rever.boss.run
 
 import ai.rever.boss.components.events.RunnerTerminalEventBus
+
+import ai.rever.boss.components.plugin.providers.publishSystemEvent
+import ai.rever.boss.plugin.api.CustomPluginEvent
+
 import ai.rever.boss.plugin.api.SIDEBAR_TERMINAL_ID
 import ai.rever.boss.plugin.run.Language
 import ai.rever.boss.plugin.run.MAX_RERUN_DELAY_MS
@@ -162,6 +166,7 @@ actual object RunnerTerminalService {
         config: RunConfiguration,
         windowId: String,
         onTerminalCreated: (String) -> Unit,
+        processId: String?,
     ): String {
         // Build the command outside lock (no state access needed)
         val command = buildFullCommand(config)
@@ -191,7 +196,24 @@ actual object RunnerTerminalService {
             workingDirectory = resolveWorkingDirectory(config).ifBlank { null },
             isRerun = isRerun,
             sourceWindowId = windowId,
+            processId = processId,
         )
+
+        if (processId != null) {
+            publishSystemEvent(
+                CustomPluginEvent(
+                    sourcePluginId = "boss-console",
+                    eventName = "terminal.execution.binding",
+                    payload =
+                        mapOf(
+                            "processId" to processId,
+                            "windowId" to windowId,
+                            "terminalId" to terminalId,
+                            "command" to command,
+                        ),
+                ),
+            )
+        }
 
         onTerminalCreated(terminalId)
         return terminalId
@@ -293,6 +315,7 @@ actual object RunnerTerminalService {
         config: RunConfiguration,
         windowId: String,
         onTerminalCreated: (String) -> Unit,
+        processId: String?,
     ): String {
         logger.debug(LogCategory.TERMINAL, "Re-running config", mapOf("configName" to config.name))
 
@@ -391,6 +414,7 @@ actual object RunnerTerminalService {
             workingDirectory = resolveWorkingDirectory(config).ifBlank { null },
             isRerun = true,
             sourceWindowId = windowId,
+            processId = processId,
         )
 
         onTerminalCreated(terminalId)

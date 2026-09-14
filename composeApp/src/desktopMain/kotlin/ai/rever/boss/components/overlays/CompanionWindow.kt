@@ -184,10 +184,12 @@ private fun java.awt.Window.saveCompanionPosition() {
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun CompanionWindow() {
-    val tasks by CompanionCoordinator.instance.tasks().collectAsState()
-    val enabled by CompanionCoordinator.instance.enabled.collectAsState()
-    val snoozed by CompanionCoordinator.instance.snoozed.collectAsState()
-    val dismissed by CompanionCoordinator.instance.dismissed.collectAsState()
+    val coordinator = CompanionCoordinator.getOrNull() ?: return
+
+    val tasks by coordinator.tasks().collectAsState()
+    val enabled by coordinator.enabled.collectAsState()
+    val snoozed by coordinator.snoozed.collectAsState()
+    val dismissed by coordinator.dismissed.collectAsState()
 
     if (!enabled) {
         return
@@ -198,7 +200,7 @@ fun CompanionWindow() {
     }
 
     if (snoozed || tasks.isEmpty()) {
-        CompanionSnoozedWindow()
+        CompanionSnoozedWindow(coordinator)
         return
     }
 
@@ -213,6 +215,7 @@ fun CompanionWindow() {
             ?: taskList.last()
 
     CompanionWindowFrame(
+        coordinator = coordinator,
         taskList = taskList,
         selectedTask = selectedTask,
         onTaskSelected = { selectedTaskId = it },
@@ -220,7 +223,9 @@ fun CompanionWindow() {
 }
 
 @Composable
-private fun CompanionSnoozedWindow() {
+private fun CompanionSnoozedWindow(
+    coordinator: CompanionCoordinator,
+) {
     val state =
         rememberWindowState(
             width = 280.dp,
@@ -228,7 +233,7 @@ private fun CompanionSnoozedWindow() {
         )
 
     Window(
-        onCloseRequest = { CompanionCoordinator.instance.dismiss() },
+        onCloseRequest = { coordinator.dismiss() },
         state = state,
         title = "BOSS Companion",
         icon = BossWindowIcon.painter,
@@ -256,14 +261,14 @@ private fun CompanionSnoozedWindow() {
                 )
                 Button(
                     onClick = {
-                        CompanionCoordinator.instance.unsnooze()
+                        coordinator.unsnooze()
                     },
                 ) {
                     Text("Unsnooze")
                 }
                 Button(
                     onClick = {
-                        CompanionCoordinator.instance.dismiss()
+                        coordinator.dismiss()
                     },
                 ) {
                     Text("Dismiss")
@@ -276,6 +281,7 @@ private fun CompanionSnoozedWindow() {
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun CompanionWindowFrame(
+    coordinator: CompanionCoordinator,
     taskList: List<CompanionTask>,
     selectedTask: CompanionTask,
     onTaskSelected: (String) -> Unit,
@@ -287,7 +293,7 @@ private fun CompanionWindowFrame(
         )
 
     Window(
-        onCloseRequest = { CompanionCoordinator.instance.dismiss() },
+        onCloseRequest = { coordinator.dismiss() },
         state = state,
         title = "BOSS Companion",
         icon = BossWindowIcon.painter,
@@ -304,6 +310,7 @@ private fun CompanionWindowFrame(
         }
 
         CompanionContent(
+            coordinator = coordinator,
             window = window,
             taskList = taskList,
             selectedTask = selectedTask,
@@ -314,6 +321,7 @@ private fun CompanionWindowFrame(
 
 @Composable
 private fun CompanionContent(
+    coordinator: CompanionCoordinator,
     window: java.awt.Window?,
     taskList: List<CompanionTask>,
     selectedTask: CompanionTask,
@@ -333,7 +341,7 @@ private fun CompanionContent(
                 }.padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        CompanionHeader()
+        CompanionHeader(coordinator)
         CompanionTaskList(
             tasks = taskList,
             selectedTaskId = selectedTask.id,
@@ -344,7 +352,9 @@ private fun CompanionContent(
 }
 
 @Composable
-private fun CompanionHeader() {
+private fun CompanionHeader(
+    coordinator: CompanionCoordinator,
+) {
     Row(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -355,7 +365,7 @@ private fun CompanionHeader() {
 
         Button(
             onClick = {
-                CompanionCoordinator.instance.snooze()
+                coordinator.snooze()
             },
         ) {
             Text("Snooze")
@@ -363,7 +373,7 @@ private fun CompanionHeader() {
 
         Button(
             onClick = {
-                CompanionCoordinator.instance.setEnabled(false)
+                coordinator.setEnabled(false)
             },
         ) {
             Text("Disable")

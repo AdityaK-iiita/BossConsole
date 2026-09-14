@@ -8,6 +8,8 @@ import ai.rever.boss.plugin.ui.BossTheme
 import ai.rever.boss.run.Language
 import ai.rever.boss.run.RunConfiguration
 import ai.rever.boss.run.RunConfigurationManager
+import ai.rever.boss.run.RunExecutionService
+import ai.rever.boss.run.ProcessStatus
 import ai.rever.boss.run.RunnerTerminalService
 import ai.rever.boss.window.LocalWindowId
 import ai.rever.boss.window.LocalWindowRunnerState
@@ -72,10 +74,22 @@ fun BossTopRunBar() {
     // Issue #498: Observe configToWindows to trigger recomposition when window-config mappings change
     // This ensures the stop button updates immediately when a run starts in any window
     val configToWindows by RunnerTerminalService.configToWindows.collectAsState()
-    val isSelectedConfigRunning =
+    val runningProcesses by RunExecutionService.runningProcesses.collectAsState()
+
+    val selectedRunningProcess =
         selectedConfig?.let { config ->
-            configToWindows[config.id]?.contains(windowId) == true
-        } ?: false
+            runningProcesses
+                .lastOrNull { process ->
+                    process.configId == config.id &&
+                        process.windowId == windowId &&
+                        (
+                            process.status == ProcessStatus.STARTING ||
+                                process.status == ProcessStatus.RUNNING
+                        )
+                }
+        }
+
+    val isSelectedConfigRunning = selectedRunningProcess != null
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -94,20 +108,31 @@ fun BossTopRunBar() {
             onRun = { config ->
                 scope.launch {
                     windowRunnerState.selectConfiguration(config)
-                    RunnerTerminalService.openRunnerTerminal(config, windowId)
+                    RunExecutionService.execute(config, windowId = windowId)
                     RunConfigurationManager.addConfiguration(config)
                 }
             },
             onRerun = { config ->
                 scope.launch {
                     windowRunnerState.selectConfiguration(config)
-                    RunnerTerminalService.rerunRunner(config, windowId)
+                    RunExecutionService.rerun(config, windowId)
                 }
             },
             onStop = { config ->
                 scope.launch {
                     windowRunnerState.selectConfiguration(config)
-                    RunnerTerminalService.stopRunner(windowId, config.id)
+                    runningProcesses
+                        .lastOrNull { process ->
+                            process.configId == config.id &&
+                                process.windowId == windowId &&
+                                (
+                                    process.status == ProcessStatus.STARTING ||
+                                        process.status == ProcessStatus.RUNNING
+                                )
+                        }
+                        ?.let { process ->
+                            RunExecutionService.stop(process.id)
+                        }
                 }
             },
             onDelete = { config ->
@@ -130,10 +155,10 @@ fun BossTopRunBar() {
                     scope.launch {
                         if (isSelectedConfigRunning) {
                             // Re-run: stop and run again
-                            RunnerTerminalService.rerunRunner(config, windowId)
+                            RunExecutionService.rerun(config, windowId)
                         } else {
                             // First run
-                            RunnerTerminalService.openRunnerTerminal(config, windowId)
+                            RunExecutionService.execute(config, windowId = windowId)
                         }
                         // Also add to run history
                         RunConfigurationManager.addConfiguration(config)
@@ -151,9 +176,9 @@ fun BossTopRunBar() {
             enabled = isSelectedConfigRunning,
             contentDescription = "Stop",
             onClick = {
-                selectedConfig?.let { config ->
+                selectedRunningProcess?.let { process ->
                     scope.launch {
-                        RunnerTerminalService.stopRunner(windowId, config.id)
+                        RunExecutionService.stop(process.id)
                     }
                 }
             },

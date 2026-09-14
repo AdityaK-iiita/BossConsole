@@ -16,7 +16,7 @@ The companion event model is intentionally independent of these sources so addit
 Supported task states are:
 
 - `WORKING` - the task is actively running.
-- `WAITING_FOR_INPUT` - the task is waiting for user input.
+- `WAITING_FOR_INPUT` - reserved for task sources that can reliably report that a task is waiting for user input.
 - `COMPLETED` - the task completed successfully.
 - `FAILED` - the task completed unsuccessfully.
 - `STOPPED` - the task was explicitly stopped.

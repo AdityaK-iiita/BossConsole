@@ -94,6 +94,8 @@ import ai.rever.boss.plugin.sandbox.health.PluginHealthSummary
 import ai.rever.boss.plugin.sandbox.notification.BossPluginNotificationService
 import ai.rever.boss.plugin.sandbox.notification.PluginSandboxNotificationListener
 import ai.rever.boss.plugin.sandbox.notification.PluginToastState
+import ai.rever.boss.plugin.sandbox.notification.ToastMessage
+import ai.rever.boss.plugin.sandbox.notification.ToastType
 import ai.rever.boss.plugin.ui.ContextMenuItemData
 import ai.rever.boss.search.ContentSearchService
 import ai.rever.boss.search.SearchRegistryImpl
@@ -1058,6 +1060,13 @@ class DefaultPlugin(
                             LogCategory.UI,
                             "Companion requested a tab this window does not have",
                             mapOf("tabId" to event.tabId),
+                        )
+                        pluginToastState.show(
+                            ToastMessage(
+                                type = ToastType.ERROR,
+                                title = "Companion navigation unavailable",
+                                message = "The requested terminal or tab is no longer open.",
+                            ),
                         )
                     }
                 }

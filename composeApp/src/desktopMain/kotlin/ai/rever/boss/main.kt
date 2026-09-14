@@ -721,6 +721,9 @@ fun main(args: Array<String>) {
                     }
                 }
             }
+
+        // Application-scoped companion: independent of individual BOSS windows.
+        ai.rever.boss.components.overlays.CompanionWindow()
         } // CompositionLocalProvider
     }
 }

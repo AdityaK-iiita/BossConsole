@@ -55,6 +55,7 @@ object RunnerTerminalEventBus {
         workingDirectory: String?,
         isRerun: Boolean,
         sourceWindowId: String,
+        processId: String? = null,
     ) {
         val event =
             RunnerTerminalOpenEvent(
@@ -65,6 +66,7 @@ object RunnerTerminalEventBus {
                 workingDirectory = workingDirectory,
                 isRerun = isRerun,
                 sourceWindowId = sourceWindowId,
+                processId = processId,
             )
         _openEvents.emit(event)
         ipcBridge?.forward("RunnerTerminalOpenEvent", event, sourceWindowId)
