@@ -7,6 +7,7 @@ import ai.rever.boss.icons.LanguageIcons
 import ai.rever.boss.plugin.ui.BossTheme
 import ai.rever.boss.run.Language
 import ai.rever.boss.run.ProcessStatus
+import ai.rever.boss.run.RunningProcess
 import ai.rever.boss.run.RunConfiguration
 import ai.rever.boss.run.RunConfigurationManager
 import ai.rever.boss.run.RunExecutionService
