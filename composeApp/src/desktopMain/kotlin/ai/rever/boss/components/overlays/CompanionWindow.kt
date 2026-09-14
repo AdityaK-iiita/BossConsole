@@ -12,8 +12,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.Button
@@ -185,8 +187,18 @@ fun CompanionWindow() {
     val tasks by CompanionCoordinator.instance.tasks().collectAsState()
     val enabled by CompanionCoordinator.instance.enabled.collectAsState()
     val snoozed by CompanionCoordinator.instance.snoozed.collectAsState()
+    val dismissed by CompanionCoordinator.instance.dismissed.collectAsState()
 
-    if (!enabled || snoozed || tasks.isEmpty()) {
+    if (!enabled) {
+        return
+    }
+
+    if (dismissed) {
+        return
+    }
+
+    if (snoozed || tasks.isEmpty()) {
+        CompanionSnoozedWindow()
         return
     }
 
@@ -207,6 +219,60 @@ fun CompanionWindow() {
     )
 }
 
+@Composable
+private fun CompanionSnoozedWindow() {
+    val state =
+        rememberWindowState(
+            width = 280.dp,
+            height = 100.dp,
+        )
+
+    Window(
+        onCloseRequest = { CompanionCoordinator.instance.dismiss() },
+        state = state,
+        title = "BOSS Companion",
+        icon = BossWindowIcon.painter,
+        undecorated = true,
+        transparent = true,
+        alwaysOnTop = true,
+        focusable = false,
+        resizable = false,
+    ) {
+        Column(
+            modifier =
+                Modifier
+                    .background(
+                        Color(0xFF202124),
+                        RoundedCornerShape(18.dp),
+                    ).padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "🤖 BOSS Companion snoozed",
+                    color = Color.White,
+                )
+                Button(
+                    onClick = {
+                        CompanionCoordinator.instance.unsnooze()
+                    },
+                ) {
+                    Text("Unsnooze")
+                }
+                Button(
+                    onClick = {
+                        CompanionCoordinator.instance.dismiss()
+                    },
+                ) {
+                    Text("Dismiss")
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun CompanionWindowFrame(
@@ -221,7 +287,7 @@ private fun CompanionWindowFrame(
         )
 
     Window(
-        onCloseRequest = {},
+        onCloseRequest = { CompanionCoordinator.instance.dismiss() },
         state = state,
         title = "BOSS Companion",
         icon = BossWindowIcon.painter,
@@ -311,12 +377,21 @@ private fun CompanionTaskList(
     selectedTaskId: String,
     onTaskSelected: (String) -> Unit,
 ) {
-    tasks.forEach { task ->
-        CompanionTaskRow(
-            task = task,
-            selected = task.id == selectedTaskId,
-            onClick = { onTaskSelected(task.id) },
-        )
+    LazyColumn(
+        modifier = Modifier.heightIn(max = 120.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        items(
+            count = tasks.size,
+            key = { index -> tasks[index].id },
+        ) { index ->
+            val task = tasks[index]
+            CompanionTaskRow(
+                task = task,
+                selected = task.id == selectedTaskId,
+                onClick = { onTaskSelected(task.id) },
+            )
+        }
     }
 }
 

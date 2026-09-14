@@ -1030,6 +1030,37 @@ class DefaultPlugin(
         }
     }
 
+    private fun startCompanionNavigationCollector() {
+        val splitView = splitViewState
+        val workspaces = workspaceManager
+        val ownWindowId = _windowId
+        if (splitView == null || workspaces == null || ownWindowId == null) return
+
+        pluginScope.launch {
+            ai.rever.boss.components.events.CompanionNavigationBus.events
+                .collect { event ->
+                    if (event.windowId != ownWindowId) return@collect
+
+                    val panelId =
+                        splitView
+                            .collectAllActiveTabs(workspaces, ownWindowId)
+                            .firstOrNull { it.tabInfo.id == event.tabId }
+                            ?.panelId
+
+                    if (panelId != null) {
+                        splitView.selectTabInPanel(event.tabId, panelId)
+                        ai.rever.boss.utils.WindowFocusManager.focusWindow(ownWindowId)
+                    } else {
+                        logger.debug(
+                            LogCategory.UI,
+                            "Companion requested a tab this window does not have",
+                            mapOf("tabId" to event.tabId),
+                        )
+                    }
+                }
+        }
+    }
+
     init {
         logger.info(LogCategory.SYSTEM, "Initializing DefaultPlugin with sandboxed contexts")
 
@@ -1039,6 +1070,7 @@ class DefaultPlugin(
         // the adapter was never built, nobody collected, and the pop-out's Back-to-tab button
         // silently degraded to raising the window.
         startPopOutReturnCollector()
+        startCompanionNavigationCollector()
 
         // ============================================================
         // REGISTER PLUGIN LOADER DELEGATE

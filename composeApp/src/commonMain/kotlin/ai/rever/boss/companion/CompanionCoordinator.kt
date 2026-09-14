@@ -15,11 +15,20 @@ class CompanionCoordinator internal constructor(
 ) {
     private val stateStore = CompanionStateStore()
 
+    private val preferences =
+        java.util.prefs.Preferences.userRoot().node("ai.rever.boss.companion")
+
     private val _enabled =
-        kotlinx.coroutines.flow.MutableStateFlow(true)
+        kotlinx.coroutines.flow.MutableStateFlow(
+            preferences.getBoolean("enabled", true),
+        )
 
     val enabled: kotlinx.coroutines.flow.StateFlow<Boolean> =
         _enabled.asStateFlow()
+
+    private val _dismissed = kotlinx.coroutines.flow.MutableStateFlow(false)
+
+    val dismissed: kotlinx.coroutines.flow.StateFlow<Boolean> = _dismissed.asStateFlow()
 
     private val _snoozed =
         kotlinx.coroutines.flow.MutableStateFlow(false)
@@ -53,6 +62,7 @@ class CompanionCoordinator internal constructor(
         stateJob =
             ai.rever.boss.components.events.CompanionEventBus.events
                 .onEach { event ->
+                    _dismissed.value = false
                     stateStore.handle(event)
                 }.launchIn(scope)
     }
@@ -71,8 +81,13 @@ class CompanionCoordinator internal constructor(
 
     fun tasks() = stateStore.tasks
 
+    fun dismiss() {
+        _dismissed.value = true
+    }
+
     fun setEnabled(enabled: Boolean) {
         _enabled.value = enabled
+        preferences.putBoolean("enabled", enabled)
         if (!enabled) {
             _snoozed.value = false
         }
@@ -98,9 +113,11 @@ class CompanionCoordinator internal constructor(
             applicationEvents: Flow<CustomPluginEvent>,
             scope: CoroutineScope,
         ) {
-            if (!::instance.isInitialized) {
-                instance = CompanionCoordinator(applicationEvents, scope)
+            if (::instance.isInitialized) {
+                instance.stop()
             }
+
+            instance = CompanionCoordinator(applicationEvents, scope)
         }
     }
 }

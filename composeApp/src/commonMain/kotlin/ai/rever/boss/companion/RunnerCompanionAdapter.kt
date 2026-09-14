@@ -160,8 +160,6 @@ class RunnerCompanionAdapter(
                             ),
                     )
 
-                trackedTasks[task.id] = completed
-
                 emitEvent(
                     CompanionEvent.Completed(
                         taskId = completed.id,
@@ -170,6 +168,9 @@ class RunnerCompanionAdapter(
                         context = completed.context,
                     ),
                 )
+
+                trackedTasks.remove(task.id)
+                taskConfigIds.remove(task.id)
             }
     }
 
@@ -187,8 +188,6 @@ class RunnerCompanionAdapter(
                             ),
                     )
 
-                trackedTasks[task.id] = failed
-
                 emitEvent(
                     CompanionEvent.Failed(
                         taskId = failed.id,
@@ -197,6 +196,9 @@ class RunnerCompanionAdapter(
                         context = failed.context,
                     ),
                 )
+
+                trackedTasks.remove(task.id)
+                taskConfigIds.remove(task.id)
             }
     }
 
@@ -226,8 +228,6 @@ class RunnerCompanionAdapter(
         val stopped =
             task.copy(status = CompanionTaskStatus.STOPPED)
 
-        trackedTasks[task.id] = stopped
-
         emitEvent(
             CompanionEvent.Stopped(
                 taskId = stopped.id,
@@ -236,6 +236,9 @@ class RunnerCompanionAdapter(
                 context = stopped.context,
             ),
         )
+
+        trackedTasks.remove(task.id)
+        taskConfigIds.remove(task.id)
     }
 
     private fun CompanionTask.isActive(): Boolean =
