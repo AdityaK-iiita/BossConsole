@@ -213,6 +213,46 @@ class RunnerCompanionAdapterTest {
         }
 
     @Test
+    fun finishedTaskRetentionIsBounded() =
+        runBlocking {
+            val adapter = RunnerCompanionAdapter()
+
+            repeat(65) { index ->
+                val processId = "process-$index"
+
+                adapter.handle(
+                    CompanionRunnerEvent.ProcessResult(
+                        RunProcessEvent(
+                            processId = processId,
+                            configId = "config-$index",
+                            configName = "Build $index",
+                            windowId = "window-1",
+                            terminalId = "terminal-$index",
+                            status = RunProcessStatus.STARTED,
+                        ),
+                    ),
+                )
+
+                adapter.handle(
+                    CompanionRunnerEvent.ProcessResult(
+                        RunProcessEvent(
+                            processId = processId,
+                            configId = "config-$index",
+                            configName = "Build $index",
+                            windowId = "window-1",
+                            terminalId = "terminal-$index",
+                            status = RunProcessStatus.COMPLETED,
+                        ),
+                    ),
+                )
+            }
+
+            assertEquals(64, adapter.trackedTasks().size)
+            assertEquals(null, adapter.trackedTask("process-0"))
+            assertNotNull(adapter.trackedTask("process-64"))
+        }
+
+    @Test
     fun simultaneousRunsOfSameConfigurationRemainIndependent() =
         runBlocking {
             val adapter = RunnerCompanionAdapter()

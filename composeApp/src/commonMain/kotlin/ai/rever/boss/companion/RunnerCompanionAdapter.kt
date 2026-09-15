@@ -48,6 +48,10 @@ class RunnerCompanionAdapter(
             .emit(it)
     },
 ) {
+    companion object {
+        private const val MAX_RETAINED_FINISHED_TASKS = 64
+    }
+
     private val trackedTasks = LinkedHashMap<String, CompanionTask>()
     private val taskConfigIds = LinkedHashMap<String, String>()
     private var job: Job? = null
@@ -169,7 +173,7 @@ class RunnerCompanionAdapter(
                     ),
                 )
 
-                trackedTasks[task.id] = completed
+                retainFinishedTask(completed)
             }
     }
 
@@ -196,7 +200,7 @@ class RunnerCompanionAdapter(
                     ),
                 )
 
-                trackedTasks[task.id] = failed
+                retainFinishedTask(failed)
             }
     }
 
@@ -235,7 +239,33 @@ class RunnerCompanionAdapter(
             ),
         )
 
-        trackedTasks[task.id] = stopped
+        retainFinishedTask(stopped)
+    }
+
+    private fun retainFinishedTask(task: CompanionTask) {
+        trackedTasks[task.id] = task
+        trimFinishedTasks()
+    }
+
+    private fun trimFinishedTasks() {
+        val finishedIds =
+            trackedTasks.values
+                .filterNot { it.isActive() }
+                .map { it.id }
+
+        val excessCount =
+            finishedIds.size - MAX_RETAINED_FINISHED_TASKS
+
+        if (excessCount <= 0) {
+            return
+        }
+
+        finishedIds
+            .take(excessCount)
+            .forEach { taskId ->
+                trackedTasks.remove(taskId)
+                taskConfigIds.remove(taskId)
+            }
     }
 
     private fun CompanionTask.isActive(): Boolean =
