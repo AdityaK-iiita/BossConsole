@@ -10,8 +10,6 @@ class CompanionStateStore(
     private val _tasks = MutableStateFlow<Map<String, CompanionTask>>(emptyMap())
     val tasks: StateFlow<Map<String, CompanionTask>> = _tasks.asStateFlow()
 
-    private val finishedTaskOrder = LinkedHashSet<String>()
-
     fun handle(event: CompanionEvent) {
         val task =
             CompanionTask(
@@ -28,8 +26,6 @@ class CompanionStateStore(
         updated[event.taskId] = task
 
         if (event.isFinished()) {
-            finishedTaskOrder.remove(event.taskId)
-            finishedTaskOrder.add(event.taskId)
             trimFinishedTasks(updated)
         }
 
@@ -40,7 +36,6 @@ class CompanionStateStore(
 
     fun clear() {
         _tasks.value = emptyMap()
-        finishedTaskOrder.clear()
     }
 
     private fun trimFinishedTasks(tasks: MutableMap<String, CompanionTask>) {
