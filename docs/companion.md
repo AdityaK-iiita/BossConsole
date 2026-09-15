@@ -27,6 +27,10 @@ The companion receives lifecycle events rather than inferring completion from el
 
 Each run execution is identified by its unique `processId`.
 
+For terminal-backed executions, the host must provide the execution-to-terminal association through the
+`terminal.execution.binding` event. This binding connects a process to its originating BOSS window,
+terminal, and command.
+
 The companion also tracks:
 
 - `configId` - the run configuration.
@@ -53,7 +57,12 @@ The event payload includes the terminal/window context and lifecycle information
 - `exitCode`
 - `blockId`
 
-The terminal plugin reports completion only after its command block has finished and an exit code is available. The host then associates that lifecycle event with the corresponding active run process.
+The terminal plugin reports completion only after its command block has finished and an exit code is available.
+The host must associate that lifecycle event with the corresponding active run process using the execution
+identity and terminal binding.
+
+The current companion implementation consumes this contract, while the terminal lifecycle producer and
+coordinated host API release remain required before the complete end-to-end lifecycle is considered shipped.
 
 This keeps task state event-driven and avoids timer-based completion guesses.
 
