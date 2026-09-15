@@ -486,7 +486,8 @@ private fun CompanionTaskResult(task: CompanionTask) {
         completionMessage(task),
         color = Color.White,
     )
-    if (task.status == CompanionTaskStatus.COMPLETED ||
+    if (task.status == CompanionTaskStatus.WAITING_FOR_INPUT ||
+        task.status == CompanionTaskStatus.COMPLETED ||
         task.status == CompanionTaskStatus.FAILED
     ) {
         Button(
