@@ -394,7 +394,38 @@ actual object RunnerTerminalService {
         )
 
         onTerminalCreated(terminalId)
+
+        publishExecutionBinding(
+            processId = processId,
+            windowId = windowId,
+            terminalId = terminalId,
+            command = command,
+        )
+
         return terminalId
+    }
+
+    private fun publishExecutionBinding(
+        processId: String?,
+        windowId: String,
+        terminalId: String,
+        command: String,
+    ) {
+        if (processId == null) return
+
+        publishSystemEvent(
+            CustomPluginEvent(
+                sourcePluginId = "boss-console",
+                eventName = "terminal.execution.binding",
+                payload =
+                    mapOf(
+                        "processId" to processId,
+                        "windowId" to windowId,
+                        "terminalId" to terminalId,
+                        "command" to command,
+                    ),
+            ),
+        )
     }
 
     /**

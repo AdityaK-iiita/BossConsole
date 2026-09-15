@@ -621,7 +621,7 @@ internal fun BossAppStartupEffects(state: BossAppState) {
                     ai.rever.boss.plugin.api.CustomPluginEvent::class.java,
                 ),
         )
-        CompanionCoordinator.instance.ensureStarted()
+        CompanionCoordinator.instance.value?.ensureStarted()
     }
 
     // Check and auto-update CLI version on startup

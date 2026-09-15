@@ -184,21 +184,29 @@ private fun java.awt.Window.saveCompanionPosition() {
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun CompanionWindow() {
-    val coordinator = CompanionCoordinator.getOrNull()
+    val coordinator by CompanionCoordinator.instance.collectAsState()
 
-    if (coordinator != null) {
-        val tasks by coordinator.tasks().collectAsState()
-        val enabled by coordinator.enabled.collectAsState()
-        val snoozed by coordinator.snoozed.collectAsState()
-        val dismissed by coordinator.dismissed.collectAsState()
+    coordinator?.let { currentCoordinator ->
+        val tasks by currentCoordinator.tasks().collectAsState()
+        val enabled by currentCoordinator.enabled.collectAsState()
+        val snoozed by currentCoordinator.snoozed.collectAsState()
+        val dismissed by currentCoordinator.dismissed.collectAsState()
 
         when {
-            !enabled || dismissed -> {
+            !enabled -> {
+                companionDisabledWindow(currentCoordinator)
+            }
+
+            dismissed -> {
                 Unit
             }
 
-            snoozed || tasks.isEmpty() -> {
-                CompanionSnoozedWindow(coordinator)
+            snoozed -> {
+                companionSnoozedWindow(currentCoordinator)
+            }
+
+            tasks.isEmpty() -> {
+                Unit
             }
 
             else -> {
@@ -210,7 +218,7 @@ fun CompanionWindow() {
                     taskList.firstOrNull { it.id == selectedTaskId }
                         ?: taskList.last()
                 CompanionWindowFrame(
-                    coordinator = coordinator,
+                    coordinator = currentCoordinator,
                     taskList = taskList,
                     selectedTask = selectedTask,
                     onTaskSelected = { selectedTaskId = it },
@@ -221,7 +229,49 @@ fun CompanionWindow() {
 }
 
 @Composable
-private fun CompanionSnoozedWindow(coordinator: CompanionCoordinator) {
+private fun companionDisabledWindow(coordinator: CompanionCoordinator) {
+    val state =
+        rememberWindowState(
+            width = 280.dp,
+            height = 100.dp,
+        )
+    Window(
+        onCloseRequest = { coordinator.dismiss() },
+        state = state,
+        title = "BOSS Companion",
+        icon = BossWindowIcon.painter,
+        undecorated = true,
+        transparent = true,
+        alwaysOnTop = true,
+        focusable = false,
+        resizable = false,
+    ) {
+        Row(
+            modifier =
+                Modifier
+                    .background(
+                        Color(0xFF202124),
+                        RoundedCornerShape(18.dp),
+                    ).padding(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                "🤖 BOSS Companion disabled",
+                color = Color.White,
+            )
+            Button(
+                onClick = {
+                    coordinator.setEnabled(true)
+                },
+            ) {
+                Text("Enable")
+            }
+        }
+    }
+}
+
+@Composable
+private fun companionSnoozedWindow(coordinator: CompanionCoordinator) {
     val state =
         rememberWindowState(
             width = 280.dp,

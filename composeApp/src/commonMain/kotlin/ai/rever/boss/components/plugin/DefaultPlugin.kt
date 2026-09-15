@@ -1042,6 +1042,7 @@ class DefaultPlugin(
         }
     }
 
+    @Suppress("LongMethod")
     private fun startCompanionNavigationCollector() {
         val splitView = splitViewState
         val workspaces = workspaceManager
@@ -1053,19 +1054,10 @@ class DefaultPlugin(
                 .collect { event ->
                     if (event.windowId != ownWindowId) return@collect
 
-                    val panelId =
-                        splitView
-                            .collectAllActiveTabs(workspaces, ownWindowId)
-                            .firstOrNull { it.tabInfo.id == event.tabId }
-                            ?.panelId
-
-                    if (panelId != null) {
-                        splitView.selectTabInPanel(event.tabId, panelId)
-                        ai.rever.boss.utils.WindowFocusManager
-                            .focusWindow(ownWindowId)
-                    } else {
+                    val location = splitView.findTabLocation(event.tabId)
+                    if (location == null) {
                         logger.debug(
-                            LogCategory.UI,
+                            LogCategory.SYSTEM,
                             "Companion requested a tab this window does not have",
                             mapOf("tabId" to event.tabId),
                         )
@@ -1076,6 +1068,47 @@ class DefaultPlugin(
                                 message = "The requested terminal or tab is no longer open.",
                             ),
                         )
+                    } else if (location.workspaceId == splitView.currentWorkspaceId) {
+                        splitView.selectTabInPanel(event.tabId, location.panel.id)
+                        ai.rever.boss.utils.WindowFocusManager
+                            .focusWindow(ownWindowId)
+                    } else {
+                        val leaving = workspaces.currentWorkspace.value
+                        splitView.selectTabAnywhere(event.tabId)
+                        if (splitView.switchToLiveWorkspace(
+                                location.workspaceId,
+                                leaving?.name.orEmpty(),
+                            )
+                        ) {
+                            val target =
+                                workspaces.workspaces.value.firstOrNull {
+                                    it.id == location.workspaceId
+                                }
+                                    ?: splitView
+                                        .collectAllActiveTabs(workspaces, ownWindowId)
+                                        .firstOrNull {
+                                            it.workspaceId == location.workspaceId
+                                        }?.let { tab ->
+                                            ai.rever.boss.plugin.workspace.LayoutWorkspace(
+                                                id = location.workspaceId,
+                                                name = tab.workspaceName,
+                                                description = "",
+                                                layout =
+                                                    ai.rever.boss.plugin.workspace
+                                                        .SplitConfig
+                                                        .SinglePanel(
+                                                            ai.rever.boss.plugin.workspace
+                                                                .PanelConfig(
+                                                                    id = "main",
+                                                                    tabs = emptyList(),
+                                                                ),
+                                                        ),
+                                            )
+                                        }
+                            target?.let { workspaces.loadWorkspace(it) }
+                        }
+                        ai.rever.boss.utils.WindowFocusManager
+                            .focusWindow(ownWindowId)
                     }
                 }
         }

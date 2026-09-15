@@ -112,22 +112,16 @@ class CompanionCoordinator internal constructor(
     }
 
     companion object {
-        lateinit var instance: CompanionCoordinator
-            private set
+        private val _instance =
+            kotlinx.coroutines.flow.MutableStateFlow<CompanionCoordinator?>(null)
+
+        val instance = _instance.asStateFlow()
 
         fun initialize(applicationEvents: Flow<CustomPluginEvent>) {
-            if (::instance.isInitialized) {
+            if (_instance.value != null) {
                 return
             }
-
-            instance = CompanionCoordinator(applicationEvents)
+            _instance.value = CompanionCoordinator(applicationEvents)
         }
-
-        fun getOrNull(): CompanionCoordinator? =
-            if (::instance.isInitialized) {
-                instance
-            } else {
-                null
-            }
     }
 }
